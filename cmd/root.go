@@ -7,6 +7,7 @@ import (
 
 var rootCmd = &cobra.Command{
     Use:   "docsgpt-cli",
+    Version: "0.1.0",
     Short: "A CLI for interacting with DocsGPT",
     Long: "Docsgpt-cli is a command-line interface (CLI) tool that allows you to interact with DocsGPT.",
     Run: func(cmd *cobra.Command, args []string) {
