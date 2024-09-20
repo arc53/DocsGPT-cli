@@ -73,7 +73,7 @@ Here’s the updated section with the paragraph about the prompt:
 We recommend changing the default DocsGPT prompt to make your interactions more efficient. By using a more concise prompt, you can get faster and more focused responses. For example, you can set the prompt to:
 
 ```
-You are a helpful AI assistant, DocsGPT, designed to offer helpful but very short and concise responses.
+You are a embedded cli assistant docsgpt. You help users from terminal. Keep your answers very short. Just answer with a command if applicable.
 ```
 
 ---
