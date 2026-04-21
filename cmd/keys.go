@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"docsgpt-cli/internal/config"
+	"docsgpt-cli/internal/display"
 
-	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -29,8 +29,6 @@ You can add a new API key, set an existing key as the default, or delete a key.
 			return err
 		}
 
-		green := color.New(color.FgGreen).SprintFunc()
-
 		// Handle add flag
 		if addKeyFlag {
 			addKey(&cfg)
@@ -52,7 +50,7 @@ You can add a new API key, set an existing key as the default, or delete a key.
 				return fmt.Errorf("key not found: %s", setKeyFlag)
 			}
 			cfg.DefaultKey = setKeyFlag
-			fmt.Println(green("Default key set successfully to:"), setKeyFlag)
+			fmt.Println(display.Success("Default key set successfully to:"), setKeyFlag)
 			return cfg.Save()
 		}
 
@@ -60,7 +58,7 @@ You can add a new API key, set an existing key as the default, or delete a key.
 		fmt.Println("Available keys:")
 		for name := range cfg.Keys {
 			if name == cfg.DefaultKey {
-				fmt.Printf(" - %s %s\n", name, green("(default)"))
+				fmt.Printf(" - %s %s\n", name, display.Accent("(default)"))
 			} else {
 				fmt.Printf(" - %s\n", name)
 			}
@@ -101,8 +99,7 @@ func addKey(cfg *config.Config) {
 	cfg.Keys[name] = apiKey
 	cfg.DefaultKey = name
 
-	green := color.New(color.FgGreen).SprintFunc()
-	fmt.Println(green("API key added and set as default successfully."))
+	fmt.Println(display.Success("API key added and set as default successfully."))
 }
 
 func setNewDefaultKey(cfg *config.Config) {
@@ -121,8 +118,7 @@ func setNewDefaultKey(cfg *config.Config) {
 	}
 
 	cfg.DefaultKey = name
-	green := color.New(color.FgGreen).SprintFunc()
-	fmt.Println(green("Default key set successfully to:"), name)
+	fmt.Println(display.Success("Default key set successfully to:"), name)
 }
 
 func deleteKeyInteractive(cfg *config.Config) {
@@ -145,8 +141,7 @@ func deleteKeyByName(cfg *config.Config, name string) {
 	}
 
 	delete(cfg.Keys, name)
-	green := color.New(color.FgGreen).SprintFunc()
-	fmt.Println(green("API key deleted successfully."))
+	fmt.Println(display.Success("API key deleted successfully."))
 
 	// If the deleted key was the default, pick a new one
 	if cfg.DefaultKey == name {

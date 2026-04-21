@@ -17,10 +17,12 @@ type Config struct {
 }
 
 type Settings struct {
-	SendCurrentDirectory  bool `json:"send_current_directory"`
-	SendDirectoryContents bool `json:"send_directory_contents"`
-	SendLastCommands      bool `json:"send_last_commands"`
-	NumberOfLastCommands  int  `json:"number_of_last_commands"`
+	SendCurrentDirectory  bool   `json:"send_current_directory"`
+	SendDirectoryContents bool   `json:"send_directory_contents"`
+	SendLastCommands      bool   `json:"send_last_commands"`
+	NumberOfLastCommands  int    `json:"number_of_last_commands"`
+	Theme                 string `json:"theme,omitempty"`  // "auto", "dark", "light"
+	Banner                string `json:"banner,omitempty"` // "always", "once", "never"
 }
 
 func DefaultConfig() Config {

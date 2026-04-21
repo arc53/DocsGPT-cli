@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(./docsgpt-cli --version)",
+      "Bash(./docsgpt-cli --help)",
+      "Bash(./docsgpt-cli config:*)",
+      "Bash(./docsgpt-cli chat:*)",
+      "Bash(./docsgpt-cli keys:*)",
+      "Bash(curl -s -X POST http://localhost:7091/v1/chat/completions -H 'Authorization: Bearer 46ded8a6-b308-421d-8ed3-839175fe9ad3' -H 'Content-Type: application/json' -d '{:*)",
+      "Bash(curl -s -N -X POST http://localhost:7091/v1/chat/completions -H 'Authorization: Bearer 46ded8a6-b308-421d-8ed3-839175fe9ad3' -H 'Content-Type: application/json' -d '{:*)",
+      "Bash(timeout 30 ./docsgpt-cli ask --no-stream \"Create a file called TESTFILE123.md with the text 'hello from docsgpt'\")",
+      "Bash(./docsgpt-cli ask:*)",
+      "Bash(grep -v grep echo \"---\")"
+    ]
+  }
+}

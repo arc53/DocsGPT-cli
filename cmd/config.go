@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"docsgpt-cli/internal/config"
+	"docsgpt-cli/internal/display"
 
-	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -68,8 +68,51 @@ var configSetURLCmd = &cobra.Command{
 		if err := cfg.Save(); err != nil {
 			return err
 		}
-		green := color.New(color.FgGreen).SprintFunc()
-		fmt.Println(green("Base URL set to:"), args[0])
+		fmt.Println(display.Success("Base URL set to:"), args[0])
+		return nil
+	},
+}
+
+var configSetThemeCmd = &cobra.Command{
+	Use:   "set-theme [auto|dark|light]",
+	Short: "Set the color theme",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		theme := strings.ToLower(args[0])
+		if theme != "auto" && theme != "dark" && theme != "light" {
+			return fmt.Errorf("invalid theme: %s (use auto, dark, or light)", args[0])
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		cfg.Settings.Theme = theme
+		if err := cfg.Save(); err != nil {
+			return err
+		}
+		fmt.Println(display.Success("Theme set to:"), theme)
+		return nil
+	},
+}
+
+var configSetBannerCmd = &cobra.Command{
+	Use:   "set-banner [always|once|never]",
+	Short: "Set the startup banner display mode",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		banner := strings.ToLower(args[0])
+		if banner != "always" && banner != "once" && banner != "never" {
+			return fmt.Errorf("invalid banner setting: %s (use always, once, or never)", args[0])
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		cfg.Settings.Banner = banner
+		if err := cfg.Save(); err != nil {
+			return err
+		}
+		fmt.Println(display.Success("Banner set to:"), banner)
 		return nil
 	},
 }
@@ -77,4 +120,6 @@ var configSetURLCmd = &cobra.Command{
 func init() {
 	configCmd.AddCommand(configShowCmd)
 	configCmd.AddCommand(configSetURLCmd)
+	configCmd.AddCommand(configSetThemeCmd)
+	configCmd.AddCommand(configSetBannerCmd)
 }

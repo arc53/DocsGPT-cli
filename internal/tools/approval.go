@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fatih/color"
+	"docsgpt-cli/internal/display"
 )
 
 type ApprovalResult int
@@ -18,60 +18,16 @@ const (
 	Edited
 )
 
-// RequestApproval displays a tool call and asks the user to approve, deny, or edit it.
+// RequestApproval displays a tool call approval card and asks the user to approve, deny, or edit.
 // Returns the result and potentially edited arguments.
 func RequestApproval(toolName string, rawArgs string) (ApprovalResult, string, error) {
-	yellow := color.New(color.FgYellow).SprintFunc()
-	cyan := color.New(color.FgCyan).SprintFunc()
+	detail, preview := extractToolDetail(toolName, rawArgs)
+	risk := display.ToolRisk(toolName)
 
+	card := display.RenderApprovalCard(toolName, detail, preview, risk)
 	fmt.Println()
-	fmt.Printf("%s Agent wants to use tool: %s\n", yellow("🔧"), cyan(toolName))
-
-	switch toolName {
-	case "run_command":
-		var args struct {
-			Command          string `json:"command"`
-			WorkingDirectory string `json:"working_directory"`
-		}
-		json.Unmarshal([]byte(rawArgs), &args)
-		fmt.Printf("   $ %s\n", cyan(args.Command))
-		if args.WorkingDirectory != "" {
-			fmt.Printf("   in: %s\n", args.WorkingDirectory)
-		}
-
-	case "read_file":
-		var args struct {
-			Path string `json:"path"`
-		}
-		json.Unmarshal([]byte(rawArgs), &args)
-		fmt.Printf("   Read: %s\n", cyan(args.Path))
-
-	case "write_file":
-		var args struct {
-			Path    string `json:"path"`
-			Content string `json:"content"`
-		}
-		json.Unmarshal([]byte(rawArgs), &args)
-		fmt.Printf("   Write to: %s\n", cyan(args.Path))
-		// Show a preview of content (first 5 lines)
-		lines := strings.Split(args.Content, "\n")
-		preview := lines
-		if len(preview) > 5 {
-			preview = preview[:5]
-		}
-		for _, line := range preview {
-			fmt.Printf("   | %s\n", line)
-		}
-		if len(lines) > 5 {
-			fmt.Printf("   ... (%d more lines)\n", len(lines)-5)
-		}
-
-	default:
-		fmt.Printf("   Arguments: %s\n", rawArgs)
-	}
-
-	fmt.Println()
-	fmt.Print("   [A]pprove  [D]eny  [E]dit > ")
+	fmt.Println(card)
+	fmt.Print("  > ")
 
 	reader := bufio.NewReader(os.Stdin)
 	input, err := reader.ReadString('\n')
@@ -81,15 +37,56 @@ func RequestApproval(toolName string, rawArgs string) (ApprovalResult, string, e
 	input = strings.TrimSpace(strings.ToLower(input))
 
 	switch input {
-	case "a", "approve", "y", "yes", "":
+	case "1", "a", "approve", "y", "yes", "":
 		return Approved, rawArgs, nil
-	case "d", "deny", "n", "no":
+	case "2", "d", "deny", "n", "no":
 		return Denied, rawArgs, nil
-	case "e", "edit":
+	case "3", "e", "edit":
 		return editArgs(toolName, rawArgs)
 	default:
-		fmt.Println("   Invalid choice, denying.")
+		fmt.Println(display.Muted("  Invalid choice, denying."))
 		return Denied, rawArgs, nil
+	}
+}
+
+// extractToolDetail returns a detail string and optional preview lines for the tool.
+func extractToolDetail(toolName string, rawArgs string) (string, []string) {
+	switch toolName {
+	case "run_command":
+		var args struct {
+			Command          string `json:"command"`
+			WorkingDirectory string `json:"working_directory"`
+		}
+		json.Unmarshal([]byte(rawArgs), &args)
+		detail := "$ " + args.Command
+		if args.WorkingDirectory != "" {
+			detail += "\nin: " + args.WorkingDirectory
+		}
+		return detail, nil
+
+	case "read_file":
+		var args struct {
+			Path string `json:"path"`
+		}
+		json.Unmarshal([]byte(rawArgs), &args)
+		return "Read: " + args.Path, nil
+
+	case "write_file":
+		var args struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		json.Unmarshal([]byte(rawArgs), &args)
+		lines := strings.Split(args.Content, "\n")
+		preview := lines
+		if len(preview) > 5 {
+			preview = preview[:5]
+			preview = append(preview, fmt.Sprintf("... (%d more lines)", len(lines)-5))
+		}
+		return "Write to: " + args.Path, preview
+
+	default:
+		return "Arguments: " + rawArgs, nil
 	}
 }
 
@@ -103,8 +100,8 @@ func editArgs(toolName string, rawArgs string) (ApprovalResult, string, error) {
 		}
 		json.Unmarshal([]byte(rawArgs), &args)
 
-		fmt.Printf("   Edit command (current: %s)\n", args.Command)
-		fmt.Print("   $ ")
+		fmt.Printf("  Edit command (current: %s)\n", args.Command)
+		fmt.Print("  $ ")
 		newCmd, err := reader.ReadString('\n')
 		if err != nil {
 			return Denied, rawArgs, err
@@ -115,8 +112,8 @@ func editArgs(toolName string, rawArgs string) (ApprovalResult, string, error) {
 	}
 
 	// For other tools, let user edit raw JSON
-	fmt.Printf("   Edit arguments JSON (current: %s)\n", rawArgs)
-	fmt.Print("   > ")
+	fmt.Printf("  Edit arguments JSON (current: %s)\n", rawArgs)
+	fmt.Print("  > ")
 	newArgs, err := reader.ReadString('\n')
 	if err != nil {
 		return Denied, rawArgs, err

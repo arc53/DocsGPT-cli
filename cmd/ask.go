@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -12,7 +13,6 @@ import (
 	"docsgpt-cli/internal/display"
 	"docsgpt-cli/internal/tools"
 
-	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -51,23 +51,28 @@ This command will provide a contextual answer and, if applicable, copy a relevan
 			{Role: "user", Content: fullQuestion},
 		}
 
-		green := color.New(color.FgGreen).SprintFunc()
-		fmt.Printf(green("Key: %s\n"), keyName)
-		fmt.Printf(green(" ❯ "))
+		cwd, _ := os.Getwd()
+		fmt.Println(display.RenderHeader(keyName, baseURL, cwd))
+		fmt.Print(display.Prompt("❯ "))
 
 		ctx := context.Background()
-		toolDefs := tools.ToolDefinitions()
+		var toolDefs []api.Tool
+		if !globalNoContext {
+			toolDefs = tools.ToolDefinitions()
+		}
 		timeout := time.Duration(globalTimeout) * time.Second
 
+		renderer := display.NewStreamRenderer()
+
 		onDelta := func(delta api.Delta, finishReason string) {
-			display.StreamDelta(delta)
+			renderer.Delta(delta)
 		}
 
 		onToolCall := func(tc api.ToolCall) string {
 			return handleToolCall(tc, timeout)
 		}
 
-		updatedHistory, err := client.RunWithTools(
+		_, err = client.RunWithTools(
 			ctx, messages, toolDefs, !globalNoStream, onDelta, onToolCall,
 		)
 		if err != nil {
@@ -75,15 +80,12 @@ This command will provide a contextual answer and, if applicable, copy a relevan
 		}
 		fmt.Println()
 
-		// Find the last assistant message for clipboard
-		var answer string
-		for i := len(updatedHistory) - 1; i >= 0; i-- {
-			if updatedHistory[i].Role == "assistant" {
-				answer = updatedHistory[i].Content
-				break
-			}
+		// Render markdown for the final answer if it contains formatting
+		if rendered := renderer.Finish(); rendered != "" {
+			fmt.Print(rendered)
 		}
 
+		answer := renderer.Content()
 		command := extractCommand(answer)
 		if command != "" {
 			copyToClipboard(command)

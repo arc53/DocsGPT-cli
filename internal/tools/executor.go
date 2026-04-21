@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/fatih/color"
+	"docsgpt-cli/internal/display"
 )
 
 // stripToolSuffix removes server-appended suffixes like "_ct0" from tool names.
@@ -82,9 +82,8 @@ func executeRunCommand(rawArgs string, timeout time.Duration) ToolResult {
 	outStr := TruncateOutput(string(output), maxOutputBytes)
 
 	// Print output in real-time style
-	dim := color.New(color.Faint)
 	if len(output) > 0 {
-		dim.Print(string(output))
+		fmt.Print(display.Muted(string(output)))
 	}
 
 	if err != nil {

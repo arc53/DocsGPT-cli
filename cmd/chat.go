@@ -1,11 +1,9 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
 	"strings"
 	"time"
 
@@ -15,7 +13,7 @@ import (
 	"docsgpt-cli/internal/display"
 	"docsgpt-cli/internal/tools"
 
-	"github.com/fatih/color"
+	prompt "github.com/c-bata/go-prompt"
 	"github.com/spf13/cobra"
 )
 
@@ -27,7 +25,10 @@ var chatCmd = &cobra.Command{
 Special commands:
     /quit   - Exit the chat session
     /clear  - Clear conversation history
-    /copy   - Copy the last code block to clipboard`,
+    /copy   - Copy the last code block to clipboard
+    /think  - Toggle reasoning visibility
+
+Type "/" to see available commands with live autocomplete.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
@@ -42,10 +43,11 @@ Special commands:
 		baseURL := cfg.ResolveURL(globalURL)
 		client := api.NewClient(baseURL, apiKey)
 
-		green := color.New(color.FgGreen).SprintFunc()
-		fmt.Printf(green("Connected with key: %s\n"), keyName)
-		fmt.Printf(green("Server: %s\n"), baseURL)
-		fmt.Println("Type /quit to exit, /clear to reset history, /copy to copy last code block.")
+		cwd, _ := os.Getwd()
+		fmt.Println(display.RenderHeader(keyName, baseURL, cwd))
+		if hints := display.RenderHints("chat"); hints != "" {
+			fmt.Println(hints)
+		}
 		fmt.Println()
 
 		var history []api.Message
@@ -65,96 +67,138 @@ Special commands:
 	},
 }
 
-func runChatLoop(client *api.Client, history []api.Message) error {
-	reader := bufio.NewReader(os.Stdin)
-	var lastAnswer string
+// chatSession holds the mutable state for an interactive chat.
+type chatSession struct {
+	client        *api.Client
+	history       []api.Message
+	lastAnswer    string
+	showReasoning bool
+	toolDefs      []api.Tool
+	timeout       time.Duration
+}
 
-	// Handle Ctrl+C gracefully
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
-	go func() {
-		<-sigCh
-		fmt.Println("\nGoodbye!")
-		os.Exit(0)
-	}()
-
-	toolDefs := tools.ToolDefinitions()
-	timeout := time.Duration(globalTimeout) * time.Second
-
-	for {
-		green := color.New(color.FgGreen).SprintFunc()
-		fmt.Print(green("> "))
-
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			return nil // EOF
-		}
-		input = strings.TrimSpace(input)
-
-		if input == "" {
-			continue
-		}
-
-		switch input {
-		case "/quit":
-			fmt.Println("Goodbye!")
-			return nil
-		case "/clear":
-			// Keep system message if present
-			var newHistory []api.Message
-			if len(history) > 0 && history[0].Role == "system" {
-				newHistory = append(newHistory, history[0])
-			}
-			history = newHistory
-			lastAnswer = ""
-			fmt.Println("History cleared.")
-			continue
-		case "/copy":
-			if lastAnswer == "" {
-				printError("No previous response to copy from.")
-				continue
-			}
-			command := extractCommand(lastAnswer)
-			if command != "" {
-				copyToClipboard(command)
-			} else {
-				printError("No code block found in last response.")
-			}
-			continue
-		}
-
-		history = append(history, api.Message{Role: "user", Content: input})
-		ctx := context.Background()
-
-		onDelta := func(delta api.Delta, finishReason string) {
-			display.StreamDelta(delta)
-		}
-
-		onToolCall := func(tc api.ToolCall) string {
-			return handleToolCall(tc, timeout)
-		}
-
-		updatedHistory, err := client.RunWithTools(
-			ctx, history, toolDefs, !globalNoStream, onDelta, onToolCall,
-		)
-		if err != nil {
-			printError(err.Error())
-			continue
-		}
-		fmt.Println()
-
-		history = updatedHistory
-
-		// Find the last assistant message for lastAnswer
-		for i := len(history) - 1; i >= 0; i-- {
-			if history[i].Role == "assistant" {
-				lastAnswer = history[i].Content
-				break
-			}
-		}
-
-		fmt.Println()
+func (s *chatSession) executor(input string) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return
 	}
+
+	switch input {
+	case "/quit":
+		fmt.Println("Goodbye!")
+		os.Exit(0)
+	case "/clear":
+		var newHistory []api.Message
+		if len(s.history) > 0 && s.history[0].Role == "system" {
+			newHistory = append(newHistory, s.history[0])
+		}
+		s.history = newHistory
+		s.lastAnswer = ""
+		fmt.Println("History cleared.")
+		return
+	case "/copy":
+		if s.lastAnswer == "" {
+			printError("No previous response to copy from.")
+			return
+		}
+		command := extractCommand(s.lastAnswer)
+		if command != "" {
+			copyToClipboard(command)
+		} else {
+			printError("No code block found in last response.")
+		}
+		return
+	case "/think":
+		s.showReasoning = !s.showReasoning
+		if s.showReasoning {
+			fmt.Println(display.Muted("Reasoning: visible"))
+		} else {
+			fmt.Println(display.Muted("Reasoning: hidden"))
+		}
+		return
+	}
+
+	s.history = append(s.history, api.Message{Role: "user", Content: input})
+	ctx := context.Background()
+
+	renderer := display.NewStreamRenderer()
+	renderer.ShowReasoning = s.showReasoning
+
+	onDelta := func(delta api.Delta, finishReason string) {
+		renderer.Delta(delta)
+	}
+
+	onToolCall := func(tc api.ToolCall) string {
+		return handleToolCall(tc, s.timeout)
+	}
+
+	updatedHistory, err := s.client.RunWithTools(
+		ctx, s.history, s.toolDefs, !globalNoStream, onDelta, onToolCall,
+	)
+	if err != nil {
+		printError(err.Error())
+		return
+	}
+	fmt.Println()
+
+	if rendered := renderer.Finish(); rendered != "" {
+		fmt.Print(rendered)
+	}
+
+	s.history = updatedHistory
+	s.lastAnswer = renderer.Content()
+
+	fmt.Println()
+}
+
+func (s *chatSession) completer(d prompt.Document) []prompt.Suggest {
+	text := d.TextBeforeCursor()
+	if !strings.HasPrefix(text, "/") {
+		return nil
+	}
+
+	suggestions := []prompt.Suggest{
+		{Text: "/quit", Description: "Exit the chat session"},
+		{Text: "/clear", Description: "Clear conversation history"},
+		{Text: "/copy", Description: "Copy last code block to clipboard"},
+		{Text: "/think", Description: "Toggle reasoning visibility"},
+	}
+
+	return prompt.FilterHasPrefix(suggestions, text, true)
+}
+
+func runChatLoop(client *api.Client, history []api.Message) error {
+	var toolDefs []api.Tool
+	if !globalNoContext {
+		toolDefs = tools.ToolDefinitions()
+	}
+
+	session := &chatSession{
+		client:   client,
+		history:  history,
+		toolDefs: toolDefs,
+		timeout:  time.Duration(globalTimeout) * time.Second,
+	}
+
+	p := prompt.New(
+		session.executor,
+		session.completer,
+		prompt.OptionPrefix("> "),
+		prompt.OptionPrefixTextColor(prompt.Purple),
+		prompt.OptionSuggestionBGColor(prompt.DarkGray),
+		prompt.OptionSuggestionTextColor(prompt.White),
+		prompt.OptionSelectedSuggestionBGColor(prompt.Purple),
+		prompt.OptionSelectedSuggestionTextColor(prompt.White),
+		prompt.OptionDescriptionBGColor(prompt.DarkGray),
+		prompt.OptionDescriptionTextColor(prompt.White),
+		prompt.OptionSelectedDescriptionBGColor(prompt.Purple),
+		prompt.OptionSelectedDescriptionTextColor(prompt.White),
+		prompt.OptionScrollbarBGColor(prompt.DarkGray),
+		prompt.OptionScrollbarThumbColor(prompt.Purple),
+		prompt.OptionShowCompletionAtStart(),
+	)
+	p.Run()
+	return nil
 }
 
 func handleToolCall(tc api.ToolCall, timeout time.Duration) string {
@@ -164,8 +208,7 @@ func handleToolCall(tc api.ToolCall, timeout time.Duration) string {
 	if normalizedName == "run_command" {
 		safe, reason := tools.IsSafe(tc.Function.Arguments)
 		if !safe {
-			red := color.New(color.FgRed).SprintFunc()
-			fmt.Printf("\n%s Command blocked: %s\n", red("✗"), reason)
+			fmt.Printf("\n%s Command blocked: %s\n", display.Danger("✗"), reason)
 			return fmt.Sprintf("Command was blocked for safety: %s", reason)
 		}
 	}

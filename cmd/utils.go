@@ -5,13 +5,13 @@ import (
 	"regexp"
 	"strings"
 
+	"docsgpt-cli/internal/display"
+
 	"github.com/atotto/clipboard"
-	"github.com/fatih/color"
 )
 
 func printError(message string) {
-	red := color.New(color.FgRed).SprintFunc()
-	fmt.Printf("%s %s\n", red("Error:"), message)
+	display.ErrorMsg(message)
 }
 
 func extractCommand(answer string) string {
@@ -36,7 +36,6 @@ func copyToClipboard(command string) {
 	if err != nil {
 		printError("Failed to copy to clipboard: " + err.Error())
 	} else {
-		green := color.New(color.FgGreen).SprintFunc()
-		fmt.Printf("%s %s\n", green("Command copied to clipboard:"), green(trimmedCommand))
+		fmt.Printf("%s %s\n", display.Success("Command copied to clipboard:"), display.Success(trimmedCommand))
 	}
 }
