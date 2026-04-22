@@ -10,7 +10,7 @@ You can install DocsGPT-cli in three ways:
 
 ### 1. Download the Binary
 
-Download the latest binary. You can run it as is or use the `install` command to add the binary to your system's `PATH`:
+Download the latest binary from the [Releases page](https://github.com/arc53/DocsGPT-cli/releases). You can run it as is or use the `install` command to add the binary to your system's `PATH`:
 
 ```bash
 ./docsgpt-cli

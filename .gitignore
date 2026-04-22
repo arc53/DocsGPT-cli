@@ -23,3 +23,11 @@ go.work.sum
 
 # env file
 .env
+
+# Built binary
+/docsgpt-cli
+/docsgpt-cli-*
+
+# Editor / tooling
+.claude/
+.DS_Store

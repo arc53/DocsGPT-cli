@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var Version = "dev"
+
 var (
 	globalURL         string
 	globalKey         string
@@ -22,7 +24,7 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:     "docsgpt-cli",
-	Version: "1.0.0",
+	Version: Version,
 	Short:   "A CLI for interacting with DocsGPT",
 	Long:    "Docsgpt-cli is a command-line interface (CLI) tool that allows you to interact with DocsGPT.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
