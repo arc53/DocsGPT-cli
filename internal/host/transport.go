@@ -2,6 +2,7 @@ package host
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -143,11 +144,16 @@ func (t *Transport) authHeader() string {
 	return "Bearer " + t.Cfg.SessionToken
 }
 
-func (t *Transport) signHeaders(req *http.Request) {
+// signHeaders signs the request over the canonical payload, which includes a
+// hash of ``body`` (the exact bytes sent as the request body; nil for GET).
+// The body hash is always included even when the backend has signature
+// verification disabled — it ignores the signature then, so this is harmless
+// and keeps the default off-path working.
+func (t *Transport) signHeaders(req *http.Request, body []byte) {
 	if t.Key == nil {
 		return
 	}
-	sig, ts := t.Key.SignRequest(req.Method, req.URL.Path)
+	sig, ts := t.Key.SignRequest(req.Method, req.URL.Path, body)
 	req.Header.Set("Authorization", t.authHeader())
 	req.Header.Set("X-Device-Machine-Key", t.Key.Fingerprint())
 	req.Header.Set("X-Device-Machine-Pubkey", t.Key.PublicKeyB64())
@@ -163,7 +169,7 @@ func (t *Transport) PollOnce(ctx context.Context) (*PollResponse, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	t.signHeaders(req)
+	t.signHeaders(req, nil)
 	resp, err := t.Client.Do(req)
 	if err != nil {
 		return nil, false, err
@@ -293,7 +299,7 @@ func (t *Transport) RunSSE(ctx context.Context, sessionID string, lastEventID st
 	if err != nil {
 		return err
 	}
-	t.signHeaders(req)
+	t.signHeaders(req, nil)
 	req.Header.Set("Accept", "text/event-stream")
 	if lastEventID != "" {
 		req.Header.Set("Last-Event-ID", lastEventID)
@@ -377,12 +383,14 @@ func (t *Transport) PostAck(ctx context.Context, sessionID, invocationID, decisi
 	endpoint := strings.TrimRight(t.Cfg.BaseURL, "/") +
 		"/api/devices/sessions/" + sessionID +
 		"/invocations/" + invocationID + "/ack"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	t.signHeaders(req)
+	// Sign over the exact body bytes so the signature stays valid against
+	// the body the server reads back.
+	t.signHeaders(req, body)
 	resp, err := t.Client.Do(req)
 	if err != nil {
 		return err
@@ -400,12 +408,13 @@ func (t *Transport) PostOutput(ctx context.Context, sessionID, invocationID stri
 	endpoint := strings.TrimRight(t.Cfg.BaseURL, "/") +
 		"/api/devices/sessions/" + sessionID +
 		"/invocations/" + invocationID + "/output"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	t.signHeaders(req)
+	// Sign over the exact body bytes (see PostAck).
+	t.signHeaders(req, body)
 	resp, err := t.Client.Do(req)
 	if err != nil {
 		return err

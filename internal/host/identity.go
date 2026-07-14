@@ -97,11 +97,26 @@ func (k *HostKey) Fingerprint() string {
 	return hex.EncodeToString(digest[:])
 }
 
-// SignRequest signs ``METHOD PATH TIMESTAMP`` and returns
-// (base64-signature, unix timestamp string).
-func (k *HostKey) SignRequest(method, path string) (string, string) {
+// CanonicalPayload builds the string that gets signed / verified:
+// "METHOD PATH TIMESTAMP SHA256_HEX(BODY)". The body hash binds the request
+// body into the signature so a captured signature can't be replayed with a
+// tampered body inside the timestamp window. For a request with no body
+// (GET) this is the SHA-256 of the empty string.
+//
+// KEEP IN SYNC with the backend verifier
+// (application/api/devices/auth.py ``_canonical_payload``). The hex encoding
+// and single-space separators must match byte-for-byte.
+func CanonicalPayload(method, path, ts string, body []byte) string {
+	sum := sha256.Sum256(body)
+	return fmt.Sprintf("%s %s %s %s", method, path, ts, hex.EncodeToString(sum[:]))
+}
+
+// SignRequest signs the canonical payload (including a hash of ``body``) and
+// returns (base64-signature, unix timestamp string). Pass nil/empty ``body``
+// for requests without one (e.g. GET).
+func (k *HostKey) SignRequest(method, path string, body []byte) (string, string) {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	payload := fmt.Sprintf("%s %s %s", method, path, ts)
+	payload := CanonicalPayload(method, path, ts, body)
 	sig := ed25519.Sign(k.Private, []byte(payload))
 	return base64.StdEncoding.EncodeToString(sig), ts
 }
