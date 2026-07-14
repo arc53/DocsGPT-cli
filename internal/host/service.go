@@ -30,10 +30,12 @@ func (m ServiceMode) String() string {
 }
 
 // ErrUnsupportedOS is returned by service operations on platforms without a
-// supported init system (anything other than Linux/systemd or macOS/launchd).
+// supported service backend (anything other than Linux/systemd,
+// macOS/launchd, or Windows/Task Scheduler).
 var ErrUnsupportedOS = errors.New(
-	"install-service supports linux (systemd) and macOS (launchd) only; " +
-		"run `docsgpt-cli host` manually on this platform",
+	"install-service supports linux (systemd), macOS (launchd), and " +
+		"Windows (Task Scheduler) only; run `docsgpt-cli host` manually " +
+		"on this platform",
 )
 
 // ResolveServiceMode decides the install mode and runtime user for
@@ -148,9 +150,10 @@ func IsLinux() bool { return runtime.GOOS == "linux" }
 // IsDarwin reports whether the current platform is macOS.
 func IsDarwin() bool { return runtime.GOOS == "darwin" }
 
-// ServiceInstallSupported reports whether install-service has an init-system
-// backend for the current platform (systemd on Linux, launchd on macOS).
-func ServiceInstallSupported() bool { return IsLinux() || IsDarwin() }
+// ServiceInstallSupported reports whether install-service has a service
+// backend for the current platform (systemd on Linux, launchd on macOS,
+// Task Scheduler on Windows).
+func ServiceInstallSupported() bool { return IsLinux() || IsDarwin() || IsWindows() }
 
 // SystemctlArgs returns the args prefix to invoke systemctl for the given mode.
 func SystemctlArgs(mode ServiceMode) []string {

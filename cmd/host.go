@@ -23,6 +23,7 @@ import (
 
 var (
 	hostPollOverride  string
+	hostServiceMode   bool
 	hostServiceSystem bool
 	hostServiceUser   string
 	hostResetYes      bool
@@ -50,6 +51,14 @@ func runHostDaemon(cmd *cobra.Command) error {
 	cfg, err := host.LoadHostConfig()
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("load host.yml: %w", err)
+	}
+	// Service mode (Windows scheduled task): redirect output to the log
+	// file and drop the console window before anything is printed, so even
+	// the "not paired" error below lands somewhere inspectable.
+	if hostServiceMode {
+		if err := host.EnterServiceMode(cfg.LogFile); err != nil {
+			return err
+		}
 	}
 	if cfg.DeviceID == "" || cfg.SessionToken == "" {
 		return fmt.Errorf("not paired. Run `docsgpt-cli host pair` first")
@@ -221,16 +230,17 @@ func stdinIsTTY() bool {
 // unsupported platforms, so we compare by label rather than fixed index).
 const (
 	pairMenuStart   = "Start the host daemon now (foreground)"
-	pairMenuInstall = "Install as a service (starts on boot)"
+	pairMenuInstall = "Install as a service (starts automatically)"
 	pairMenuNothing = "Nothing for now"
 )
 
 // buildPairMenuActions returns the post-pair menu options for the given OS.
-// "Install as a service" appears on Linux (systemd) and macOS (launchd);
-// "Nothing for now" is always last so it can serve as the safe default.
+// "Install as a service" appears on Linux (systemd), macOS (launchd), and
+// Windows (Task Scheduler); "Nothing for now" is always last so it can
+// serve as the safe default.
 func buildPairMenuActions(goos string) []string {
 	actions := []string{pairMenuStart}
-	if goos == "linux" || goos == "darwin" {
+	if goos == "linux" || goos == "darwin" || goos == "windows" {
 		actions = append(actions, pairMenuInstall)
 	}
 	actions = append(actions, pairMenuNothing)
@@ -469,7 +479,7 @@ var hostResetCmd = &cobra.Command{
 
 var hostInstallServiceCmd = &cobra.Command{
 	Use:   "install-service",
-	Short: "Install docsgpt-cli host as a service (Linux systemd / macOS launchd)",
+	Short: "Install docsgpt-cli host as a service (systemd / launchd / Task Scheduler)",
 	Long: "Install docsgpt-cli host as a background service.\n\n" +
 		"Linux (systemd):\n" +
 		"  As a normal user, installs a user-service at\n" +
@@ -481,34 +491,48 @@ var hostInstallServiceCmd = &cobra.Command{
 		"  ~/Library/LaunchAgents/com.arc53.docsgpt-cli-host.plist (no sudo).\n" +
 		"  With --system (requires sudo), installs a LaunchDaemon at\n" +
 		"  /Library/LaunchDaemons/com.arc53.docsgpt-cli-host.plist.\n\n" +
+		"Windows (Task Scheduler):\n" +
+		"  Installs a scheduled task named docsgpt-cli-host that starts the\n" +
+		"  daemon at logon as the current user and restarts it on failure.\n" +
+		"  No administrator rights needed. The daemon logs to\n" +
+		"  %USERPROFILE%\\.docsgpt\\host.log.\n\n" +
 		"Pass --user <name> to pick the runtime user for a system service;\n" +
 		"otherwise it uses $SUDO_USER, falling back to root.\n\n" +
-		"Pass --system to force system mode explicitly (requires root).",
+		"Pass --system to force system mode explicitly (requires root;\n" +
+		"Linux/macOS only).",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if !host.ServiceInstallSupported() {
 			return host.ErrUnsupportedOS
 		}
-		// Explicit --system without root is unworkable on both platforms:
-		// system-wide install dirs and the loader need root.
-		if hostServiceSystem && os.Geteuid() != 0 {
-			return fmt.Errorf("--system requires root; rerun with sudo")
+		if hostServiceSystem {
+			if host.IsWindows() {
+				return fmt.Errorf("--system is not supported on Windows; " +
+					"the scheduled task always installs for the current user")
+			}
+			// Explicit --system without root is unworkable on Linux/macOS:
+			// system-wide install dirs and the loader need root.
+			if os.Geteuid() != 0 {
+				return fmt.Errorf("--system requires root; rerun with sudo")
+			}
 		}
 		return installHostService(hostServiceSystem, hostServiceUser)
 	},
 }
 
-// installHostService dispatches to the platform's service backend (systemd on
-// Linux, launchd on macOS). Shared by the `host install-service` command
-// (passing its flags) and the post-pair menu (passing zero values so the
-// mode resolver picks system-vs-user from root, like the bare command).
-// Caller is responsible for flag-specific guards such as "--system requires
-// root".
+// installHostService dispatches to the platform's service backend (systemd
+// on Linux, launchd on macOS, Task Scheduler on Windows). Shared by the
+// `host install-service` command (passing its flags) and the post-pair menu
+// (passing zero values so the mode resolver picks system-vs-user from root,
+// like the bare command). Caller is responsible for flag-specific guards
+// such as "--system requires root".
 func installHostService(systemFlag bool, runUserFlag string) error {
 	switch {
 	case host.IsLinux():
 		return installSystemdService(systemFlag, runUserFlag)
 	case host.IsDarwin():
 		return installLaunchdService(systemFlag, runUserFlag)
+	case host.IsWindows():
+		return installWindowsTaskService()
 	default:
 		return host.ErrUnsupportedOS
 	}
@@ -635,17 +659,78 @@ func installLaunchdService(systemFlag bool, runUserFlag string) error {
 
 var hostUninstallServiceCmd = &cobra.Command{
 	Use:   "uninstall-service",
-	Short: "Remove the host daemon service (Linux systemd / macOS launchd)",
+	Short: "Remove the host daemon service (systemd / launchd / Task Scheduler)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		switch {
 		case host.IsLinux():
 			return uninstallSystemdService()
 		case host.IsDarwin():
 			return uninstallLaunchdService()
+		case host.IsWindows():
+			return uninstallWindowsTaskService()
 		default:
 			return host.ErrUnsupportedOS
 		}
 	},
+}
+
+// installWindowsTaskService writes the Task Scheduler XML, registers the
+// task via schtasks, and starts it. On a registration failure it leaves the
+// XML in place and prints the manual command, mirroring the systemd and
+// launchd fallbacks. Runs as the current user at logon; no elevation needed.
+func installWindowsTaskService() error {
+	execPath, err := resolvePairedExecutable(host.ServiceModeUser)
+	if err != nil {
+		return err
+	}
+	runUser, err := host.CurrentSystemUser()
+	if err != nil {
+		return err
+	}
+
+	xmlPath := host.WindowsTaskXMLPath()
+	content := host.RenderWindowsTaskXML(execPath, runUser)
+	if err := host.WriteWindowsTaskXML(xmlPath, content); err != nil {
+		return err
+	}
+	fmt.Println(display.Success("Wrote " + xmlPath))
+
+	if err := host.RegisterWindowsTask(xmlPath); err != nil {
+		fmt.Fprintln(os.Stderr, display.Warn("schtasks create failed: "+err.Error()))
+		fmt.Println(display.Muted("The task XML was written. Register it manually:"))
+		fmt.Printf("  %s\n", host.WindowsTaskRegisterCmd(xmlPath))
+		return nil
+	}
+	if err := host.StartWindowsTask(); err != nil {
+		fmt.Fprintln(os.Stderr, display.Warn("schtasks run failed: "+err.Error()))
+		fmt.Println(display.Muted("Start it manually: schtasks /Run /TN " + host.WindowsTaskName))
+		return nil
+	}
+
+	cfg, _ := host.LoadHostConfig()
+	fmt.Println(display.Success("Scheduled task installed and started (runs at logon)."))
+	fmt.Println(display.Muted("Logs: " + cfg.LogFile))
+	fmt.Println(display.Muted("Check status: schtasks /Query /TN " + host.WindowsTaskName))
+	return nil
+}
+
+// uninstallWindowsTaskService stops and deletes the scheduled task and
+// removes the task XML from ~/.docsgpt.
+func uninstallWindowsTaskService() error {
+	if !host.WindowsTaskInstalled() {
+		fmt.Println("no docsgpt-cli-host service installed")
+		return nil
+	}
+	// Failing to end is normal when no instance is running.
+	_ = host.EndWindowsTask()
+	if err := host.DeleteWindowsTask(); err != nil {
+		return err
+	}
+	if err := os.Remove(host.WindowsTaskXMLPath()); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, display.Warn("remove task xml: "+err.Error()))
+	}
+	fmt.Println(display.Success("Service removed (scheduled task)."))
+	return nil
 }
 
 // uninstallSystemdService detects the installed unit, disables it, and removes
@@ -740,6 +825,9 @@ func printManualSteps(mode host.ServiceMode) {
 
 func init() {
 	hostCmd.Flags().StringVar(&hostPollOverride, "poll-interval", "", "Override polling interval (e.g. 10s)")
+	hostCmd.Flags().BoolVar(&hostServiceMode, "service", false,
+		"Run as a background service: append output to the host log file "+
+			"instead of the terminal (used by the Windows scheduled task)")
 
 	hostInstallServiceCmd.Flags().BoolVar(&hostServiceSystem, "system", false, "Install as a system-wide service (requires sudo)")
 	hostInstallServiceCmd.Flags().StringVar(&hostServiceUser, "user", "", "Runtime user for system services (defaults to $SUDO_USER, else root)")

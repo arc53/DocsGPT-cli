@@ -40,9 +40,9 @@ func TestParsePairMenuChoice(t *testing.T) {
 }
 
 func TestBuildPairMenuActions(t *testing.T) {
-	// Platforms with an install-service backend (systemd / launchd) include
-	// the install option.
-	for _, goos := range []string{"linux", "darwin"} {
+	// Platforms with an install-service backend (systemd / launchd /
+	// Task Scheduler) include the install option.
+	for _, goos := range []string{"linux", "darwin", "windows"} {
 		t.Run(goos+" includes install option", func(t *testing.T) {
 			actions := buildPairMenuActions(goos)
 			want := []string{pairMenuStart, pairMenuInstall, pairMenuNothing}
@@ -58,7 +58,7 @@ func TestBuildPairMenuActions(t *testing.T) {
 	}
 
 	// Unsupported platforms omit the install option.
-	for _, goos := range []string{"windows", "freebsd"} {
+	for _, goos := range []string{"freebsd", "openbsd"} {
 		t.Run(goos+" omits install option", func(t *testing.T) {
 			actions := buildPairMenuActions(goos)
 			want := []string{pairMenuStart, pairMenuNothing}

@@ -43,23 +43,33 @@ func InitTheme(mode string) {
 	T = newTheme(dark)
 }
 
+// UsePlainTheme swaps the active theme for the unstyled one regardless of
+// terminal capabilities. Used when output goes to a log file instead of a
+// terminal (host service mode).
+func UsePlainTheme() { T = plainTheme() }
+
+// plainTheme returns the unstyled (no ANSI) theme.
+func plainTheme() *Theme {
+	return &Theme{
+		Text:      lipgloss.NewStyle(),
+		Muted:     lipgloss.NewStyle(),
+		Accent:    lipgloss.NewStyle(),
+		Success:   lipgloss.NewStyle(),
+		Warn:      lipgloss.NewStyle(),
+		Danger:    lipgloss.NewStyle(),
+		Info:      lipgloss.NewStyle(),
+		Border:    lipgloss.NewStyle(),
+		Selection: lipgloss.NewStyle().Bold(true),
+		Reasoning: lipgloss.NewStyle(),
+	}
+}
+
 func newTheme(dark bool) *Theme {
 	profile := termenv.ColorProfile()
 
 	if profile == termenv.Ascii || os.Getenv("NO_COLOR") != "" {
 		// No color support — return unstyled theme
-		return &Theme{
-			Text:      lipgloss.NewStyle(),
-			Muted:     lipgloss.NewStyle(),
-			Accent:    lipgloss.NewStyle(),
-			Success:   lipgloss.NewStyle(),
-			Warn:      lipgloss.NewStyle(),
-			Danger:    lipgloss.NewStyle(),
-			Info:      lipgloss.NewStyle(),
-			Border:    lipgloss.NewStyle(),
-			Selection: lipgloss.NewStyle().Bold(true),
-			Reasoning: lipgloss.NewStyle(),
-		}
+		return plainTheme()
 	}
 
 	if dark {
