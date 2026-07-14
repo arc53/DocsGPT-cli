@@ -52,10 +52,12 @@ docsgpt-cli [command]
 ### Available Commands:
 
 - `ask` — Ask a question to DocsGPT
+- `chat` — Start an interactive chat session
+- `config` — Manage CLI configuration (base URL, theme, banner, update check)
 - `help` — Help about any command
 - `install` — Install docsgpt-cli to your system's `PATH`
 - `keys` — Manage DocsGPT API keys (add, set default, delete)
-- `settings` — Configure the settings for docsgpt-cli
+- `update` — Update docsgpt-cli to the latest release
 
 ### Flags:
 
@@ -63,6 +65,20 @@ docsgpt-cli [command]
 - `-v, --version` — Version for docsgpt-cli
 
 You can use `docsgpt-cli [command] --help` to get more information about each command.
+
+---
+
+## Updating
+
+`docsgpt-cli` can update itself to the latest [GitHub release](https://github.com/arc53/DocsGPT-cli/releases):
+
+```bash
+docsgpt-cli update          # check, confirm, and install
+docsgpt-cli update --check  # only check for a new version
+docsgpt-cli update --yes    # skip the confirmation prompt
+```
+
+The CLI also checks for new releases in the background at most once a day and prints a short notice when one is available. To turn that off, run `docsgpt-cli config set-update-check off` or set the `DOCSGPT_NO_UPDATE_CHECK` environment variable. Homebrew installs should be updated with `brew upgrade docsgpt-cli` instead.
 
 Here’s the updated section with the paragraph about the prompt:
 
