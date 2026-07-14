@@ -70,15 +70,26 @@ You can use `docsgpt-cli [command] --help` to get more information about each co
 
 ## Updating
 
-`docsgpt-cli` can update itself to the latest [GitHub release](https://github.com/arc53/DocsGPT-cli/releases):
+`docsgpt-cli` keeps itself up to date. It checks GitHub for a new [release](https://github.com/arc53/DocsGPT-cli/releases) in the background at most once a day, downloads and verifies it, and installs it the next time you run a command. Control this behavior with:
 
 ```bash
-docsgpt-cli update          # check, confirm, and install
-docsgpt-cli update --check  # only check for a new version
-docsgpt-cli update --yes    # skip the confirmation prompt
+docsgpt-cli config set-auto-update on      # download and install automatically (default)
+docsgpt-cli config set-auto-update notify  # only print a notice when a release is available
+docsgpt-cli config set-auto-update off     # never check
 ```
 
-The CLI also checks for new releases in the background at most once a day and prints a short notice when one is available. To turn that off, run `docsgpt-cli config set-update-check off` or set the `DOCSGPT_NO_UPDATE_CHECK` environment variable. Homebrew installs should be updated with `brew upgrade docsgpt-cli` instead.
+Manual controls:
+
+```bash
+docsgpt-cli update            # check, confirm, and install now
+docsgpt-cli update --check    # only check for a new version
+docsgpt-cli update --yes      # skip the confirmation prompt
+docsgpt-cli update --rollback # restore the binary from before the last update
+```
+
+A rollback also tells auto-update to skip the version you rolled back from until you run `docsgpt-cli update` yourself.
+
+Setting the `DOCSGPT_NO_UPDATE_CHECK` environment variable disables everything update-related. Homebrew installs are never touched — update those with `brew upgrade docsgpt-cli`. Long-running hosts (`docsgpt-cli host`) check occasionally while idle, install the new release, and restart themselves into it.
 
 Here’s the updated section with the paragraph about the prompt:
 

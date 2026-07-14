@@ -12,6 +12,19 @@ import (
 
 const latestReleaseURL = "https://api.github.com/repos/arc53/DocsGPT-cli/releases/latest"
 
+// Auto-update modes; config.Settings.AutoUpdateMode resolves to one of these.
+const (
+	ModeOn     = "on"     // stage and apply updates automatically
+	ModeNotify = "notify" // only print a notice when a release is available
+	ModeOff    = "off"    // no checks at all
+)
+
+// IsHomebrewPath reports whether a resolved executable path is managed by
+// Homebrew and must be updated via brew instead.
+func IsHomebrewPath(path string) bool {
+	return strings.Contains(path, "/Cellar/") || strings.Contains(path, "/homebrew/")
+}
+
 type Release struct {
 	TagName string  `json:"tag_name"`
 	HTMLURL string  `json:"html_url"`

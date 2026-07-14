@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -14,8 +15,10 @@ import (
 	"syscall"
 	"time"
 
+	"docsgpt-cli/internal/config"
 	"docsgpt-cli/internal/display"
 	"docsgpt-cli/internal/host"
+	"docsgpt-cli/internal/update"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -90,6 +93,8 @@ func runHostDaemon(cmd *cobra.Command) error {
 	// session, print one line per `idleHeartbeatInterval` so the user
 	// knows the daemon is alive.
 	go runIdleHeartbeat(ctx, t)
+
+	go runHostAutoUpdate(ctx, t)
 
 	// Each invocation arrives via OnInvocation; spawn a goroutine to
 	// execute + stream so the SSE loop keeps reading next events.
@@ -166,6 +171,82 @@ func runIdleHeartbeat(ctx context.Context, t *host.Transport) {
 				suffix,
 			)))
 		}
+	}
+}
+
+// Auto-update cadence for the daemon: wait out the boot phase first (a
+// crash-looping service must not update-storm), then check occasionally
+// with jitter so a fleet doesn't hit GitHub in lockstep.
+const (
+	hostUpdateInitialDelay = 10 * time.Minute
+	hostUpdateInterval     = 12 * time.Hour
+	hostUpdateBusyRetry    = 5 * time.Minute
+)
+
+// runHostAutoUpdate periodically installs new releases and restarts the
+// daemon into them, but only while idle (polling, no active session).
+func runHostAutoUpdate(ctx context.Context, t *host.Transport) {
+	if os.Getenv("DOCSGPT_NO_UPDATE_CHECK") != "" || !update.IsReleaseVersion(Version) {
+		return
+	}
+	mode := update.ModeOff
+	if cfg, err := config.Load(); err == nil {
+		mode = cfg.Settings.AutoUpdateMode()
+	}
+	if mode == update.ModeOff {
+		return
+	}
+
+	delay := hostUpdateInitialDelay
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		delay = hostUpdateInterval + rand.N(2*time.Hour)
+
+		if t.Baton.State() != host.StatePolling {
+			delay = hostUpdateBusyRetry
+			continue
+		}
+
+		if mode == update.ModeNotify {
+			if rel, err := update.FetchLatest(30 * time.Second); err == nil {
+				update.RecordCheck(rel)
+				if update.IsNewer(rel.TagName, Version) {
+					fmt.Println(display.Muted(host.LogStamp(time.Now()) +
+						" update available: " + rel.TagName + " (run 'docsgpt-cli update')"))
+				}
+			}
+			continue
+		}
+
+		ver, err := update.CheckAndApply(Version)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, display.Warn("auto-update failed: "+err.Error()))
+			continue
+		}
+		if ver == "" {
+			continue
+		}
+		// Sessions may have opened during the download; hold the restart
+		// until the daemon is idle again.
+		for t.Baton.State() != host.StatePolling {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
+		}
+		fmt.Println(display.Muted(host.LogStamp(time.Now()) + " updated to " + ver + ", restarting"))
+		exe, err := os.Executable()
+		if err == nil {
+			err = update.Restart(exe)
+		}
+		// Unreachable unless the restart itself failed; the new binary is on
+		// disk, so the next supervisor restart still picks it up.
+		fmt.Fprintln(os.Stderr, display.Warn("restart after update failed: "+err.Error()))
 	}
 }
 

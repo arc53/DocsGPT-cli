@@ -9,14 +9,12 @@ import (
 	"docsgpt-cli/internal/config"
 )
 
-const (
-	checkInterval = 24 * time.Hour
-	notifyTimeout = 3 * time.Second
-)
+const checkInterval = 24 * time.Hour
 
 type checkState struct {
 	LastChecked   time.Time `json:"last_checked"`
 	LatestVersion string    `json:"latest_version"`
+	SkipVersion   string    `json:"skip_version,omitempty"`
 }
 
 func statePath() string {
@@ -33,10 +31,7 @@ func loadState() checkState {
 	return st
 }
 
-// RecordCheck persists the result of a release lookup so later runs can skip
-// re-querying GitHub for a day.
-func RecordCheck(rel *Release) {
-	st := checkState{LastChecked: time.Now(), LatestVersion: rel.TagName}
+func saveState(st checkState) {
 	data, err := json.Marshal(st)
 	if err != nil {
 		return
@@ -47,33 +42,38 @@ func RecordCheck(rel *Release) {
 	os.WriteFile(statePath(), data, 0600)
 }
 
-// BackgroundCheck looks up the latest release version without blocking.
-// The returned channel yields the newer version tag, or "" when the current
-// build is up to date. All failures are silent.
-func BackgroundCheck(current string) <-chan string {
-	ch := make(chan string, 1)
-	go func() {
-		defer close(ch)
-		ch <- newerVersion(current)
-	}()
-	return ch
+// RecordCheck persists the result of a release lookup so later runs can skip
+// re-querying GitHub for a day.
+func RecordCheck(rel *Release) {
+	st := loadState()
+	st.LastChecked = time.Now()
+	st.LatestVersion = rel.TagName
+	saveState(st)
 }
 
-func newerVersion(current string) string {
+// SkipVersion returns the version auto-update must not install (set by a
+// rollback), or "".
+func SkipVersion() string {
+	return loadState().SkipVersion
+}
+
+// SetSkipVersion records the version auto-update must not install; ""
+// clears the skip.
+func SetSkipVersion(version string) {
+	st := loadState()
+	st.SkipVersion = version
+	saveState(st)
+}
+
+// CachedNotice returns the newer release recorded by a previous background
+// check, or "". Reads only local state, never the network.
+func CachedNotice(current string) string {
 	if !IsReleaseVersion(current) {
 		return ""
 	}
 	st := loadState()
-	if time.Since(st.LastChecked) >= checkInterval {
-		rel, err := FetchLatest(notifyTimeout)
-		if err != nil {
-			return ""
-		}
-		RecordCheck(rel)
-		st.LatestVersion = rel.TagName
+	if st.LatestVersion == "" || !IsNewer(st.LatestVersion, current) || st.LatestVersion == st.SkipVersion {
+		return ""
 	}
-	if st.LatestVersion != "" && IsNewer(st.LatestVersion, current) {
-		return st.LatestVersion
-	}
-	return ""
+	return st.LatestVersion
 }

@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"time"
+	"path/filepath"
 
 	"docsgpt-cli/internal/config"
 	"docsgpt-cli/internal/display"
@@ -72,13 +72,25 @@ func Execute() {
 	// even when cobra's arg validation fails before PersistentPreRunE runs.
 	display.InitTheme("auto")
 
-	var updateNotice <-chan string
-	if shouldCheckForUpdates() {
-		updateNotice = update.BackgroundCheck(Version)
+	mode, exePath := updateGate()
+	if mode == update.ModeOn {
+		if v, err := update.ApplyStaged(Version, exePath); err == nil && v != "" {
+			fmt.Fprintln(os.Stderr, display.Muted(
+				"docsgpt-cli updated to "+v+" (takes effect on your next command)"))
+		}
+	}
+	if mode != "" && update.ShouldSpawnWorker(Version, mode) {
+		update.SpawnWorker()
 	}
 
 	err := rootCmd.Execute()
-	printUpdateNotice(updateNotice)
+
+	if mode == update.ModeNotify {
+		if latest := update.CachedNotice(Version); latest != "" {
+			fmt.Fprintln(os.Stderr, display.Muted(fmt.Sprintf(
+				"\nA new version is available: %s → %s. Run 'docsgpt-cli update'.", Version, latest)))
+		}
+	}
 
 	if err != nil {
 		display.ErrorMsg(err.Error())
@@ -86,36 +98,44 @@ func Execute() {
 	}
 }
 
-func shouldCheckForUpdates() bool {
+// updateGate decides how the passive update machinery behaves for this
+// invocation. "" disables it entirely: opted out, no TTY, a non-release
+// build, or the update/host commands (which run their own update logic).
+// Installs we cannot swap (Homebrew, unwritable dir) downgrade on → notify.
+func updateGate() (mode string, exePath string) {
 	if os.Getenv("DOCSGPT_NO_UPDATE_CHECK") != "" {
-		return false
+		return "", ""
 	}
 	if !isatty.IsTerminal(os.Stderr.Fd()) {
-		return false
+		return "", ""
 	}
-	if cmd, _, err := rootCmd.Find(os.Args[1:]); err == nil && cmd == updateCmd {
-		return false
+	if cmd, _, err := rootCmd.Find(os.Args[1:]); err == nil && (cmd == updateCmd || cmd == hostCmd) {
+		return "", ""
 	}
-	if cfg, err := config.Load(); err == nil && cfg.Settings.DisableUpdateCheck {
-		return false
+	if !update.IsReleaseVersion(Version) {
+		return "", ""
 	}
-	return true
-}
+	cfg, err := config.Load()
+	if err != nil {
+		return "", ""
+	}
+	mode = cfg.Settings.AutoUpdateMode()
+	if mode == update.ModeOff {
+		return "", ""
+	}
 
-// printUpdateNotice waits only briefly for the background check so fast
-// commands are not held up; a missed result is picked up on a later run.
-func printUpdateNotice(ch <-chan string) {
-	if ch == nil {
-		return
+	exe, err := os.Executable()
+	if err != nil {
+		return "", ""
 	}
-	select {
-	case latest := <-ch:
-		if latest != "" {
-			fmt.Fprintln(os.Stderr, display.Muted(fmt.Sprintf(
-				"\nA new version is available: %s → %s. Run 'docsgpt-cli update'.", Version, latest)))
-		}
-	case <-time.After(200 * time.Millisecond):
+	exePath, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return "", ""
 	}
+	if mode == update.ModeOn && (update.IsHomebrewPath(exePath) || !isWritable(filepath.Dir(exePath))) {
+		mode = update.ModeNotify
+	}
+	return mode, exePath
 }
 
 func init() {

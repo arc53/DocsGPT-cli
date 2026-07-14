@@ -21,9 +21,24 @@ type Settings struct {
 	SendDirectoryContents bool   `json:"send_directory_contents"`
 	SendLastCommands      bool   `json:"send_last_commands"`
 	NumberOfLastCommands  int    `json:"number_of_last_commands"`
-	Theme                 string `json:"theme,omitempty"`  // "auto", "dark", "light"
-	Banner                string `json:"banner,omitempty"` // "always", "once", "never"
-	DisableUpdateCheck    bool   `json:"disable_update_check,omitempty"`
+	Theme                 string `json:"theme,omitempty"`                // "auto", "dark", "light"
+	Banner                string `json:"banner,omitempty"`               // "always", "once", "never"
+	AutoUpdate            string `json:"auto_update,omitempty"`          // "on", "notify", "off"
+	DisableUpdateCheck    bool   `json:"disable_update_check,omitempty"` // legacy, superseded by auto_update
+}
+
+// AutoUpdateMode resolves the effective auto-update mode: "on" (stage and
+// apply updates automatically, the default), "notify" (print a notice only),
+// or "off". The legacy disable_update_check flag maps to "off".
+func (s Settings) AutoUpdateMode() string {
+	switch s.AutoUpdate {
+	case "on", "notify", "off":
+		return s.AutoUpdate
+	}
+	if s.DisableUpdateCheck {
+		return "off"
+	}
+	return "on"
 }
 
 func DefaultConfig() Config {

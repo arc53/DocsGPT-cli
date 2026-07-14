@@ -7,13 +7,18 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+
+	"docsgpt-cli/internal/config"
 
 	"github.com/minio/selfupdate"
 )
@@ -39,38 +44,150 @@ func (r *Release) asset(name string) *Asset {
 	return nil
 }
 
-// Apply downloads the release archive for this platform, verifies it against
-// the release checksums, and swaps the binary at targetPath. On failure the
-// old binary is left in place.
-func Apply(rel *Release, targetPath string) error {
-	name := AssetName()
-	asset := rel.asset(name)
-	if asset == nil {
-		return fmt.Errorf("release %s has no asset for %s/%s (%s)", rel.TagName, runtime.GOOS, runtime.GOARCH, name)
-	}
-
-	archive, err := download(asset.DownloadURL)
-	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
-	}
-
-	if err := verifyChecksum(rel, name, archive); err != nil {
-		return err
-	}
-
-	binary, err := extractBinary(archive, name)
+// Apply downloads, verifies, and installs rel's binary at targetPath,
+// keeping the replaced binary (running as currentVersion) as the rollback
+// backup. On failure the old binary is left in place.
+func Apply(rel *Release, targetPath, currentVersion string) error {
+	binary, err := fetchVerifiedBinary(rel)
 	if err != nil {
 		return err
 	}
+	return swapBinary(binary, targetPath, currentVersion)
+}
 
-	err = selfupdate.Apply(bytes.NewReader(binary), selfupdate.Options{TargetPath: targetPath})
+// CheckAndApply is the host daemon's update pass: check for a release,
+// download, verify, and swap the running binary in place. Returns the
+// installed version, or "" when already current. The caller restarts into
+// the new binary.
+func CheckAndApply(currentVersion string) (string, error) {
+	if !IsReleaseVersion(currentVersion) {
+		return "", nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	realPath, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return "", err
+	}
+	if IsHomebrewPath(realPath) {
+		return "", nil
+	}
+
+	rel, err := FetchLatest(30 * time.Second)
+	if err != nil {
+		return "", err
+	}
+	RecordCheck(rel)
+	if !IsNewer(rel.TagName, currentVersion) || rel.TagName == SkipVersion() {
+		return "", nil
+	}
+	if err := Apply(rel, realPath, currentVersion); err != nil {
+		return "", err
+	}
+	return rel.TagName, nil
+}
+
+// Rollback swaps the current binary with the backup kept by the last update
+// and marks the replaced version as skipped so auto-update won't reinstall
+// it. Returns the version rolled back to ("" when the backup predates
+// manifests).
+func Rollback(currentVersion, targetPath string) (string, error) {
+	binary, err := os.ReadFile(backupBinaryPath())
+	if err != nil {
+		return "", fmt.Errorf("no rollback backup found at %s", backupBinaryPath())
+	}
+	var m binaryManifest
+	if data, err := os.ReadFile(backupManifestPath()); err == nil {
+		json.Unmarshal(data, &m)
+	}
+	if m.SHA256 != "" {
+		sum := sha256.Sum256(binary)
+		if hex.EncodeToString(sum[:]) != m.SHA256 {
+			return "", fmt.Errorf("backup binary does not match its manifest, refusing to roll back")
+		}
+	}
+	if m.GOOS != "" && (m.GOOS != runtime.GOOS || m.GOARCH != runtime.GOARCH) {
+		return "", fmt.Errorf("backup binary is for %s/%s, not this machine", m.GOOS, m.GOARCH)
+	}
+	if err := swapBinary(binary, targetPath, currentVersion); err != nil {
+		return "", err
+	}
+	SetSkipVersion(currentVersion)
+	return m.Version, nil
+}
+
+func backupDir() string {
+	return filepath.Join(config.Dir(), "backup")
+}
+
+func backupBinaryPath() string {
+	return filepath.Join(backupDir(), binaryBaseName())
+}
+
+func backupManifestPath() string {
+	return filepath.Join(backupDir(), "manifest.json")
+}
+
+// swapBinary installs binary at targetPath via an atomic replace, saving
+// the previous executable (recorded as oldVersion) for Rollback. Any staged
+// update is cleared since it no longer matches what is installed.
+func swapBinary(binary []byte, targetPath, oldVersion string) error {
+	if err := os.MkdirAll(backupDir(), 0700); err != nil {
+		return err
+	}
+	err := selfupdate.Apply(bytes.NewReader(binary), selfupdate.Options{
+		TargetPath:  targetPath,
+		OldSavePath: backupBinaryPath(),
+	})
 	if err != nil {
 		if rbErr := selfupdate.RollbackError(err); rbErr != nil {
 			return fmt.Errorf("update failed and the old binary could not be restored (%v), reinstall manually: %w", rbErr, err)
 		}
 		return err
 	}
+	writeBackupManifest(oldVersion)
+	ClearStaging()
 	return nil
+}
+
+func writeBackupManifest(version string) {
+	old, err := os.ReadFile(backupBinaryPath())
+	if err != nil {
+		return
+	}
+	sum := sha256.Sum256(old)
+	m := binaryManifest{
+		Version: version,
+		SHA256:  hex.EncodeToString(sum[:]),
+		GOOS:    runtime.GOOS,
+		GOARCH:  runtime.GOARCH,
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	os.WriteFile(backupManifestPath(), data, 0600)
+}
+
+// fetchVerifiedBinary downloads the platform archive for rel, verifies it
+// against the release checksums, and returns the extracted binary.
+func fetchVerifiedBinary(rel *Release) ([]byte, error) {
+	name := AssetName()
+	asset := rel.asset(name)
+	if asset == nil {
+		return nil, fmt.Errorf("release %s has no asset for %s/%s (%s)", rel.TagName, runtime.GOOS, runtime.GOARCH, name)
+	}
+
+	archive, err := download(asset.DownloadURL)
+	if err != nil {
+		return nil, fmt.Errorf("download failed: %w", err)
+	}
+	if err := verifyChecksum(rel, name, archive); err != nil {
+		return nil, err
+	}
+	return extractBinary(archive, name)
 }
 
 func download(url string) ([]byte, error) {
