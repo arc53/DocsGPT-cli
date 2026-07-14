@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,9 @@ var installCmd = &cobra.Command{
 	Short: "Install docsgpt-cli to your system PATH",
 	Run: func(cmd *cobra.Command, args []string) {
 		binaryName := "docsgpt-cli"
+		if runtime.GOOS == "windows" {
+			binaryName += ".exe"
+		}
 		sourcePath, err := os.Executable()
 		if err != nil {
 			printError("Failed to determine the executable path: " + err.Error())
@@ -41,16 +45,20 @@ var installCmd = &cobra.Command{
 		}
 
 		if err := os.Rename(sourcePath, destinationPath); err != nil {
-			printError("Failed to move the binary to the installation path: " + err.Error())
-			return
+			// Rename fails across volumes/drives; fall back to copying.
+			if copyErr := copyFile(sourcePath, destinationPath); copyErr != nil {
+				printError("Failed to move the binary to the installation path: " + copyErr.Error())
+				return
+			}
 		}
 
-		// For Windows, update the PATH using setx command
 		if runtime.GOOS == "windows" {
 			if err := addToWindowsPATH(filepath.Dir(destinationPath)); err != nil {
 				printError("Failed to add to PATH: " + err.Error())
 				return
 			}
+			fmt.Println(display.Success("docsgpt-cli successfully installed! Open a new terminal to pick up the PATH change, then use the 'docsgpt-cli' command."))
+			return
 		}
 
 		fmt.Println(display.Success("docsgpt-cli successfully installed! You can now use it with 'docsgpt-cli' command."))
@@ -67,10 +75,8 @@ func getInstallPath(binaryName string) string {
 			installDir = filepath.Join(os.Getenv("HOME"), ".local/bin/")
 		}
 	case "windows":
-		installDir = filepath.Join(os.Getenv("USERPROFILE"), "bin") // Use user bin directory
-		if !isWritable(installDir) {
-			installDir = filepath.Join("C:\\Windows\\System32")
-		}
+		// Per-user directory; created below if missing, no elevation needed.
+		installDir = filepath.Join(os.Getenv("USERPROFILE"), "bin")
 	default:
 		return ""
 	}
@@ -88,9 +94,40 @@ func isWritable(dir string) bool {
 }
 
 func addToWindowsPATH(dir string) error {
-	// Update PATH using setx command on Windows
-	cmd := exec.Command("setx", "PATH", fmt.Sprintf("%%PATH%%;%s", dir))
+	// setx is unusable here: %PATH% is not expanded outside cmd.exe, it merges
+	// the machine PATH into the user PATH, and it truncates values to 1024
+	// characters. Update only the user PATH via PowerShell instead.
+	script := fmt.Sprintf(
+		"$dir = '%s';"+
+			"$path = [Environment]::GetEnvironmentVariable('Path', 'User');"+
+			"if ($null -eq $path) { $path = '' };"+
+			"$parts = $path -split ';' | Where-Object { $_ -ne '' };"+
+			"if ($parts -notcontains $dir) {"+
+			"[Environment]::SetEnvironmentVariable('Path', (($parts + $dir) -join ';'), 'User')"+
+			"}",
+		strings.ReplaceAll(dir, "'", "''"),
+	)
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	return cmd.Run()
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 func addToPATH(binaryPath string) error {
