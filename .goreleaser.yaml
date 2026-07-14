@@ -1,0 +1,45 @@
+version: 2
+
+project_name: docsgpt-cli
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: docsgpt-cli
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X docsgpt-cli/cmd.Version=v{{ .Version }}
+
+# Version-less asset names so the self-updater and
+# /releases/latest/download/... URLs stay stable across releases.
+archives:
+  - formats: ["tar.gz"]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

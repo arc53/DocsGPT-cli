@@ -117,9 +117,32 @@ var configSetBannerCmd = &cobra.Command{
 	},
 }
 
+var configSetUpdateCheckCmd = &cobra.Command{
+	Use:   "set-update-check [on|off]",
+	Short: "Enable or disable the daily background update check",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		val := strings.ToLower(args[0])
+		if val != "on" && val != "off" {
+			return fmt.Errorf("invalid value: %s (use on or off)", args[0])
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		cfg.Settings.DisableUpdateCheck = val == "off"
+		if err := cfg.Save(); err != nil {
+			return err
+		}
+		fmt.Println(display.Success("Update check set to:"), val)
+		return nil
+	},
+}
+
 func init() {
 	configCmd.AddCommand(configShowCmd)
 	configCmd.AddCommand(configSetURLCmd)
 	configCmd.AddCommand(configSetThemeCmd)
 	configCmd.AddCommand(configSetBannerCmd)
+	configCmd.AddCommand(configSetUpdateCheckCmd)
 }

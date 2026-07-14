@@ -23,6 +23,7 @@ type Settings struct {
 	NumberOfLastCommands  int    `json:"number_of_last_commands"`
 	Theme                 string `json:"theme,omitempty"`  // "auto", "dark", "light"
 	Banner                string `json:"banner,omitempty"` // "always", "once", "never"
+	DisableUpdateCheck    bool   `json:"disable_update_check,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -39,13 +40,14 @@ func DefaultConfig() Config {
 	}
 }
 
-func configDir() string {
+// Dir returns the directory holding CLI state (~/.docsgpt).
+func Dir() string {
 	homeDir, _ := os.UserHomeDir()
 	return filepath.Join(homeDir, ".docsgpt")
 }
 
 func configPath() string {
-	return filepath.Join(configDir(), "config.json")
+	return filepath.Join(Dir(), "config.json")
 }
 
 func Load() (Config, error) {
@@ -67,7 +69,7 @@ func Load() (Config, error) {
 }
 
 func (c *Config) Save() error {
-	dir := configDir()
+	dir := Dir()
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}

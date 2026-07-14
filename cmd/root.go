@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
+	"time"
 
 	"docsgpt-cli/internal/config"
 	"docsgpt-cli/internal/display"
+	"docsgpt-cli/internal/update"
 
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -68,9 +72,49 @@ func Execute() {
 	// even when cobra's arg validation fails before PersistentPreRunE runs.
 	display.InitTheme("auto")
 
-	if err := rootCmd.Execute(); err != nil {
+	var updateNotice <-chan string
+	if shouldCheckForUpdates() {
+		updateNotice = update.BackgroundCheck(Version)
+	}
+
+	err := rootCmd.Execute()
+	printUpdateNotice(updateNotice)
+
+	if err != nil {
 		display.ErrorMsg(err.Error())
 		os.Exit(1)
+	}
+}
+
+func shouldCheckForUpdates() bool {
+	if os.Getenv("DOCSGPT_NO_UPDATE_CHECK") != "" {
+		return false
+	}
+	if !isatty.IsTerminal(os.Stderr.Fd()) {
+		return false
+	}
+	if cmd, _, err := rootCmd.Find(os.Args[1:]); err == nil && cmd == updateCmd {
+		return false
+	}
+	if cfg, err := config.Load(); err == nil && cfg.Settings.DisableUpdateCheck {
+		return false
+	}
+	return true
+}
+
+// printUpdateNotice waits only briefly for the background check so fast
+// commands are not held up; a missed result is picked up on a later run.
+func printUpdateNotice(ch <-chan string) {
+	if ch == nil {
+		return
+	}
+	select {
+	case latest := <-ch:
+		if latest != "" {
+			fmt.Fprintln(os.Stderr, display.Muted(fmt.Sprintf(
+				"\nA new version is available: %s → %s. Run 'docsgpt-cli update'.", Version, latest)))
+		}
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -89,4 +133,5 @@ func init() {
 	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(chatCmd)
+	rootCmd.AddCommand(updateCmd)
 }
