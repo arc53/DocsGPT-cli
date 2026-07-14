@@ -28,6 +28,9 @@ go.work.sum
 /docsgpt-cli
 /docsgpt-cli-*
 
+# GoReleaser output
+/dist/
+
 # Editor / tooling
 .claude/
 .DS_Store
