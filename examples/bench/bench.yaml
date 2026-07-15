@@ -1,0 +1,36 @@
+# Suite defaults for `docsgpt-cli bench`. Every setting here can be
+# overridden per case (case.yaml) or from the command line.
+
+# Agent to benchmark: a key NAME from `docsgpt-cli keys`, or a literal API key.
+# Any value here (or in case.yaml) can reference environment variables as
+# ${VAR} — resolved from your shell, this directory's .env, or ./.env, in that
+# order ($$ escapes a literal dollar). That keeps committed YAML secret-free:
+#   agent: ${DOCSGPT_BENCH_KEY}
+agent: my-agent
+
+# Wire protocol: v1 (OpenAI-compatible, reports token usage),
+# stream (native SSE), or webhook (async; requires webhook_url).
+target: v1
+
+# base_url: https://gptcloud.arc53.com
+
+# Required for target: webhook — mint it in the DocsGPT UI or via
+# GET /api/agent_webhook?id=<agent_id> on your own deployment. The URL contains
+# the secret token: inject it via ${VAR} or the --webhook-url flag instead of
+# committing it.
+# webhook_url: ${DOCSGPT_WEBHOOK_URL}
+
+# LLM-as-judge used by cases with an expect.judge section.
+# judge:
+#   agent: judge-agent
+
+# How many cases run in parallel.
+concurrency: 2
+
+# Per-run timeout and webhook/attachment polling cadence.
+timeout: 120s
+poll_interval: 2s
+
+# Run every case N times and require at least min_pass passes (LLMs flake).
+# repeat: 3
+# min_pass: 2

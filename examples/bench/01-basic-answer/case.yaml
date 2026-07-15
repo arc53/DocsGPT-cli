@@ -1,0 +1,16 @@
+description: "Agent answers a basic question about itself"
+tags: [smoke]
+
+question: "What is DocsGPT, in one sentence?"
+
+expect:
+  answer:
+    contains: "DocsGPT"
+    not_contains: "I don't know"
+  limits:
+    max_seconds: 60
+
+# To grade answers with a second agent, configure `judge:` in bench.yaml and add:
+#  judge:
+#    rubric: "The answer must describe DocsGPT as an open-source RAG/assistant platform."
+#    min_score: 0.7

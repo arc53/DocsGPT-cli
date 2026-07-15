@@ -1,0 +1,11 @@
+description: "Async run through the agent's incoming webhook"
+tags: [webhook]
+target: webhook
+# The $$ below escapes interpolation: the skip text shows the literal ${...}.
+skip: "set webhook_url (e.g. webhook_url: $${DOCSGPT_WEBHOOK_URL} in bench.yaml, or pass --webhook-url), then delete this skip line"
+
+question: "What is DocsGPT, in one sentence?"
+
+expect:
+  answer:
+    contains: "DocsGPT"

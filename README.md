@@ -52,6 +52,7 @@ docsgpt-cli [command]
 ### Available Commands:
 
 - `ask` — Ask a question to DocsGPT
+- `bench` — Run benchmark suites against your agents (see below)
 - `chat` — Start an interactive chat session
 - `config` — Manage CLI configuration (base URL, theme, banner, update check)
 - `help` — Help about any command
@@ -94,6 +95,31 @@ Setting the `DOCSGPT_NO_UPDATE_CHECK` environment variable disables everything u
 Here’s the updated section with the paragraph about the prompt:
 
 ---
+
+## Benchmarking Agents
+
+`docsgpt-cli bench` runs a directory of benchmark cases against your agents and
+asserts on the answers — a quick "is everything still good?" check for prompt,
+model, or source changes.
+
+```bash
+docsgpt-cli bench init my-suite   # scaffold a suite
+docsgpt-cli bench                 # run ./bench
+docsgpt-cli bench --json          # machine-readable output
+docsgpt-cli bench --junit out.xml # JUnit XML for CI
+docsgpt-cli bench --vs other-key  # A/B compare two agents
+docsgpt-cli bench --baseline last # diff against the previous run
+docsgpt-cli bench record          # snapshot answers as golden files
+```
+
+Each case is a directory with a `case.yaml` (question, optional attachments,
+and `expect` assertions on the answer text, JSON fields, sources, tool calls,
+LLM-as-judge rubrics, latency, and token budgets). Cases can run through three
+targets: `v1` (OpenAI-compatible endpoint, reports token usage), `stream`
+(native SSE), or `webhook` (async agent webhooks). Exit codes are CI-friendly:
+`0` pass, `1` failures, `2` configuration error.
+
+See [`examples/bench`](examples/bench) for a ready-made suite.
 
 ## Customizing the Prompt
 

@@ -46,13 +46,16 @@ var rootCmd = &cobra.Command{
 		}
 		display.InitTheme(theme)
 
-		// Show startup banner
-		cfg, loadErr := config.Load()
-		bannerSetting := "always"
-		if loadErr == nil && cfg.Settings.Banner != "" {
-			bannerSetting = cfg.Settings.Banner
+		// Show startup banner (suppressed for `bench --json` so stdout stays
+		// a clean, parseable JSON document).
+		if !suppressBannerForJSON(cmd) {
+			cfg, loadErr := config.Load()
+			bannerSetting := "always"
+			if loadErr == nil && cfg.Settings.Banner != "" {
+				bannerSetting = cfg.Settings.Banner
+			}
+			display.ShowBanner(bannerSetting, globalNoMotion)
 		}
-		display.ShowBanner(bannerSetting, globalNoMotion)
 
 		return nil
 	},
@@ -154,4 +157,23 @@ func init() {
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(benchCmd)
+}
+
+// suppressBannerForJSON reports whether the stdout banner must be skipped: it is
+// a bench command invoked with --json, whose stdout must carry only the JSON
+// result document.
+func suppressBannerForJSON(cmd *cobra.Command) bool {
+	isBench := false
+	for c := cmd; c != nil; c = c.Parent() {
+		if c.Name() == "bench" {
+			isBench = true
+			break
+		}
+	}
+	if !isBench {
+		return false
+	}
+	f := cmd.Flags().Lookup("json")
+	return f != nil && f.Changed
 }

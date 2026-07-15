@@ -1,0 +1,12 @@
+description: "Answering from an attached file (stream target)"
+tags: [attachments]
+target: stream
+
+attachments: [notes.md]
+question: "According to the attached flight test notes, what was the maximum flight time of the Zephyr X1?"
+
+expect:
+  answer:
+    contains: "47"
+  sources:
+    min: 0 # attachments don't count as retrieval sources; raise this for RAG agents

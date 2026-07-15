@@ -1,0 +1,15 @@
+description: "Structured JSON output with field-level assertions"
+tags: [smoke, json]
+
+question: >
+  Reply with ONLY this exact JSON and nothing else:
+  {"status": "ok", "product": "DocsGPT", "numbers": [1, 2, 3]}
+
+expect:
+  json:
+    # Values are gjson paths -> matchers. A bare scalar means equality.
+    status: ok
+    product: { contains: "docs" }
+    numbers: { length: 3 }
+    "numbers.0": 1
+    missing_field: { is_none: true }
