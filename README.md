@@ -103,23 +103,44 @@ asserts on the answers — a quick "is everything still good?" check for prompt,
 model, or source changes.
 
 ```bash
-docsgpt-cli bench init my-suite   # scaffold a suite
-docsgpt-cli bench                 # run ./bench
-docsgpt-cli bench --json          # machine-readable output
-docsgpt-cli bench --junit out.xml # JUnit XML for CI
-docsgpt-cli bench --vs other-key  # A/B compare two agents
-docsgpt-cli bench --baseline last # diff against the previous run
-docsgpt-cli bench record          # snapshot answers as golden files
+docsgpt-cli bench init my-suite          # scaffold a suite
+docsgpt-cli bench                        # run ./bench
+docsgpt-cli bench --json                 # machine-readable output
+docsgpt-cli bench --junit out.xml        # JUnit XML for CI
+docsgpt-cli bench --vs other-key         # A/B compare two agents
+docsgpt-cli bench --model gpt-5.6-terra  # pin one model for every case
+docsgpt-cli bench --matrix m1,m2,m3      # run once per model, print the comparison table
+docsgpt-cli bench --baseline last        # diff against the previous run
+docsgpt-cli bench record                 # snapshot answers as golden files
 ```
 
-Each case is a directory with a `case.yaml` (question, optional attachments,
-and `expect` assertions on the answer text, JSON fields, sources, tool calls,
-LLM-as-judge rubrics, latency, and token budgets). Cases can run through three
-targets: `v1` (OpenAI-compatible endpoint, reports token usage), `stream`
-(native SSE), or `webhook` (async agent webhooks). Exit codes are CI-friendly:
-`0` pass, `1` failures, `2` configuration error.
+Each case is a directory with a `case.yaml` (a question or a multi-turn
+`turns:` list, optional attachments, and `expect` assertions on the answer
+text, JSON fields, sources, tool calls, LLM-as-judge rubrics, latency and
+time-to-first-token, token budgets, SSE integrity, or — for negative cases —
+the expected server error). Cases can run through four targets: `v1`
+(OpenAI-compatible endpoint, reports token usage; optionally streamed),
+`stream` (native SSE), `answer` (native `/api/answer`), or `webhook` (async
+agent webhooks). Reports include p50/p95 latency and TTFT, tokens, and an
+estimated cost when pricing is known. Exit codes are CI-friendly: `0` pass,
+`1` failures, `2` configuration error.
 
 See [`examples/bench`](examples/bench) for a ready-made suite.
+
+### Running benchmarks against shared deployments
+
+Nightly runs against a real deployment create real conversations and spend
+real tokens, so keep them attributable and easy to exclude:
+
+- Use a **dedicated bench account** and its agent API keys, never a personal
+  one. Bench conversations stay `visibility: hidden` (the stream/answer
+  default) and spend lands under the bench keys.
+- Keep keys out of committed YAML: reference them as `${VAR}` and put the
+  values in the suite's `.env` (gitignored) or CI secrets.
+- Pass `--run-tag <name>` (or set `run_tag:` in `bench.yaml`): every request
+  then carries `X-DocsGPT-Bench-Tag: bench:<name>` and a
+  `docsgpt-cli/<version> bench` User-Agent, so server-side telemetry can filter
+  bench traffic out of user-facing metrics and error reviews.
 
 ## Customizing the Prompt
 

@@ -47,6 +47,12 @@ func printHeader(w io.Writer, r *runner.SuiteResult) {
 	if r.Target != "" {
 		meta = append(meta, display.Muted("target: ")+r.Target)
 	}
+	if r.Model != "" {
+		meta = append(meta, display.Muted("model: ")+r.Model)
+	}
+	if r.RunTag != "" {
+		meta = append(meta, display.Muted("tag: ")+r.RunTag)
+	}
 	line := title
 	if len(meta) > 0 {
 		line += "   " + strings.Join(meta, "   ")
@@ -81,10 +87,32 @@ func caseExtras(c *runner.CaseResult) string {
 	if tok := caseTokens(c); tok > 0 {
 		parts = append(parts, fmt.Sprintf("%d tok", tok))
 	}
+	if cost, ok := caseCost(c); ok {
+		parts = append(parts, formatUSD(cost))
+	}
+	if ttft := caseFirstOutputMS(c); ttft > 0 {
+		parts = append(parts, fmt.Sprintf("ttft %.2fs", float64(ttft)/1000))
+	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return "  " + display.Muted(strings.Join(parts, "  "))
+}
+
+// caseFirstOutputMS is the mean time-to-first-token across runs that observed
+// it, or 0.
+func caseFirstOutputMS(c *runner.CaseResult) int64 {
+	var sum, n int64
+	for _, rr := range c.Runs {
+		if rr.FirstOutputMS > 0 {
+			sum += rr.FirstOutputMS
+			n++
+		}
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / n
 }
 
 // printFailingAssertions lists each failing assertion (name, then message)
@@ -121,18 +149,32 @@ func printCaseErrors(w io.Writer, c *runner.CaseResult) {
 	}
 }
 
-// printVerbose echoes each run's answer and any judge reasoning.
+// printVerbose echoes each run's answer (every turn for multi-turn cases),
+// the asserted server error for negative cases, and any judge reasoning.
 func printVerbose(w io.Writer, c *runner.CaseResult) {
 	for _, rr := range c.Runs {
-		if rr.Answer != "" {
+		for _, tr := range rr.Turns {
+			fmt.Fprintf(w, "      %s %s\n", display.Muted(fmt.Sprintf("run %d turn %d:", rr.Index, tr.Index)), truncate(strings.ReplaceAll(tr.Question, "\n", " "), 120))
+			for _, line := range strings.Split(truncate(tr.Answer, verboseAnswerLimit), "\n") {
+				fmt.Fprintf(w, "        %s\n", line)
+			}
+		}
+		if rr.Answer != "" && len(rr.Turns) == 0 {
 			fmt.Fprintf(w, "      %s\n", display.Muted(fmt.Sprintf("run %d answer:", rr.Index)))
 			for _, line := range strings.Split(truncate(rr.Answer, verboseAnswerLimit), "\n") {
 				fmt.Fprintf(w, "        %s\n", line)
 			}
 		}
+		if er := rr.ErrorResponse; er != nil {
+			label := "server error:"
+			if er.Status > 0 {
+				label = fmt.Sprintf("server error (HTTP %d):", er.Status)
+			}
+			fmt.Fprintf(w, "      %s %s\n", display.Muted(fmt.Sprintf("run %d %s", rr.Index, label)), truncate(er.Message, verboseAnswerLimit))
+		}
 		for _, a := range rr.Assertions {
-			if a.Name == "judge" && a.Message != "" {
-				fmt.Fprintf(w, "      %s %s\n", display.Muted("judge:"), a.Message)
+			if strings.HasSuffix(a.Name, "judge") && a.Message != "" {
+				fmt.Fprintf(w, "      %s %s\n", display.Muted(a.Name+":"), a.Message)
 			}
 		}
 	}
@@ -152,7 +194,26 @@ func printSummary(w io.Writer, r *runner.SuiteResult) {
 	if tok := suiteTokens(r); tok > 0 {
 		summary += "  " + display.Muted("·") + fmt.Sprintf("  %d tokens", tok)
 	}
+	if cost, ok := suiteCost(r); ok {
+		summary += "  " + display.Muted("·") + "  " + formatUSD(cost)
+	}
 	fmt.Fprintln(w, summary)
+
+	// Latency distribution across executed runs, TTFT where observed, and the
+	// mean judge score when any case was judged.
+	var stats []string
+	if lat := runLatencies(r); len(lat) > 0 {
+		stats = append(stats, fmt.Sprintf("latency p50 %.2fs p95 %.2fs", percentile(lat, 50)/1000, percentile(lat, 95)/1000))
+	}
+	if ttft := runFirstOutputs(r); len(ttft) > 0 {
+		stats = append(stats, fmt.Sprintf("ttft p50 %.2fs p95 %.2fs", percentile(ttft, 50)/1000, percentile(ttft, 95)/1000))
+	}
+	if js := judgeScores(r); len(js) > 0 {
+		stats = append(stats, fmt.Sprintf("judge mean %.2f (n=%d)", mean(js), len(js)))
+	}
+	if len(stats) > 0 {
+		fmt.Fprintln(w, display.Muted("         "+strings.Join(stats, "  ·  ")))
+	}
 }
 
 // countStyled colors a non-zero count and leaves a zero count muted.

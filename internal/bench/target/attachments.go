@@ -61,6 +61,7 @@ func uploadAttachment(ctx context.Context, baseURL, apiKey, path string, pollInt
 		return "", fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", mw.FormDataContentType())
+	setBenchHeaders(httpReq, "")
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {

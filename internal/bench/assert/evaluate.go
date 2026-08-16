@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"docsgpt-cli/internal/bench/spec"
 	"docsgpt-cli/internal/bench/target"
@@ -30,10 +31,142 @@ func Evaluate(exp spec.Expect, res *target.Result, golden *spec.Golden) []Result
 	if exp.Limits != nil {
 		out = append(out, evaluateLimits(exp.Limits, res)...)
 	}
+	if exp.Stream != nil {
+		out = append(out, evaluateStream(exp.Stream, res)...)
+	}
 	if exp.Golden {
 		out = append(out, evaluateGolden(golden, res.Answer))
 	}
 	return out
+}
+
+// EvaluateError runs the expect.error section against a server-reported
+// error (negative cases). limits.max_seconds is still checked when set, using
+// the elapsed time until the error arrived.
+func EvaluateError(exp spec.Expect, se *target.ServerError, elapsed time.Duration) []Result {
+	var out []Result
+	e := exp.Error
+	if e == nil {
+		return out
+	}
+	if e.Status > 0 {
+		name := fmt.Sprintf("error status %d", e.Status)
+		switch {
+		case se.Status == e.Status:
+			out = append(out, pass(name))
+		case se.Status == 0:
+			out = append(out, fail(name, fmt.Sprintf("expected HTTP %d but the error carried no HTTP status: %s", e.Status, se.Message)))
+		default:
+			out = append(out, fail(name, fmt.Sprintf("expected HTTP %d, got %d: %s", e.Status, se.Status, truncate(se.Message))))
+		}
+	}
+	haystack := strings.ToLower(se.Message + "\n" + se.Body)
+	for _, sub := range e.Contains {
+		name := fmt.Sprintf("error contains %q", sub)
+		if strings.Contains(haystack, strings.ToLower(sub)) {
+			out = append(out, pass(name))
+		} else {
+			out = append(out, fail(name, fmt.Sprintf("error does not contain %q (got: %s)", sub, truncate(firstNonEmpty(se.Message, se.Body)))))
+		}
+	}
+	if len(out) == 0 {
+		// Bare `error: {}` — any server error satisfies the case.
+		out = append(out, pass("error"))
+	}
+	if l := exp.Limits; l != nil && l.MaxSeconds > 0 {
+		name := "limits max_seconds"
+		got := elapsed.Seconds()
+		if got <= l.MaxSeconds {
+			out = append(out, pass(name))
+		} else {
+			out = append(out, fail(name, fmt.Sprintf("expected <= %.3fs, got %.3fs", l.MaxSeconds, got)))
+		}
+	}
+	return out
+}
+
+// UnexpectedSuccess is the assertion recorded when expect.error is present but
+// the server answered successfully.
+func UnexpectedSuccess(answer string) Result {
+	return fail("error", "expected a server error, got a successful answer: "+truncate(strings.TrimSpace(answer)))
+}
+
+// evaluateStream checks SSE integrity facts recorded by the stream target.
+// On targets that do not record frames every check is skipped.
+func evaluateStream(st *spec.StreamExpect, res *target.Result) []Result {
+	var out []Result
+	framesKnown := len(res.Frames) > 0 || res.EndFrame
+	if st.EndFrame != nil {
+		name := "stream end_frame"
+		switch {
+		case !framesKnown:
+			out = append(out, skip(name, "stream integrity is only recorded by the stream target"))
+		case res.EndFrame == *st.EndFrame:
+			out = append(out, pass(name))
+		case *st.EndFrame:
+			out = append(out, fail(name, "stream closed without an end frame"))
+		default:
+			out = append(out, fail(name, "stream unexpectedly sent an end frame"))
+		}
+	}
+	if st.ErrorFrame != nil {
+		name := "stream error_frame"
+		switch {
+		case !framesKnown:
+			out = append(out, skip(name, "stream integrity is only recorded by the stream target"))
+		case res.ErrorFrame == *st.ErrorFrame:
+			out = append(out, pass(name))
+		default:
+			out = append(out, fail(name, "stream sent an error frame"))
+		}
+	}
+	switch st.Thought {
+	case spec.ThoughtPresent:
+		name := "stream thought present"
+		if strings.TrimSpace(res.Thought) != "" {
+			out = append(out, pass(name))
+		} else {
+			out = append(out, fail(name, "no thought/reasoning content was streamed"))
+		}
+	case spec.ThoughtAbsent:
+		name := "stream thought absent"
+		if strings.TrimSpace(res.Thought) == "" {
+			out = append(out, pass(name))
+		} else {
+			out = append(out, fail(name, "unexpected thought/reasoning content: "+truncate(res.Thought)))
+		}
+	}
+	for _, want := range st.FramesContain {
+		name := fmt.Sprintf("stream frames_contain %q", want)
+		if !framesKnown {
+			out = append(out, skip(name, "stream integrity is only recorded by the stream target"))
+			continue
+		}
+		if containsFold(res.Frames, want) {
+			out = append(out, pass(name))
+		} else {
+			out = append(out, fail(name, fmt.Sprintf("frame %q not observed (seen: %s)", want, strings.Join(res.Frames, ", "))))
+		}
+	}
+	return out
+}
+
+func containsFold(list []string, want string) bool {
+	for _, v := range list {
+		if strings.EqualFold(v, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // evaluateAnswer checks the answer text: exact equals (trimmed both sides),
@@ -170,6 +303,17 @@ func evaluateLimits(l *spec.LimitsExpect, res *target.Result) []Result {
 			out = append(out, pass(name))
 		} else {
 			out = append(out, fail(name, fmt.Sprintf("expected <= %.3fs, got %.3fs", l.MaxSeconds, got)))
+		}
+	}
+	if l.MaxFirstTokenSeconds > 0 {
+		name := "limits max_first_token_seconds"
+		switch {
+		case res.FirstOutput <= 0:
+			out = append(out, skip(name, "time to first token not observed by this target (stream, or v1 with stream: true)"))
+		case res.FirstOutput.Seconds() <= l.MaxFirstTokenSeconds:
+			out = append(out, pass(name))
+		default:
+			out = append(out, fail(name, fmt.Sprintf("expected first output <= %.3fs, got %.3fs", l.MaxFirstTokenSeconds, res.FirstOutput.Seconds())))
 		}
 	}
 	if l.MaxTotalTokens > 0 {

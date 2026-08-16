@@ -22,9 +22,11 @@ func (streamTarget) Name() string { return spec.TargetStream }
 
 // streamRequest is the /stream request body.
 type streamRequest struct {
-	Question    string   `json:"question"`
-	APIKey      string   `json:"api_key"`
-	Attachments []string `json:"attachments,omitempty"`
+	Question       string   `json:"question"`
+	APIKey         string   `json:"api_key"`
+	ConversationID string   `json:"conversation_id,omitempty"`
+	ModelID        string   `json:"model_id,omitempty"`
+	Attachments    []string `json:"attachments,omitempty"`
 }
 
 // streamEvent is one decoded SSE data frame. Polymorphic fields stay raw.
@@ -48,9 +50,11 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 	endpoint := strings.TrimRight(req.BaseURL, "/") + "/stream"
 
 	body, err := json.Marshal(streamRequest{
-		Question:    req.Question,
-		APIKey:      req.APIKey,
-		Attachments: req.AttachmentIDs,
+		Question:       req.Question,
+		APIKey:         req.APIKey,
+		ConversationID: req.ConversationID,
+		ModelID:        req.Model,
+		Attachments:    req.AttachmentIDs,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("stream target: marshal request: %w", err)
@@ -62,6 +66,7 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
+	setBenchHeaders(httpReq, req.RunTag)
 
 	start := time.Now()
 	resp, err := httpClient.Do(httpReq)
@@ -72,8 +77,12 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("stream target: %s returned %d: %s",
-			endpoint, resp.StatusCode, truncateBody(b, 300))
+		return nil, &ServerError{
+			Status:  resp.StatusCode,
+			Message: errorMessage(b),
+			Body:    truncateBody(b, 300),
+			Where:   "stream target: " + endpoint,
+		}
 	}
 
 	var (
@@ -86,7 +95,17 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 		gotStructured bool
 		gotContent    bool
 		gotEnd        bool
+		firstOutput   time.Duration
+		frames        []string
+		seenFrames    = map[string]bool{}
 	)
+	noteFrame := func(t string) {
+		if t == "" || seenFrames[t] {
+			return
+		}
+		seenFrames[t] = true
+		frames = append(frames, t)
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // 1 MiB for long frames
@@ -102,6 +121,7 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 		}
 		if data == "[DONE]" {
 			gotEnd = true
+			noteFrame("end")
 			break
 		}
 
@@ -109,11 +129,15 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
 			continue // ignore malformed frames
 		}
+		noteFrame(ev.Type)
 
 		switch ev.Type {
 		case "answer":
 			var s string
 			if json.Unmarshal(ev.Answer, &s) == nil {
+				if firstOutput == 0 {
+					firstOutput = time.Since(start)
+				}
 				answer.WriteString(s)
 				gotContent = true
 			}
@@ -128,6 +152,9 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 			toolCalls = extractToolCalls(ev.ToolCalls)
 		case "structured_answer":
 			if v, ok := stringifyStructured(ev.Answer); ok {
+				if firstOutput == 0 {
+					firstOutput = time.Since(start)
+				}
 				structured = v
 				gotStructured = true
 				gotContent = true
@@ -141,7 +168,12 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 			if msg == "" {
 				msg = data
 			}
-			return nil, fmt.Errorf("stream target: %s server error: %s", endpoint, msg)
+			return nil, &ServerError{
+				Status:  resp.StatusCode,
+				Message: msg,
+				Body:    truncateBody([]byte(data), 300),
+				Where:   "stream target: " + endpoint + " server error",
+			}
 		case "end":
 			gotEnd = true
 		default:
@@ -176,6 +208,9 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 		ToolCalls:      toolCalls,
 		ConversationID: convID,
 		Latency:        time.Since(start),
+		FirstOutput:    firstOutput,
+		Frames:         frames,
+		EndFrame:       gotEnd,
 	}, nil
 }
 

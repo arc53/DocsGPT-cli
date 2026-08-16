@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"docsgpt-cli/internal/bench/judge"
 	"docsgpt-cli/internal/bench/report"
 	"docsgpt-cli/internal/bench/runner"
 	"docsgpt-cli/internal/bench/spec"
+	"docsgpt-cli/internal/bench/target"
 	"docsgpt-cli/internal/config"
 	"docsgpt-cli/internal/display"
 
@@ -39,6 +41,9 @@ var (
 	benchVS           []string
 	benchJudge        string
 	benchWebhookURL   string
+	benchModel        string
+	benchMatrix       string
+	benchRunTag       string
 )
 
 var benchCmd = &cobra.Command{
@@ -48,20 +53,24 @@ var benchCmd = &cobra.Command{
 
 A suite is a directory (default ./bench) with an optional bench.yaml (shared
 defaults) and one sub-directory per case, each holding a case.yaml (plus any
-attachment files). Each case sends a question to an agent through one of three
-targets and checks the answer:
+attachment files). Each case sends a question (or a sequence of turns) to an
+agent through one of four targets and checks the answer:
 
-  target: v1       POST /v1/chat/completions  (Bearer auth, reports usage)
-  target: stream   POST /stream               (api_key in body, SSE)
+  target: v1       POST /v1/chat/completions  (Bearer auth, reports usage; stream: true for SSE)
+  target: stream   POST /stream               (api_key in body, SSE, records TTFT + frames)
+  target: answer   POST /api/answer           (api_key in body, single JSON reply)
   target: webhook  POST <webhook_url>         (async, polled to completion)
 
 Assertions live under a case's expect: block (answer text, JSON paths, sources,
-tools, limits, golden.json, or an LLM-as-judge rubric).
+tools, limits incl. time-to-first-token, stream integrity, an expected server
+error for negative cases, golden.json, or an LLM-as-judge rubric).
 
 Examples:
   docsgpt-cli bench                     # run ./bench
   docsgpt-cli bench ./suite -k retrieval
   docsgpt-cli bench --repeat 3 --min-pass 2
+  docsgpt-cli bench --model gpt-5.6-terra          # pin one model for every case
+  docsgpt-cli bench --matrix m1,m2,m3 --tags hard   # run once per model, compare
   docsgpt-cli bench --vs staging-agent  # A/B two agents
   docsgpt-cli bench init                # scaffold a starter suite
   docsgpt-cli bench record              # refresh golden answers`,
@@ -104,6 +113,7 @@ func init() {
 	f.StringVar(&benchBaseline, "baseline", "", "Diff against a baseline: 'last' or a run-history file path")
 	f.BoolVar(&benchUpdate, "update", false, "Refresh golden.json files during this run (record semantics)")
 	f.StringArrayVar(&benchVS, "vs", nil, "Also run against this agent and print an A/B comparison (repeatable)")
+	f.StringVar(&benchMatrix, "matrix", "", "Run the suite once per model (comma-separated model ids) and print a comparison table")
 
 	addSharedBenchFlags(benchRecordCmd)
 
@@ -114,7 +124,9 @@ func init() {
 // addSharedBenchFlags registers the flags common to `bench` and `bench record`.
 func addSharedBenchFlags(c *cobra.Command) {
 	f := c.Flags()
-	f.StringVar(&benchTarget, "target", "", "Override the target for every case (v1, stream, webhook)")
+	f.StringVar(&benchTarget, "target", "", "Override the target for every case (v1, stream, answer, webhook)")
+	f.StringVar(&benchModel, "model", "", "Model id sent with every request (overrides suite/case model)")
+	f.StringVar(&benchRunTag, "run-tag", "", "Tag sent as X-DocsGPT-Bench-Tag: bench:<tag> so server telemetry can attribute bench traffic")
 	f.StringVar(&benchWebhookURL, "webhook-url", "", "Override webhook_url for every case (keeps the token out of YAML)")
 	f.StringVarP(&benchFilter, "filter", "k", "", "Only run cases whose name or description contains this text")
 	f.StringVar(&benchTags, "tags", "", "Only run cases carrying at least one of these tags (comma-separated)")
@@ -136,6 +148,8 @@ func runBenchSuite(args []string, record bool) {
 	if len(args) > 0 {
 		dir = args[0]
 	}
+	target.UserAgent = "docsgpt-cli/" + Version + " bench"
+	judge.UserAgent = target.UserAgent
 
 	suite, err := spec.Load(dir)
 	if err != nil {
@@ -145,6 +159,17 @@ func runBenchSuite(args []string, record bool) {
 	cases := suite.Filter(benchFilter, splitCSV(benchTags))
 	if len(cases) == 0 {
 		benchFatal(fmt.Sprintf("no cases match in %s", dir))
+	}
+
+	matrixModels := splitCSV(benchMatrix)
+	if len(matrixModels) > 0 && record {
+		benchFatal("--matrix cannot be combined with bench record")
+	}
+	if len(matrixModels) > 0 && benchModel != "" {
+		benchFatal("--matrix and --model are mutually exclusive")
+	}
+	if len(matrixModels) > 0 && len(benchVS) > 0 {
+		benchFatal("--matrix and --vs are mutually exclusive")
 	}
 
 	cfg, err := config.Load()
@@ -191,6 +216,11 @@ func runBenchSuite(args []string, record bool) {
 		}
 	}
 
+	runTag := benchRunTag
+	if runTag == "" {
+		runTag = suite.Config.RunTag
+	}
+
 	opts := runner.Options{
 		Suite:                suite,
 		Cases:                cases,
@@ -198,11 +228,13 @@ func runBenchSuite(args []string, record bool) {
 		BaseURL:              cfg.ResolveURL(""),
 		URLOverride:          globalURL,
 		AgentOverride:        globalKey,
+		ModelOverride:        benchModel,
 		TargetOverride:       benchTarget,
 		WebhookURLOverride:   benchWebhookURL,
 		Concurrency:          concurrency,
 		TimeoutOverride:      benchCaseTimeout,
 		PollIntervalOverride: benchPollInterval,
+		RunTag:               runTag,
 		FailFast:             benchFailFast,
 		UpdateGolden:         record || benchUpdate,
 		Judge:                judgeAgent,
@@ -215,6 +247,14 @@ func runBenchSuite(args []string, record bool) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	if len(matrixModels) > 0 {
+		if benchBaseline != "" && !benchJSON {
+			fmt.Fprintln(os.Stderr, display.Warn("warning:"), "--baseline is ignored in matrix mode (matrix runs are not saved to history)")
+		}
+		runBenchMatrix(ctx, opts, matrixModels)
+		return
+	}
 
 	result, err := runner.Run(ctx, opts)
 	if err != nil {
@@ -297,6 +337,66 @@ func runBenchSuite(args []string, record bool) {
 	}
 	if result.Totals.Fail > 0 || result.Totals.Error > 0 {
 		os.Exit(1)
+	}
+}
+
+// runBenchMatrix runs the filtered suite once per model and prints (or emits
+// as JSON) the per-model comparison. Matrix runs are never saved to history
+// or diffed against a baseline. Exit code: 1 when any model has failures or
+// errors, 0 otherwise.
+func runBenchMatrix(ctx context.Context, opts runner.Options, models []string) {
+	var runs []*runner.SuiteResult
+	for i, model := range models {
+		if ctx.Err() != nil {
+			break
+		}
+		if !benchJSON {
+			fmt.Fprintf(os.Stderr, "%s %s (%d/%d)\n", display.Accent("model:"), model, i+1, len(models))
+		}
+		mopts := opts
+		mopts.ModelOverride = model
+		mopts.UpdateGolden = false
+		r, err := runner.Run(ctx, mopts)
+		if err != nil {
+			benchFatal(err.Error())
+		}
+		runs = append(runs, r)
+	}
+	matrix := report.NewMatrix(models[:len(runs)], runs)
+
+	if benchJSON {
+		if err := report.MatrixJSON(os.Stdout, matrix); err != nil {
+			fmt.Fprintln(os.Stderr, display.Danger("Error:"), "write json:", err)
+		}
+	} else {
+		for _, r := range runs {
+			report.Pretty(os.Stdout, r, benchVerbose)
+			fmt.Fprintln(os.Stdout)
+		}
+		if len(runs) > 1 {
+			report.Compare(os.Stdout, runs)
+			fmt.Fprintln(os.Stdout)
+		}
+		report.Matrix(os.Stdout, matrix)
+	}
+
+	if benchJUnit != "" && len(runs) > 0 {
+		// One JUnit file cannot hold N suites cleanly; write the first model's
+		// run and warn, so CI still gets a signal.
+		if err := writeJUnitFile(benchJUnit, runs[0]); err != nil {
+			fmt.Fprintln(os.Stderr, display.Danger("Error:"), "write junit:", err)
+		} else if len(runs) > 1 {
+			fmt.Fprintln(os.Stderr, display.Warn("warning:"), "--junit in matrix mode only records the first model; use --json for the full matrix")
+		}
+	}
+
+	if ctx.Err() != nil {
+		os.Exit(1)
+	}
+	for _, r := range runs {
+		if r.Totals.Fail > 0 || r.Totals.Error > 0 {
+			os.Exit(1)
+		}
 	}
 }
 
@@ -425,8 +525,21 @@ const benchYAMLTemplate = `# Suite defaults applied to every case (each case may
 # agent: ${DOCSGPT_BENCH_KEY}
 # agent: my-agent
 
-# Wire protocol: v1 (default), stream, or webhook. Overridable with --target.
+# Wire protocol: v1 (default), stream, answer, or webhook. Overridable with --target.
 target: v1
+
+# Model id sent with every request (stream/answer: model_id, v1: model). Leave
+# unset for the agent's default. Overridable with --model, or run the whole
+# suite once per model with --matrix m1,m2,m3.
+# model: gpt-5.6-terra
+
+# v1 only: consume the SSE stream (records time-to-first-token) instead of a
+# single JSON response.
+# stream: true
+
+# How attachments reach the agent: upload (default, /api/store_attachment) or
+# inline (v1 only: base64 file content parts in the message).
+# attachments_mode: upload
 
 # Override the API base URL for this suite (defaults to your CLI config).
 # base_url: https://gptcloud.arc53.com
@@ -439,11 +552,23 @@ target: v1
 # judge:
 #   agent: judge-agent
 #   base_url: https://gptcloud.arc53.com
+#   model: gpt-5.6-sol     # forwarded in the judge chat request
+#   temperature: 0
+
+# Tag every request (X-DocsGPT-Bench-Tag: bench:<tag>) so server telemetry can
+# attribute — and exclude — bench traffic. Overridable with --run-tag.
+# run_tag: nightly
+
+# Prices (USD per 1M tokens) for the cost column, keyed by model id. Used when
+# GET /api/models does not expose pricing. Cost needs token usage (v1 target).
+# pricing:
+#   gpt-5.6-terra: {input_per_million: 1.25, output_per_million: 10}
 
 # Run cases in parallel (default 1). Overridable with --concurrency.
 # concurrency: 4
 
-# Per-run timeout (default 120s) and webhook/attachment poll cadence (default 2s).
+# Per-run timeout (per turn for multi-turn cases; default 120s) and
+# webhook/attachment poll cadence (default 2s).
 # timeout: 120s
 # poll_interval: 2s
 
@@ -457,6 +582,13 @@ tags: [example]
 
 question: What is DocsGPT?
 
+# Multi-turn alternative to question: each turn is sent in order, carrying the
+# conversation forward; the case-level expect applies to the LAST answer.
+# turns:
+#   - question: My project is called Zephyr. Remember that.
+#     expect: {answer: {contains: Zephyr}}   # optional per-turn assertions
+#   - question: What did I just tell you my project is called?
+
 expect:
   answer:
     contains:
@@ -465,9 +597,22 @@ expect:
   #   min: 1
   # limits:
   #   max_seconds: 30
+  #   max_first_token_seconds: 5   # time to first output (stream target, or v1 with stream: true)
   #   max_total_tokens: 2000
+  # stream:                        # SSE integrity (stream target only)
+  #   end_frame: true
+  #   error_frame: false
+  #   thought: ignore              # present | absent | ignore
+  #   frames_contain: [source]
   # judge:
   #   rubric: The answer accurately describes DocsGPT as an open-source documentation assistant.
   #   min_score: 0.7
   # golden: true   # compare against golden.json (see: docsgpt-cli bench record)
+
+# Negative case: a server error is the expected outcome (a successful answer
+# then FAILS the case). Cannot be combined with answer/json/judge/... sections.
+# expect:
+#   error:
+#     status: 401           # HTTP status (optional)
+#     contains: Invalid     # substring of the error message/body
 `

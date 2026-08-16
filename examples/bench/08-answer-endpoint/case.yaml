@@ -1,0 +1,9 @@
+description: "Synchronous /api/answer endpoint returns answer + conversation_id"
+tags: [api]
+target: answer          # POST /api/answer — plain JSON in/out, api_key in the body
+
+question: "Reply with exactly: ANSWER-OK"
+
+expect:
+  answer:
+    contains: "ANSWER-OK"

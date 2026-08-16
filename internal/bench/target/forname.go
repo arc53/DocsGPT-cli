@@ -2,6 +2,7 @@ package target
 
 import (
 	"fmt"
+	"strings"
 
 	"docsgpt-cli/internal/bench/spec"
 )
@@ -13,10 +14,11 @@ func ForName(name string) (Target, error) {
 		return v1Target{}, nil
 	case spec.TargetStream:
 		return streamTarget{}, nil
+	case spec.TargetAnswer:
+		return answerTarget{}, nil
 	case spec.TargetWebhook:
 		return webhookTarget{}, nil
 	default:
-		return nil, fmt.Errorf("unknown target %q (want %s, %s, or %s)",
-			name, spec.TargetV1, spec.TargetStream, spec.TargetWebhook)
+		return nil, fmt.Errorf("unknown target %q (want %s)", name, strings.Join(spec.AllTargets, ", "))
 	}
 }

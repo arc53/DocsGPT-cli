@@ -101,7 +101,7 @@ func TestLoadValidation(t *testing.T) {
 	tests := []struct {
 		name, caseYAML, wantErr string
 	}{
-		{"no question", "description: x\nexpect:\n  answer: {contains: hi}\n", "question is required"},
+		{"no question", "description: x\nexpect:\n  answer: {contains: hi}\n", "question (or turns) is required"},
 		{"no expect", "question: hi\n", "no assertion sections"},
 		{"bad target", "question: hi\ntarget: grpc\nexpect:\n  answer: {contains: hi}\n", "unknown target"},
 		{"webhook attachments", "question: hi\ntarget: webhook\nwebhook_url: http://x\nattachments: [a.txt]\nexpect:\n  answer: {contains: hi}\n", "not supported by the webhook target"},

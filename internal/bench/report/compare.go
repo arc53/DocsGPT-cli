@@ -34,9 +34,10 @@ func Compare(w io.Writer, results []*runner.SuiteResult) {
 		nameW = 48
 	}
 
+	labels := columnLabels(results)
 	colW := make([]int, len(results))
-	for i, r := range results {
-		colW[i] = len(columnLabel(r, i))
+	for i := range results {
+		colW[i] = len(labels[i])
 		for _, n := range names {
 			if cell := plainCell(maps[i][n]); len(cell) > colW[i] {
 				colW[i] = len(cell)
@@ -47,9 +48,9 @@ func Compare(w io.Writer, results []*runner.SuiteResult) {
 	// Header.
 	var b strings.Builder
 	b.WriteString(pad("Case", nameW))
-	for i, r := range results {
+	for i := range results {
 		b.WriteString("  ")
-		b.WriteString(pad(columnLabel(r, i), colW[i]))
+		b.WriteString(pad(labels[i], colW[i]))
 	}
 	fmt.Fprintln(w, display.Muted(b.String()))
 
@@ -74,13 +75,30 @@ func Compare(w io.Writer, results []*runner.SuiteResult) {
 	fmt.Fprintln(w, display.Muted(footer.String()))
 }
 
-// columnLabel is the header for a result's column: its agent label, falling
-// back to a positional name.
-func columnLabel(r *runner.SuiteResult, i int) string {
-	if r.AgentLabel != "" {
-		return r.AgentLabel
+// columnLabels builds the header for each result's column. When the runs
+// differ by model but share an agent (matrix mode) the model is the label;
+// otherwise the agent label, falling back to a positional name.
+func columnLabels(results []*runner.SuiteResult) []string {
+	labels := make([]string, len(results))
+	byModel := len(results) > 1
+	seen := make(map[string]bool, len(results))
+	for _, r := range results {
+		if r.Model == "" || r.Model == "mixed" || r.AgentLabel != results[0].AgentLabel || seen[r.Model] {
+			byModel = false
+		}
+		seen[r.Model] = true
 	}
-	return fmt.Sprintf("run %d", i+1)
+	for i, r := range results {
+		switch {
+		case byModel:
+			labels[i] = r.Model
+		case r.AgentLabel != "":
+			labels[i] = r.AgentLabel
+		default:
+			labels[i] = fmt.Sprintf("run %d", i+1)
+		}
+	}
+	return labels
 }
 
 // plainCell renders a cell's uncolored text (for width measurement).

@@ -20,10 +20,18 @@ type chatMessage struct {
 }
 
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	Stream      bool          `json:"stream"`
+	Temperature *float64      `json:"temperature,omitempty"`
 }
+
+// defaultModel is the placeholder sent when no judge model is configured; the
+// API key selects the judge agent and the server uses its default model.
+const defaultModel = "docsgpt"
+
+// UserAgent is sent with judge requests; the CLI stamps its version.
+var UserAgent = "docsgpt-cli-bench"
 
 type chatResponse struct {
 	Choices []struct {
@@ -45,10 +53,15 @@ func Run(ctx context.Context, cfg Config, question, answer, rubric string) (*Ver
 		defer cancel()
 	}
 
+	model := cfg.Model
+	if model == "" {
+		model = defaultModel
+	}
 	body, err := json.Marshal(chatRequest{
-		Model:    "docsgpt",
-		Messages: []chatMessage{{Role: "user", Content: buildPrompt(question, answer, rubric)}},
-		Stream:   false,
+		Model:       model,
+		Messages:    []chatMessage{{Role: "user", Content: buildPrompt(question, answer, rubric)}},
+		Stream:      false,
+		Temperature: cfg.Temperature,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("judge: marshal request: %w", err)
@@ -61,6 +74,10 @@ func Run(ctx context.Context, cfg Config, question, answer, rubric string) (*Ver
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	req.Header.Set("User-Agent", UserAgent)
+	if cfg.RunTag != "" {
+		req.Header.Set("X-DocsGPT-Bench-Tag", "bench:"+cfg.RunTag)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

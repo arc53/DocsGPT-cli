@@ -135,6 +135,15 @@ func Diff(w io.Writer, base, cur *runner.SuiteResult) (regressions int) {
 	fmt.Fprintf(w, "  %s %d → %d (%s)\n", display.Muted("total tokens:"),
 		baseTok, curTok, signedInt(curTok-baseTok))
 
+	if baseCost, ok1 := suiteCost(base); ok1 {
+		if curCost, ok2 := suiteCost(cur); ok2 {
+			fmt.Fprintf(w, "  %s %s → %s\n", display.Muted("total cost:"), formatUSD(baseCost), formatUSD(curCost))
+		}
+	}
+	if baseT, curT := runFirstOutputs(base), runFirstOutputs(cur); len(baseT) > 0 && len(curT) > 0 {
+		fmt.Fprintf(w, "  %s %.2fs → %.2fs\n", display.Muted("ttft p50:"), percentile(baseT, 50)/1000, percentile(curT, 50)/1000)
+	}
+
 	if regressions > 0 {
 		fmt.Fprintln(w, "  "+display.Danger(fmt.Sprintf("%d regression(s)", regressions)))
 	}

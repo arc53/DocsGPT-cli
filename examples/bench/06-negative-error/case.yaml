@@ -1,0 +1,19 @@
+description: "Negative case: a bad API key must fail cleanly with a 401 JSON error"
+tags: [negative, api]
+target: v1
+
+# Literal bogus key: this case tests the error path, not the agent.
+agent: not-a-real-key
+
+question: "hi"
+
+# With expect.error present, a server error IS the expected outcome and a
+# successful answer FAILS the case. `error: {}` accepts any server error;
+# status/contains narrow it. limits.max_seconds still applies (time to the
+# error). error cannot be combined with answer/json/judge/... sections.
+expect:
+  error:
+    status: 401
+    contains: "Invalid API key"
+  limits:
+    max_seconds: 15

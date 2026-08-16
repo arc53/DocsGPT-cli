@@ -18,6 +18,56 @@ import (
 // SSE stream and long polls are bounded only by the request context.
 var httpClient = &http.Client{}
 
+// UserAgent is sent with every bench request so server-side telemetry can
+// tell bench traffic from real users. The CLI stamps its version at startup.
+var UserAgent = "docsgpt-cli-bench"
+
+// BenchTagHeader carries the run tag (--run-tag / bench.yaml run_tag) as
+// "bench:<tag>" so telemetry can attribute (and exclude) bench traffic.
+const BenchTagHeader = "X-DocsGPT-Bench-Tag"
+
+// setBenchHeaders stamps the User-Agent and, when tag is set, the run tag.
+func setBenchHeaders(req *http.Request, tag string) {
+	req.Header.Set("User-Agent", UserAgent)
+	if tag != "" {
+		req.Header.Set(BenchTagHeader, "bench:"+tag)
+	}
+}
+
+// errorMessage extracts a human-readable message from an error response body:
+// OpenAI-style {"error": {"message": ...}}, DocsGPT-style {"error": "..."} or
+// {"message": "..."}, an SSE error frame, or the trimmed body itself.
+func errorMessage(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	// SSE-framed error bodies (/stream returns 4xx as text/event-stream).
+	text := strings.TrimSpace(string(body))
+	if strings.HasPrefix(text, "data:") || strings.Contains(text, "\ndata:") {
+		for _, line := range strings.Split(text, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if m := errorMessage([]byte(payload)); m != "" {
+				return m
+			}
+		}
+	}
+	for _, path := range []string{"error.message", "error", "message", "detail"} {
+		if r := gjson.GetBytes(body, path); r.Exists() {
+			if r.Type == gjson.String && r.String() != "" {
+				return r.String()
+			}
+			if r.IsObject() || r.IsArray() {
+				continue
+			}
+		}
+	}
+	return truncateBody(body, 300)
+}
+
 // truncateBody trims and rune-safely caps a response body for error messages.
 func truncateBody(b []byte, max int) string {
 	s := strings.TrimSpace(string(b))
@@ -112,7 +162,15 @@ func pollTaskStatus(ctx context.Context, baseURL, taskID string, interval time.D
 		case "SUCCESS":
 			return body, nil
 		case "FAILURE", "FAILED", "REVOKED":
-			return nil, fmt.Errorf("task %s failed: %s", taskID, truncateBody(body, 300))
+			msg := gjson.GetBytes(body, "result").String()
+			if msg == "" || strings.HasPrefix(msg, "{") {
+				msg = truncateBody(body, 300)
+			}
+			return nil, &ServerError{
+				Message: msg,
+				Body:    truncateBody(body, 300),
+				Where:   "task " + taskID + " failed",
+			}
 		case "":
 			state = "PENDING"
 		}
@@ -151,6 +209,7 @@ func getJSON(ctx context.Context, target string) ([]byte, int, error) {
 	if err != nil {
 		return nil, 0, fmt.Errorf("build GET %s: %w", target, err)
 	}
+	setBenchHeaders(req, "")
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("GET %s: %w", target, err)

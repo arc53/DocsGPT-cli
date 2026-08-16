@@ -1,0 +1,18 @@
+description: "SSE contract on /stream: end frame present, no error frame, id frame observed, fast first token"
+tags: [api, stream]
+target: stream
+
+question: "Reply with exactly: BENCH-OK"
+
+expect:
+  answer:
+    contains: "BENCH-OK"
+  # Stream-only section: the stream target records which frame types it saw.
+  stream:
+    end_frame: true
+    error_frame: false
+    thought: ignore            # present | absent | ignore
+    frames_contain: [id]       # e.g. [message_id, source, tool_calls]
+  limits:
+    max_first_token_seconds: 30   # time to the first `answer` frame (also v1 with `stream: true`)
+    max_seconds: 60

@@ -1,0 +1,19 @@
+description: "Conversation memory across turns (conversation_id on stream/answer, message replay on v1)"
+tags: [turns]
+
+# Turns are sent in order; each carries the conversation forward. Timeout is
+# per turn, limits.max_seconds covers the whole case. Not supported on webhook.
+turns:
+  - question: "My project is called Zephyr. Remember that name."
+    # Optional per-turn assertions (prefixed "turn 1:" in the report).
+    expect:
+      answer:
+        not_contains: "I don't know"
+  - question: "What did I just tell you my project is called? Answer with the name only."
+
+# The case-level expect applies to the LAST turn's answer.
+expect:
+  answer:
+    contains: "Zephyr"
+  limits:
+    max_seconds: 180

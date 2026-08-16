@@ -8,9 +8,20 @@
 #   agent: ${DOCSGPT_BENCH_KEY}
 agent: my-agent
 
-# Wire protocol: v1 (OpenAI-compatible, reports token usage),
-# stream (native SSE), or webhook (async; requires webhook_url).
+# Wire protocol: v1 (OpenAI-compatible, reports token usage; add `stream: true`
+# for SSE + time-to-first-token), stream (native SSE, records TTFT + frame
+# types), answer (native /api/answer JSON), or webhook (async; requires
+# webhook_url).
 target: v1
+
+# Model id sent with every request (stream/answer: model_id, v1: model). Unset
+# = the agent's default. `--model X` overrides it; `--matrix m1,m2,m3` runs the
+# suite once per model and prints a comparison table.
+# model: gpt-5.6-terra
+
+# Attachments: upload (default; /api/store_attachment) or inline (v1 only;
+# base64 content parts in the message, the path OpenAI-compat clients take).
+# attachments_mode: upload
 
 # base_url: https://gptcloud.arc53.com
 
@@ -20,9 +31,22 @@ target: v1
 # committing it.
 # webhook_url: ${DOCSGPT_WEBHOOK_URL}
 
-# LLM-as-judge used by cases with an expect.judge section.
+# LLM-as-judge used by cases with an expect.judge section. model/temperature
+# are forwarded in the judge chat request; verdicts (score + reasoning) are
+# recorded verbatim in --json output.
 # judge:
 #   agent: judge-agent
+#   model: gpt-5.6-sol
+#   temperature: 0
+
+# Tag every request with `X-DocsGPT-Bench-Tag: bench:<tag>` so server-side
+# telemetry can attribute and exclude bench traffic (or pass --run-tag).
+# run_tag: nightly
+
+# Prices (USD per 1M tokens) for the cost column, keyed by model id — used when
+# GET /api/models exposes no pricing. Cost needs token usage (v1 target).
+# pricing:
+#   gpt-5.6-terra: {input_per_million: 1.25, output_per_million: 10}
 
 # How many cases run in parallel.
 concurrency: 2

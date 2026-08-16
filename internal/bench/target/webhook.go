@@ -50,6 +50,7 @@ func (webhookTarget) Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("webhook target: build request for %s: %w", safeURL, unwrapURLError(err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	setBenchHeaders(httpReq, req.RunTag)
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -61,12 +62,20 @@ func (webhookTarget) Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("webhook target: read response from %s: %w", safeURL, readErr)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("webhook target: %s returned %d: %s",
-			safeURL, resp.StatusCode, truncateBody(postBody, 300))
+		return nil, &ServerError{
+			Status:  resp.StatusCode,
+			Message: errorMessage(postBody),
+			Body:    truncateBody(postBody, 300),
+			Where:   "webhook target: " + safeURL,
+		}
 	}
 	if s := gjson.GetBytes(postBody, "success"); s.Exists() && !s.Bool() {
-		return nil, fmt.Errorf("webhook target: %s reported failure: %s",
-			safeURL, truncateBody(postBody, 300))
+		return nil, &ServerError{
+			Status:  resp.StatusCode,
+			Message: errorMessage(postBody),
+			Body:    truncateBody(postBody, 300),
+			Where:   "webhook target: " + safeURL,
+		}
 	}
 
 	taskID := gjson.GetBytes(postBody, "task_id").String()
@@ -84,7 +93,18 @@ func (webhookTarget) Run(ctx context.Context, req Request) (*Result, error) {
 	//   "result":{"answer":..,"sources":..,"tool_calls":..,"thought":..}}}
 	// Celery-level SUCCESS can still wrap an agent-level failure.
 	if s := gjson.GetBytes(statusBody, "result.status").String(); s != "" && !strings.EqualFold(s, "success") {
-		return nil, fmt.Errorf("webhook target: agent run reported %q: %s", s, truncateBody(statusBody, 300))
+		msg := gjson.GetBytes(statusBody, "result.error").String()
+		if msg == "" {
+			msg = gjson.GetBytes(statusBody, "result.message").String()
+		}
+		if msg == "" {
+			msg = truncateBody(statusBody, 300)
+		}
+		return nil, &ServerError{
+			Message: msg,
+			Body:    truncateBody(statusBody, 300),
+			Where:   fmt.Sprintf("webhook target: agent run reported %q", s),
+		}
 	}
 	inner := gjson.GetBytes(statusBody, "result.result")
 	result := &Result{

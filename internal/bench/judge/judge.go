@@ -10,9 +10,12 @@ const DefaultMinScore = 0.7
 
 // Config identifies the judge agent.
 type Config struct {
-	BaseURL string
-	APIKey  string
-	Timeout time.Duration
+	BaseURL     string
+	APIKey      string
+	Timeout     time.Duration
+	Model       string   // forwarded as the chat request model; "" = "docsgpt" placeholder (agent default)
+	Temperature *float64 // forwarded when set (e.g. 0 for deterministic grading)
+	RunTag      string   // bench run tag header (see target.BenchTagHeader)
 }
 
 // Verdict is the judge's parsed grading.
