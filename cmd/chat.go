@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -13,7 +15,8 @@ import (
 	"docsgpt-cli/internal/display"
 	"docsgpt-cli/internal/tools"
 
-	prompt "github.com/c-bata/go-prompt"
+	prompt "github.com/elk-language/go-prompt"
+	pstrings "github.com/elk-language/go-prompt/strings"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +31,9 @@ Special commands:
     /copy   - Copy the last code block to clipboard
     /think  - Toggle reasoning visibility
 
-Type "/" to see available commands with live autocomplete.`,
+Keys: Ctrl+C interrupts a streaming answer (or clears the input line),
+Ctrl+D on an empty line exits. Type "/" to see available commands with
+live autocomplete.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
@@ -119,7 +124,12 @@ func (s *chatSession) executor(input string) {
 	}
 
 	s.history = append(s.history, api.Message{Role: "user", Content: input})
-	ctx := context.Background()
+
+	// The prompt library restores cooked mode (ISIG on) while the executor
+	// runs, so Ctrl-C here is a real SIGINT. Turn it into a cancellation of
+	// the in-flight request instead of letting it kill the whole session.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
 	renderer := display.NewStreamRenderer()
 	renderer.ShowReasoning = s.showReasoning
@@ -129,13 +139,21 @@ func (s *chatSession) executor(input string) {
 	}
 
 	onToolCall := func(tc api.ToolCall) string {
-		return handleToolCall(tc, s.timeout)
+		return handleToolCall(ctx, tc, s.timeout)
 	}
 
 	updatedHistory, err := s.client.RunWithTools(
 		ctx, s.history, s.toolDefs, !globalNoStream, onDelta, onToolCall,
 	)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			// Drop the user turn that never got an answer so the next
+			// message doesn't carry a dangling question.
+			s.history = s.history[:len(s.history)-1]
+			fmt.Println()
+			fmt.Println(display.Muted("Interrupted."))
+			return
+		}
 		printError(err.Error())
 		return
 	}
@@ -151,10 +169,14 @@ func (s *chatSession) executor(input string) {
 	fmt.Println()
 }
 
-func (s *chatSession) completer(d prompt.Document) []prompt.Suggest {
+// completer offers the slash commands while the line starts with "/". It
+// returns the rune range the chosen suggestion replaces (the whole text
+// before the cursor), as the prompt library requires.
+func (s *chatSession) completer(d prompt.Document) ([]prompt.Suggest, pstrings.RuneNumber, pstrings.RuneNumber) {
 	text := d.TextBeforeCursor()
+	end := d.CurrentRuneIndex()
 	if !strings.HasPrefix(text, "/") {
-		return nil
+		return nil, end, end
 	}
 
 	suggestions := []prompt.Suggest{
@@ -164,7 +186,8 @@ func (s *chatSession) completer(d prompt.Document) []prompt.Suggest {
 		{Text: "/think", Description: "Toggle reasoning visibility"},
 	}
 
-	return prompt.FilterHasPrefix(suggestions, text, true)
+	start := end - pstrings.RuneCountInString(text)
+	return prompt.FilterHasPrefix(suggestions, text, true), start, end
 }
 
 func runChatLoop(client *api.Client, history []api.Message) error {
@@ -182,26 +205,33 @@ func runChatLoop(client *api.Client, history []api.Message) error {
 
 	p := prompt.New(
 		session.executor,
-		session.completer,
-		prompt.OptionPrefix("> "),
-		prompt.OptionPrefixTextColor(prompt.Purple),
-		prompt.OptionSuggestionBGColor(prompt.DarkGray),
-		prompt.OptionSuggestionTextColor(prompt.White),
-		prompt.OptionSelectedSuggestionBGColor(prompt.Purple),
-		prompt.OptionSelectedSuggestionTextColor(prompt.White),
-		prompt.OptionDescriptionBGColor(prompt.DarkGray),
-		prompt.OptionDescriptionTextColor(prompt.White),
-		prompt.OptionSelectedDescriptionBGColor(prompt.Purple),
-		prompt.OptionSelectedDescriptionTextColor(prompt.White),
-		prompt.OptionScrollbarBGColor(prompt.DarkGray),
-		prompt.OptionScrollbarThumbColor(prompt.Purple),
-		prompt.OptionShowCompletionAtStart(),
+		prompt.WithCompleter(session.completer),
+		prompt.WithPrefix("> "),
+		prompt.WithPrefixTextColor(prompt.Purple),
+		prompt.WithSuggestionBGColor(prompt.DarkGray),
+		prompt.WithSuggestionTextColor(prompt.White),
+		prompt.WithSelectedSuggestionBGColor(prompt.Purple),
+		prompt.WithSelectedSuggestionTextColor(prompt.White),
+		prompt.WithDescriptionBGColor(prompt.DarkGray),
+		prompt.WithDescriptionTextColor(prompt.White),
+		prompt.WithSelectedDescriptionBGColor(prompt.Purple),
+		prompt.WithSelectedDescriptionTextColor(prompt.White),
+		prompt.WithScrollbarBGColor(prompt.DarkGray),
+		prompt.WithScrollbarThumbColor(prompt.Purple),
+		prompt.WithShowCompletionAtStart(),
 	)
 	p.Run()
 	return nil
 }
 
-func handleToolCall(tc api.ToolCall, timeout time.Duration) string {
+// handleToolCall gates a model-requested tool call behind the safety check
+// and the user's approval, then executes it. A cancelled ctx (Ctrl-C) skips
+// the call: before the approval prompt, and again after it, so a Ctrl-C
+// pressed while the prompt was waiting never runs the command.
+func handleToolCall(ctx context.Context, tc api.ToolCall, timeout time.Duration) string {
+	if ctx.Err() != nil {
+		return "User interrupted before this tool call ran."
+	}
 	normalizedName := tools.NormalizeName(tc.Function.Name)
 
 	// Check safety for run_command
@@ -225,6 +255,9 @@ func handleToolCall(tc api.ToolCall, timeout time.Duration) string {
 			return "User denied this tool call."
 		case tools.Edited:
 			args = editedArgs
+		}
+		if ctx.Err() != nil {
+			return "User interrupted before this tool call ran."
 		}
 	}
 

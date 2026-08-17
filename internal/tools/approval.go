@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -29,8 +30,7 @@ func RequestApproval(toolName string, rawArgs string) (ApprovalResult, string, e
 	fmt.Println(card)
 	fmt.Print("  > ")
 
-	reader := bufio.NewReader(os.Stdin)
-	input, err := reader.ReadString('\n')
+	input, err := readLine(bufio.NewReader(os.Stdin))
 	if err != nil {
 		return Denied, rawArgs, err
 	}
@@ -102,7 +102,7 @@ func editArgs(toolName string, rawArgs string) (ApprovalResult, string, error) {
 
 		fmt.Printf("  Edit command (current: %s)\n", args.Command)
 		fmt.Print("  $ ")
-		newCmd, err := reader.ReadString('\n')
+		newCmd, err := readLine(reader)
 		if err != nil {
 			return Denied, rawArgs, err
 		}
@@ -114,7 +114,7 @@ func editArgs(toolName string, rawArgs string) (ApprovalResult, string, error) {
 	// For other tools, let user edit raw JSON
 	fmt.Printf("  Edit arguments JSON (current: %s)\n", rawArgs)
 	fmt.Print("  > ")
-	newArgs, err := reader.ReadString('\n')
+	newArgs, err := readLine(reader)
 	if err != nil {
 		return Denied, rawArgs, err
 	}
@@ -123,4 +123,33 @@ func editArgs(toolName string, rawArgs string) (ApprovalResult, string, error) {
 		return Denied, rawArgs, nil
 	}
 	return Edited, newArgs, nil
+}
+
+// readLine reads one line of user input, terminated by LF or CR. Accepting a
+// bare CR keeps the prompt usable even if the terminal is left in raw mode
+// (where Enter arrives as '\r' and ReadString('\n') would block forever).
+// A trailing LF after a CR is consumed so CRLF counts as one line ending. An
+// EOF that follows some input still returns that input.
+func readLine(r *bufio.Reader) (string, error) {
+	var b strings.Builder
+	for {
+		c, err := r.ReadByte()
+		if err != nil {
+			if err == io.EOF && b.Len() > 0 {
+				return b.String(), nil
+			}
+			return b.String(), err
+		}
+		switch c {
+		case '\n':
+			return b.String(), nil
+		case '\r':
+			if next, err := r.Peek(1); err == nil && next[0] == '\n' {
+				r.ReadByte()
+			}
+			return b.String(), nil
+		default:
+			b.WriteByte(c)
+		}
+	}
 }

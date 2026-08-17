@@ -61,7 +61,10 @@ internal/
 
 ### chat command
 Interactive REPL with multi-turn conversation history. Same API + tool support.
-Special commands: `/quit`, `/clear`, `/copy`.
+Special commands: `/quit`, `/clear`, `/copy`, `/think`. Ctrl+C cancels the in-flight
+request (signal.NotifyContext in the executor; the prompt library restores cooked mode
+around the executor so it is a real SIGINT) or clears the input line; Ctrl+D exits.
+Tool approval reads stdin with a CR/LF-tolerant reader (internal/tools/approval.go).
 
 ### Auto-update flow
 Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set-auto-update`); env kill switch `DOCSGPT_NO_UPDATE_CHECK`.
@@ -116,7 +119,7 @@ Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on fi
 - `spf13/cobra` — CLI framework
 - `charmbracelet/glamour` + `lipgloss` — markdown rendering and styling
 - `atotto/clipboard` — clipboard access
-- `c-bata/go-prompt` — interactive prompts
+- `elk-language/go-prompt` — interactive chat prompt (maintained fork of c-bata/go-prompt; the original never restores the terminal after raw mode, which broke the tool-approval prompt and Ctrl-C inside `chat`)
 - `minio/selfupdate` — atomic binary replacement for the update command
 - `golang.org/x/mod/semver` — version comparison
 - `gopkg.in/yaml.v3` — bench suite/case files

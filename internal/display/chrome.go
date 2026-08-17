@@ -55,7 +55,7 @@ func RenderHints(mode string) string {
 	var hints string
 	switch mode {
 	case "chat":
-		hints = "/quit  /clear  /copy  /think │ Ctrl+C to exit"
+		hints = "/quit  /clear  /copy  /think │ Ctrl+C interrupts an answer │ Ctrl+D exits"
 	case "ask":
 		hints = ""
 	default:

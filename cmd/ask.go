@@ -69,7 +69,7 @@ This command will provide a contextual answer and, if applicable, copy a relevan
 		}
 
 		onToolCall := func(tc api.ToolCall) string {
-			return handleToolCall(tc, timeout)
+			return handleToolCall(ctx, tc, timeout)
 		}
 
 		_, err = client.RunWithTools(
