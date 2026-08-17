@@ -14,7 +14,7 @@ cmd/
   keys.go            → API key management (add/delete/set default)
   install.go         → Cross-platform install to system PATH
   update.go          → Self-update to latest GitHub release (--check, --yes, --rollback, hidden --worker)
-  bench.go           → Benchmark suites vs agents (bench / bench record / bench init)
+  bench.go           → Benchmark suites vs agents (bench / bench record / bench init; --model, --matrix, --run-tag)
   utils.go           → printError, extractCommand, copyToClipboard
 internal/
   api/
@@ -23,12 +23,13 @@ internal/
   config/
     config.go        → Unified config load/save/migrate from ~/.docsgpt/config.json
   bench/
-    spec/            → Suite/case YAML format (bench.yaml + case.yaml), loading, validation, golden files
-    assert/          → Assertion engine: answer/json (gjson paths)/sources/tools/limits/golden matchers
-    target/          → Three wire protocols: v1 (/v1/chat/completions), stream (/stream SSE), webhook (+ /api/task_status polling); attachment upload
-    judge/           → LLM-as-judge grading via a second agent
-    runner/          → Worker pool, repeat/min_pass, fail-fast, golden record, judge wiring
-    report/          → Pretty/JSON(schema 1)/JUnit output, A/B compare, baselines in ~/.docsgpt/bench/<suite>/
+    spec/            → Suite/case YAML format (bench.yaml + case.yaml), loading, validation, golden files; model/stream/attachments_mode/turns/expect.error/expect.stream
+    assert/          → Assertion engine: answer/json (gjson paths)/sources/tools/limits (incl. TTFT)/stream integrity/error (negative cases)/golden matchers
+    target/          → Four wire protocols: v1 (/v1/chat/completions, JSON or SSE, inline file parts), stream (/stream SSE, TTFT + frames), answer (/api/answer), webhook (+ /api/task_status polling); attachment upload; ServerError for negative cases
+    judge/           → LLM-as-judge grading via a second agent (model/temperature passthrough)
+    pricing/         → Cost table: /api/models pricing (tolerant field reader) + bench.yaml pricing overrides
+    runner/          → Worker pool, repeat/min_pass, fail-fast, golden record, judge wiring, multi-turn loop, model override, cost stamping
+    report/          → Pretty/JSON(schema 2)/JUnit output, A/B compare, --matrix table + JSON, baselines in ~/.docsgpt/bench/<suite>/
   context/
     enricher.go      → Context building: cwd, dir contents, shell history
   display/
@@ -73,11 +74,15 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set-a
 
 ### bench command
 1. Loads a suite dir (default `./bench`): optional `bench.yaml` defaults + any subdir with a `case.yaml`
-2. Per case: uploads attachments (waits for the extraction task), asks the agent through the case's target (`v1`/`stream`/`webhook`), evaluates `expect` assertions
-3. Assertions: answer text (contains/regex/…), JSON fields via gjson paths, sources count, tool calls, LLM-as-judge rubric, latency/token limits, golden snapshots (`bench record`)
-4. Repeat/min_pass for flaky LLMs, `--vs` A/B, `--baseline last` regression diff, `--json`/`--junit` for CI; exit codes 0/1/2
-5. Webhook target sends `{"question": ...}` — the server passes the serialized JSON verbatim as the agent query; no attachments there, approval-gated tools auto-denied
-6. Secrets: YAML values support `${VAR}` interpolation (shell env > suite/.env > ./.env, `$$` escape, comment lines exempt, unset var = load error); `--webhook-url` injects the webhook token without YAML
+2. Per case: uploads attachments (waits for the extraction task) or, with `attachments_mode: inline` (v1 only), base64-embeds them as content parts; asks the agent through the case's target (`v1`/`stream`/`answer`/`webhook`), evaluates `expect` assertions
+3. Model selection: `model:` (suite/case) or `--model` → `model_id` on stream/answer, `model` on v1; stamped into every result. NOTE: the server currently ignores `model_id` for agent-bound (api_key) requests — honoring it is a docsgpt-cloud change
+4. Multi-turn `turns:` — `conversation_id` carried on stream/answer, messages replayed on v1; per-turn `expect` optional, case `expect` grades the last turn; timeout per turn, `limits.max_seconds` whole case; judge sees the transcript
+5. Assertions: answer text (contains/regex/…), JSON fields via gjson paths, sources count, tool calls, LLM-as-judge rubric (`judge.model`/`temperature` forwarded, verdicts recorded), latency/TTFT/token limits, `expect.stream` SSE integrity (stream target), `expect.error` negative cases (server error expected; success fails), golden snapshots (`bench record`)
+6. Repeat/min_pass for flaky LLMs, `--vs` A/B, `--matrix m1,m2` per-model runs + comparison table (JSON keyed results[model][case]), `--baseline last` regression diff, `--json`/`--junit` for CI; exit codes 0/1/2
+7. Cost: `/api/models` fetched once per base URL (tolerant pricing reader) merged with `bench.yaml pricing:`; `cost_usd` per run when usage (v1) and a price for the effective model exist
+8. Webhook target sends `{"question": ...}` — the server passes the serialized JSON verbatim as the agent query; no attachments/turns there, approval-gated tools auto-denied
+9. Secrets: YAML values support `${VAR}` interpolation (shell env > suite/.env > ./.env, `$$` escape, comment lines exempt, unset var = load error); `--webhook-url` injects the webhook token without YAML
+10. Hygiene: `--run-tag`/`run_tag:` → `X-DocsGPT-Bench-Tag: bench:<tag>` + `docsgpt-cli/<ver> bench` User-Agent on target and judge requests (uploads/polls carry the User-Agent)
 
 ### Tool call flow
 1. CLI sends `tools` array in request
