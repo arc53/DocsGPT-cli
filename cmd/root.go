@@ -18,6 +18,7 @@ var Version = "dev"
 var (
 	globalURL         string
 	globalKey         string
+	globalToken       string
 	globalNoStream    bool
 	globalNoContext   bool
 	globalAutoApprove bool
@@ -47,8 +48,9 @@ var rootCmd = &cobra.Command{
 		display.InitTheme(theme)
 
 		// Show startup banner (suppressed for `bench --json` so stdout stays
-		// a clean, parseable JSON document).
-		if !suppressBannerForJSON(cmd) {
+		// a clean, parseable JSON document, and for the account-level
+		// commands, whose stdout is data).
+		if !suppressBannerForJSON(cmd) && !hasNoBanner(cmd) {
 			cfg, loadErr := config.Load()
 			bannerSetting := "always"
 			if loadErr == nil && cfg.Settings.Banner != "" {
@@ -96,8 +98,14 @@ func Execute() {
 	}
 
 	if err != nil {
-		display.ErrorMsg(err.Error())
-		os.Exit(1)
+		// Account-level commands keep stdout for data (tables, JSON, YAML),
+		// so their errors go to stderr.
+		if c, _, findErr := rootCmd.Find(os.Args[1:]); findErr == nil && hasNoBanner(c) {
+			fmt.Fprintln(os.Stderr, display.Danger("Error:"), err.Error())
+		} else {
+			display.ErrorMsg(err.Error())
+		}
+		os.Exit(exitCodeFor(err))
 	}
 }
 
@@ -144,6 +152,7 @@ func updateGate() (mode string, exePath string) {
 func init() {
 	rootCmd.PersistentFlags().StringVar(&globalURL, "url", "", "Override API base URL")
 	rootCmd.PersistentFlags().StringVar(&globalKey, "key", "", "Use a specific API key by name")
+	rootCmd.PersistentFlags().StringVar(&globalToken, "token", "", "Personal access token (dgpt_pat_…); overrides DOCSGPT_TOKEN and the stored token")
 	rootCmd.PersistentFlags().BoolVar(&globalNoStream, "no-stream", false, "Disable streaming")
 	rootCmd.PersistentFlags().BoolVar(&globalNoContext, "no-context", false, "Disable context enrichment")
 	rootCmd.PersistentFlags().BoolVar(&globalAutoApprove, "auto-approve", false, "Auto-approve tool calls")
@@ -158,6 +167,13 @@ func init() {
 	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(benchCmd)
+	rootCmd.AddCommand(loginCmd)
+	rootCmd.AddCommand(logoutCmd)
+	rootCmd.AddCommand(whoamiCmd)
+	rootCmd.AddCommand(agentsCmd)
+	rootCmd.AddCommand(sourcesCmd)
+	rootCmd.AddCommand(promptsCmd)
+	rootCmd.AddCommand(toolsCmd)
 }
 
 // suppressBannerForJSON reports whether the stdout banner must be skipped: it is
