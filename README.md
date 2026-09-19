@@ -51,6 +51,7 @@ docsgpt-cli [command]
 
 ### Available Commands:
 
+- `agents` — List, export, plan, apply and delete agents (personal access token)
 - `ask` — Ask a question to DocsGPT
 - `bench` — Run benchmark suites against your agents (see below)
 - `chat` — Start an interactive chat session
@@ -58,12 +59,17 @@ docsgpt-cli [command]
 - `help` — Help about any command
 - `install` — Install docsgpt-cli to your system's `PATH`
 - `keys` — Manage DocsGPT API keys (add, set default, delete)
+- `login` / `logout` / `whoami` — Store, remove and inspect a personal access token
+- `prompts` / `tools` — List prompts and configured tools (personal access token)
+- `sources` — List, upload and delete sources (personal access token)
 - `update` — Update docsgpt-cli to the latest release
 
 ### Flags:
 
 - `-h, --help` — Help for docsgpt-cli
 - `-v, --version` — Version for docsgpt-cli
+- `--url` — Override the API base URL (else `DOCSGPT_URL`, else the config file)
+- `--token` — Personal access token (else `DOCSGPT_TOKEN`, else the stored token)
 
 You can use `docsgpt-cli [command] --help` to get more information about each command.
 
@@ -92,7 +98,120 @@ A rollback also tells auto-update to skip the version you rolled back from until
 
 Setting the `DOCSGPT_NO_UPDATE_CHECK` environment variable disables everything update-related. Homebrew installs are never touched — update those with `brew upgrade docsgpt-cli`. Long-running hosts (`docsgpt-cli host`) check occasionally while idle, install the new release, and restart themselves into it.
 
-Here’s the updated section with the paragraph about the prompt:
+## Personal access tokens / CI usage
+
+Agent API keys (`docsgpt-cli keys`) talk to **one agent**. A **personal access
+token** (PAT, `dgpt_pat_…`) acts as **you**, limited to the scopes — and
+optionally the specific agents/sources — you granted it. It is what the
+account-level commands use, which makes agents and sources deployable from a
+terminal or a pipeline. Create one in the DocsGPT web app under
+**Settings → Access Tokens**; the CLI consumes a token, it does not create or
+revoke them.
+
+```bash
+docsgpt-cli login                 # hidden prompt; or: echo "$TOKEN" | docsgpt-cli login
+docsgpt-cli whoami                # user, token name, scopes, resource restrictions
+docsgpt-cli logout                # forget the stored token
+```
+
+The token is resolved as `--token` flag > `DOCSGPT_TOKEN` > `~/.docsgpt/config.json`
+(written with mode `0600`), and the base URL as `--url` > `DOCSGPT_URL` > config,
+so CI needs no `login` step at all. The CLI never prints a full token — only its
+first characters (`dgpt_pat_AbCdEf…`).
+
+| Command | Scope |
+| --- | --- |
+| `agents list`, `agents export <id> [-o file]` | `agents:read` |
+| `agents plan -f …`, `agents apply -f …`, `agents delete <id> [--yes]` | `agents:write` |
+| `sources list` | `sources:read` |
+| `sources upload <file…> --name N [--wait]`, `sources delete <id> [--yes]` | `sources:write` |
+| `prompts list`, `tools list` | `prompts:read`, `tools:read` |
+| `bench` with `agent_id:` / `--agent-id` | `chat:run` |
+
+A `write` scope includes the matching `read` scope. A token that lacks a scope gets a clear error naming it
+(`the token lacks the required scope "agents:write"`); every list command takes
+`--json` for the raw server document.
+
+### Agents as code
+
+```bash
+docsgpt-cli agents export <id> -o agents/support.agent.yaml   # secrets are never exported
+docsgpt-cli agents plan  -f agents/                           # dry run, nothing is written
+docsgpt-cli agents apply -f agents/ [--dry-run] [--json]
+```
+
+`-f` takes a file, a directory (its `*.yaml`/`*.yml`, sorted) or `-` for stdin
+and can be repeated; multi-document files are applied document by document, and
+only `kind: Agent` is accepted. An agent is matched by `metadata.id`, then
+`metadata.slug`: a match is updated in place (status and API key kept),
+anything else is created as a draft.
+
+`apply` always plans first and prints, per document, create vs update and how
+each reference (sources, tools, prompt, models) resolves. If anything is
+`MISSING` or `UNAVAILABLE`, it exits `1` **without applying anything** until the
+reference is settled with `--resolve` (repeatable):
+
+```bash
+docsgpt-cli agents apply -f agents/ \
+  --resolve "source:Handbook=<source-id>" \
+  --resolve "tool:web-search.secret.token=$BRAVE_TOKEN" \
+  --resolve "tool:legacy=skip" \
+  --resolve "model:My LLM=$LLM_API_KEY"
+```
+
+`source:<name>=<source-id>` attaches an existing source (`=skip` accepts that it
+stays unattached); `tool:<sel>=reuse:<tool-id>|create|skip` decides a tool and
+`tool:<sel>.secret.<field>=<value>` supplies a secret for one that gets created;
+`model:<display-name>=<api-key>` creates a custom model (`=skip` drops it).
+`<sel>` is the plan key (`tool-0`, …) or the tool's name/type. See
+[`examples/agents`](examples/agents) for a sample definition and the full
+reference. Exit codes match `bench`: `0` ok, `1` failed or blocked,
+`2` usage / validation error.
+
+### Sources
+
+```bash
+docsgpt-cli sources upload docs/*.md --name "Product docs" --wait --timeout 15m
+docsgpt-cli sources list
+docsgpt-cli sources delete <id> --yes
+```
+
+`--wait` polls the ingestion task (progress on stderr) and exits non-zero when
+it fails or times out. Uploads are safe to retry: the `Idempotency-Key` defaults
+to a hash of `--name` plus the file contents, so re-running the same upload
+returns the original task instead of ingesting twice (the server remembers keys
+for about a day). Pass `--idempotency-key <k>` to choose your own, or
+`--idempotency-key ""` to send none. `delete` refuses to run without `--yes`
+when there is no terminal.
+
+### GitHub Actions
+
+```yaml
+env:
+  DOCSGPT_TOKEN: ${{ secrets.DOCSGPT_TOKEN }}   # scopes: agents:write, sources:write, chat:run
+  DOCSGPT_URL: ${{ vars.DOCSGPT_URL }}
+  DOCSGPT_NO_UPDATE_CHECK: "1"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install docsgpt-cli
+        run: |
+          curl -fsSL -o docsgpt-cli.tar.gz \
+            https://github.com/arc53/DocsGPT-cli/releases/latest/download/docsgpt-cli_linux_amd64.tar.gz
+          tar -xzf docsgpt-cli.tar.gz docsgpt-cli && sudo mv docsgpt-cli /usr/local/bin/
+      - run: docsgpt-cli whoami
+      - run: docsgpt-cli sources upload docs/*.md --name "Product docs" --wait
+      - run: docsgpt-cli agents apply -f agents/
+      - run: docsgpt-cli bench ./bench --target stream --agent-id "${{ vars.DOCSGPT_AGENT_ID }}" --junit bench.xml
+```
+
+A fuller workflow (plan on pull requests, deploy on `main`) is in
+[`examples/ci/github-actions.yml`](examples/ci/github-actions.yml). Give CI its
+own narrowly scoped token, restrict it to the agents/sources it deploys where
+possible, and revoke it in the web app if it leaks.
 
 ---
 
@@ -124,6 +243,13 @@ the expected server error). Cases can run through four targets: `v1`
 agent webhooks). Reports include p50/p95 latency and TTFT, tokens, and an
 estimated cost when pricing is known. Exit codes are CI-friendly: `0` pass,
 `1` failures, `2` configuration error.
+
+The `stream` and `answer` targets can also run an agent **by id** with your
+personal access token (scope `chat:run`) instead of an agent API key: set
+`agent_id:` in `bench.yaml` / `case.yaml` (mutually exclusive with `agent:`) or
+pass `--agent-id <id>`. The request then carries `agent_id` plus
+`Authorization: Bearer <token>`; `v1` and `webhook` keep using the agent API
+key / webhook token and reject `agent_id` with a clear error.
 
 See [`examples/bench`](examples/bench) for a ready-made suite.
 

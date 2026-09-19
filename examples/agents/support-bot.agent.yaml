@@ -1,0 +1,44 @@
+# A portable agent definition, in the format `docsgpt-cli agents export <id>`
+# produces. Apply it with:
+#
+#   docsgpt-cli agents plan  -f examples/agents/
+#   docsgpt-cli agents apply -f examples/agents/
+#
+# The agent is matched by metadata.id, then metadata.slug: a match is updated
+# in place (its status and API key are kept), anything else becomes a new draft.
+# References are by NAME and the file never contains secrets, so it is safe to
+# commit.
+apiVersion: docsgpt.arc53.com/v1
+kind: Agent
+metadata:
+  slug: support-bot
+spec:
+  name: Support Bot
+  description: Answers product questions from the public documentation.
+  agent_type: classic
+  retriever: classic
+  chunks: 4
+  prompt:
+    name: support-bot
+    content: |
+      You are a support assistant. Answer only from the provided documentation
+      and say so when the answer is not there.
+  sources:
+    # Matched by name against your sources. If it does not exist yet, upload it
+    # first (docsgpt-cli sources upload ... --name "Product docs" --wait) or map
+    # it explicitly: --resolve "source:Product docs=<source-id>".
+    - name: Product docs
+      type: file
+  tools:
+    # tool-0: a built-in tool needs no configuration.
+    - type: scheduler
+      builtin: true
+    # tool-1: matched by (type, name). When it has to be created, supply its
+    # secret: --resolve "tool:web-search.secret.token=$BRAVE_TOKEN".
+    - type: brave
+      name: web-search
+      display_name: Brave Search
+      requires_secrets: [token]
+  limits:
+    limited_token_mode: false
+    limited_request_mode: false

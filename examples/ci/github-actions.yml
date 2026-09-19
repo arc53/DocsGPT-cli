@@ -1,0 +1,59 @@
+# Deploy DocsGPT sources and agents from a repository, then smoke-test them.
+# Copy to .github/workflows/docsgpt.yml.
+#
+# Secrets / variables:
+#   DOCSGPT_TOKEN  personal access token (Settings -> Access Tokens) with the
+#                  scopes agents:write, sources:write and chat:run
+#   DOCSGPT_URL    base URL of your deployment (repository variable)
+name: DocsGPT
+
+on:
+  pull_request:
+    paths: ["agents/**", "docs/**"]
+  push:
+    branches: [main]
+    paths: ["agents/**", "docs/**"]
+
+env:
+  DOCSGPT_TOKEN: ${{ secrets.DOCSGPT_TOKEN }}
+  DOCSGPT_URL: ${{ vars.DOCSGPT_URL }}
+  DOCSGPT_NO_UPDATE_CHECK: "1"
+
+jobs:
+  plan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install docsgpt-cli
+        run: |
+          curl -fsSL -o docsgpt-cli.tar.gz \
+            https://github.com/arc53/DocsGPT-cli/releases/latest/download/docsgpt-cli_linux_amd64.tar.gz
+          tar -xzf docsgpt-cli.tar.gz docsgpt-cli && sudo mv docsgpt-cli /usr/local/bin/
+      - run: docsgpt-cli whoami
+      # Exits 1 when a reference is missing/unavailable, 2 on invalid YAML.
+      - run: docsgpt-cli agents plan -f agents/
+
+  deploy:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install docsgpt-cli
+        run: |
+          curl -fsSL -o docsgpt-cli.tar.gz \
+            https://github.com/arc53/DocsGPT-cli/releases/latest/download/docsgpt-cli_linux_amd64.tar.gz
+          tar -xzf docsgpt-cli.tar.gz docsgpt-cli && sudo mv docsgpt-cli /usr/local/bin/
+      # Safe to retry: the Idempotency-Key is derived from --name and the file
+      # contents, so a re-run of the same commit does not ingest twice.
+      - name: Upload documentation
+        run: docsgpt-cli sources upload docs/*.md --name "Product docs" --wait --timeout 15m
+      - name: Apply agents
+        run: docsgpt-cli agents apply -f agents/
+      - name: Smoke-test the agent
+        run: docsgpt-cli bench ./bench --target stream --agent-id "${{ vars.DOCSGPT_AGENT_ID }}" --junit bench.xml --run-tag ci
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-report
+          path: bench.xml
