@@ -5,15 +5,37 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const DefaultBaseURL = "https://gptcloud.arc53.com"
+
+// Environment variables consulted by the resolvers below. They let CI jobs
+// run the CLI without a config file.
+const (
+	EnvToken = "DOCSGPT_TOKEN" // personal access token (dgpt_pat_…)
+	EnvURL   = "DOCSGPT_URL"   // API base URL
+)
+
+// TokenPrefix is the fixed prefix of a DocsGPT personal access token.
+const TokenPrefix = "dgpt_pat_"
+
+// Token sources reported by ResolveToken.
+const (
+	TokenSourceFlag   = "--token flag"
+	TokenSourceEnv    = EnvToken + " environment variable"
+	TokenSourceConfig = "config file"
+)
 
 type Config struct {
 	BaseURL    string            `json:"base_url"`
 	DefaultKey string            `json:"default_key"`
 	Keys       map[string]string `json:"keys"`
-	Settings   Settings          `json:"settings"`
+	// Token is a personal access token (dgpt_pat_…) used by the account-level
+	// commands (whoami, agents, sources, prompts, tools) and bench agent_id
+	// runs. Stored by `login`, removed by `logout`.
+	Token    string   `json:"token,omitempty"`
+	Settings Settings `json:"settings"`
 }
 
 type Settings struct {
@@ -92,7 +114,13 @@ func (c *Config) Save() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
-	return os.WriteFile(configPath(), data, 0600)
+	path := configPath()
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	// WriteFile keeps the mode of a file that already exists; the config can
+	// hold a personal access token, so tighten it explicitly.
+	return os.Chmod(path, 0600)
 }
 
 func (c *Config) ActiveKey() (string, error) {
@@ -106,15 +134,47 @@ func (c *Config) ActiveKey() (string, error) {
 	return key, nil
 }
 
-// ResolveURL returns the base URL, with an override taking precedence.
+// ResolveURL returns the base URL: override (the --url flag) > DOCSGPT_URL >
+// config file > built-in default.
 func (c *Config) ResolveURL(override string) string {
 	if override != "" {
 		return override
+	}
+	if env := strings.TrimSpace(os.Getenv(EnvURL)); env != "" {
+		return env
 	}
 	if c.BaseURL != "" {
 		return c.BaseURL
 	}
 	return DefaultBaseURL
+}
+
+// ResolveToken returns the personal access token and where it came from:
+// override (the --token flag) > DOCSGPT_TOKEN > config file. Both are empty
+// when no token is configured.
+func (c *Config) ResolveToken(override string) (token, source string) {
+	if t := strings.TrimSpace(override); t != "" {
+		return t, TokenSourceFlag
+	}
+	if t := strings.TrimSpace(os.Getenv(EnvToken)); t != "" {
+		return t, TokenSourceEnv
+	}
+	if t := strings.TrimSpace(c.Token); t != "" {
+		return t, TokenSourceConfig
+	}
+	return "", ""
+}
+
+// RedactToken renders a credential safely for display: the first 15
+// characters (the dgpt_pat_ prefix plus the 6 characters the server also shows
+// to tell tokens apart) followed by an ellipsis. Short values are fully hidden.
+func RedactToken(token string) string {
+	const keep = 15
+	r := []rune(token)
+	if len(r) <= keep {
+		return "…"
+	}
+	return string(r[:keep]) + "…"
 }
 
 // ResolveKey returns the API key value, with a named override taking precedence.
