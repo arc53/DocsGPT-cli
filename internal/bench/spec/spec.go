@@ -15,8 +15,8 @@ import (
 // Target names accepted in bench.yaml / case.yaml.
 const (
 	TargetV1      = "v1"      // POST /v1/chat/completions, Bearer auth
-	TargetStream  = "stream"  // POST /stream, api_key in body, SSE
-	TargetAnswer  = "answer"  // POST /api/answer, api_key in body, JSON
+	TargetStream  = "stream"  // POST /stream, api_key (or agent_id + PAT) in body, SSE
+	TargetAnswer  = "answer"  // POST /api/answer, api_key (or agent_id + PAT) in body, JSON
 	TargetWebhook = "webhook" // POST webhook URL, poll /api/task_status
 )
 
@@ -91,6 +91,7 @@ func (s *StringList) UnmarshalYAML(node *yaml.Node) error {
 // SuiteConfig is bench.yaml at the suite root: defaults for every case.
 type SuiteConfig struct {
 	Agent           string      `yaml:"agent"`            // key name from ~/.docsgpt/config.json, or a literal API key
+	AgentID         string      `yaml:"agent_id"`         // agent id, authenticated with a personal access token (stream/answer only); excludes agent
 	Target          string      `yaml:"target"`           // v1 | stream | answer | webhook
 	Model           string      `yaml:"model"`            // model id sent with every request (empty = agent default)
 	Stream          *bool       `yaml:"stream"`           // v1 target: SSE streaming instead of one JSON response
@@ -140,6 +141,7 @@ type Case struct {
 	Skip        string     `yaml:"skip"` // non-empty = skip with this reason
 
 	Agent           string     `yaml:"agent"`
+	AgentID         string     `yaml:"agent_id"` // excludes agent; overrides the suite's agent/agent_id
 	Target          string     `yaml:"target"`
 	Model           string     `yaml:"model"`
 	Stream          *bool      `yaml:"stream"`
@@ -275,7 +277,8 @@ type Suite struct {
 
 // Effective is a case's settings after suite defaults and built-in defaults.
 type Effective struct {
-	Agent           string
+	Agent           string // agent API key reference; "" when AgentID is set
+	AgentID         string // agent id run with a personal access token; "" when Agent is set
 	Target          string
 	Model           string
 	Stream          bool // v1 SSE mode
@@ -291,7 +294,6 @@ type Effective struct {
 // Effective resolves case-level overrides against suite and built-in defaults.
 func (s *Suite) Effective(c *Case) Effective {
 	eff := Effective{
-		Agent:           firstNonEmpty(c.Agent, s.Config.Agent),
 		Target:          firstNonEmpty(c.Target, s.Config.Target, TargetV1),
 		Model:           firstNonEmpty(c.Model, s.Config.Model),
 		AttachmentsMode: firstNonEmpty(c.AttachmentsMode, s.Config.AttachmentsMode, AttachmentsUpload),
@@ -300,6 +302,19 @@ func (s *Suite) Effective(c *Case) Effective {
 		Timeout:         DefaultTimeout,
 		PollInterval:    DefaultPollInterval,
 		Repeat:          1,
+	}
+	// Exactly one of Agent / AgentID is effective. The case level wins over
+	// the suite level as a whole, so a case can switch a suite from an API key
+	// to an agent id (or back) by setting just its own field.
+	switch {
+	case c.AgentID != "":
+		eff.AgentID = c.AgentID
+	case c.Agent != "":
+		eff.Agent = c.Agent
+	case s.Config.AgentID != "":
+		eff.AgentID = s.Config.AgentID
+	default:
+		eff.Agent = s.Config.Agent
 	}
 	if s.Config.Stream != nil {
 		eff.Stream = *s.Config.Stream
@@ -335,6 +350,20 @@ func (s *Suite) Effective(c *Case) Effective {
 	return eff
 }
 
+// TargetSupportsAgentID reports whether target can address an agent by id with
+// a personal access token. v1 authenticates with the agent API key as the
+// Bearer credential and a webhook with the token in its URL, so neither can.
+func TargetSupportsAgentID(target string) bool {
+	return target == TargetStream || target == TargetAnswer
+}
+
+// AgentIDTargetError is the error for agent_id combined with a target that
+// cannot use it.
+func AgentIDTargetError(target string) error {
+	return fmt.Errorf("agent_id is not supported by the %s target (it authenticates with %s); use target stream or answer, or an agent API key",
+		target, map[string]string{TargetV1: "the agent API key as Bearer token", TargetWebhook: "the token in the webhook URL"}[target])
+}
+
 // ValidTarget reports whether name is a known target.
 func ValidTarget(name string) bool {
 	for _, t := range AllTargets {
@@ -354,6 +383,12 @@ func (s *Suite) Validate(c *Case) error {
 	}
 	if c.Skip != "" {
 		return nil
+	}
+	if c.Agent != "" && c.AgentID != "" {
+		return fmt.Errorf("case %s: agent and agent_id are mutually exclusive", c.Name)
+	}
+	if eff.AgentID != "" && !TargetSupportsAgentID(eff.Target) {
+		return fmt.Errorf("case %s: %w", c.Name, AgentIDTargetError(eff.Target))
 	}
 	if c.Question == "" && !c.MultiTurn() {
 		return fmt.Errorf("case %s: question (or turns) is required", c.Name)

@@ -23,6 +23,16 @@ type Table struct {
 	mu             sync.RWMutex
 	defaultModelID string
 	prices         map[string]spec.ModelPricing
+	token          string
+}
+
+// SetToken makes Fetch authenticate with a personal access token
+// (`Authorization: Bearer …`), for deployments whose model catalog is not
+// public. Empty keeps the request anonymous.
+func (t *Table) SetToken(token string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.token = token
 }
 
 // DefaultModelID is the registry default reported by /api/models ("" if
@@ -91,22 +101,23 @@ var httpClient = &http.Client{Timeout: 15 * time.Second}
 // callers treat that as "no server pricing" and continue.
 func (t *Table) Fetch(ctx context.Context, baseURL string) error {
 	url := strings.TrimRight(baseURL, "/") + "/api/models"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	t.mu.RLock()
+	token := t.token
+	t.mu.RUnlock()
+
+	body, status, err := fetchModels(ctx, url, token)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Accept", "application/json")
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return err
+	if token != "" && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
+		// The token may simply lack models:read; the catalog is often public,
+		// so fall back to the anonymous request used before tokens existed.
+		if body, status, err = fetchModels(ctx, url, ""); err != nil {
+			return err
+		}
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s returned %d", url, resp.StatusCode)
+	if status != http.StatusOK {
+		return fmt.Errorf("GET %s returned %d", url, status)
 	}
 	if !gjson.ValidBytes(body) {
 		return fmt.Errorf("GET %s returned non-JSON", url)
@@ -135,6 +146,28 @@ func (t *Table) Fetch(ctx context.Context, baseURL string) error {
 		return true
 	})
 	return nil
+}
+
+// fetchModels performs one GET of the model catalog.
+func fetchModels(ctx context.Context, url, token string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return body, resp.StatusCode, nil
 }
 
 // readPricing accepts, in order of preference:

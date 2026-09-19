@@ -8,6 +8,12 @@
 #   agent: ${DOCSGPT_BENCH_KEY}
 agent: my-agent
 
+# Alternative for the stream/answer targets: address the agent by id and
+# authenticate with your personal access token (scope chat:run; from
+# `docsgpt-cli login`, DOCSGPT_TOKEN or --token) instead of an agent API key.
+# Mutually exclusive with `agent:`; overridable with --agent-id.
+# agent_id: ${DOCSGPT_BENCH_AGENT_ID}
+
 # Wire protocol: v1 (OpenAI-compatible, reports token usage; add `stream: true`
 # for SSE + time-to-first-token), stream (native SSE, records TTFT + frame
 # types), answer (native /api/answer JSON), or webhook (async; requires

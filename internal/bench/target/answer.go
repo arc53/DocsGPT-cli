@@ -17,7 +17,8 @@ import (
 
 // answerTarget runs a question against POST {base}/api/answer, the native
 // synchronous JSON endpoint: same auth and options as /stream (api_key in the
-// body, model_id, conversation_id) but a single JSON reply
+// body — or agent_id plus a Bearer personal access token — model_id,
+// conversation_id) but a single JSON reply
 // {conversation_id, answer, sources, tool_calls, thought}. It has no
 // attachments parameter and cannot observe time-to-first-token.
 type answerTarget struct{}
@@ -26,7 +27,8 @@ func (answerTarget) Name() string { return spec.TargetAnswer }
 
 type answerRequest struct {
 	Question       string `json:"question"`
-	APIKey         string `json:"api_key"`
+	APIKey         string `json:"api_key,omitempty"`
+	AgentID        string `json:"agent_id,omitempty"`
 	ConversationID string `json:"conversation_id,omitempty"`
 	ModelID        string `json:"model_id,omitempty"`
 }
@@ -43,6 +45,7 @@ func (answerTarget) Run(ctx context.Context, req Request) (*Result, error) {
 	body, err := json.Marshal(answerRequest{
 		Question:       req.Question,
 		APIKey:         req.APIKey,
+		AgentID:        req.AgentID,
 		ConversationID: req.ConversationID,
 		ModelID:        req.Model,
 	})
@@ -57,6 +60,7 @@ func (answerTarget) Run(ctx context.Context, req Request) (*Result, error) {
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 	setBenchHeaders(httpReq, req.RunTag)
+	setAgentAuth(httpReq, req)
 
 	start := time.Now()
 	resp, err := httpClient.Do(httpReq)

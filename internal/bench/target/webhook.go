@@ -23,6 +23,9 @@ type webhookTarget struct{}
 func (webhookTarget) Name() string { return spec.TargetWebhook }
 
 func (webhookTarget) Run(ctx context.Context, req Request) (*Result, error) {
+	if req.AgentID != "" {
+		return nil, fmt.Errorf("webhook target: %w", spec.AgentIDTargetError(spec.TargetWebhook))
+	}
 	if req.WebhookURL == "" {
 		return nil, fmt.Errorf("webhook target: webhook URL is required")
 	}
@@ -84,7 +87,7 @@ func (webhookTarget) Run(ctx context.Context, req Request) (*Result, error) {
 			safeURL, truncateBody(postBody, 300))
 	}
 
-	statusBody, err := pollTaskStatus(ctx, req.BaseURL, taskID, req.PollInterval)
+	statusBody, err := pollTaskStatus(ctx, req.BaseURL, taskID, req.PollInterval, "")
 	if err != nil {
 		return nil, fmt.Errorf("webhook target: %w", err)
 	}
