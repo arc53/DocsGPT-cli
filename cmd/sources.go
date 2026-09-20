@@ -387,6 +387,21 @@ func replaceOlderSources(ctx context.Context, c *manage.Client, opts uploadOptio
 	if err != nil {
 		return fmt.Errorf("--replace: list sources: %w", err)
 	}
+	// The id the server reported must be a source that exists right now. After a
+	// revert to earlier content the Idempotency-Key repeats and, within the
+	// server's dedup window, the cached reply names the source of that earlier
+	// upload, which a later --replace may already have deleted. Deleting "every
+	// other" source would then remove the only live one.
+	live := false
+	for _, src := range sources {
+		if src.ID == report.SourceID {
+			live = true
+			break
+		}
+	}
+	if !live {
+		return fmt.Errorf("--replace: the server reported source %s, which no longer exists (this content was uploaded before and the request was deduplicated); nothing was deleted. Re-run with a fresh --idempotency-key to ingest it again", report.SourceID)
+	}
 	for _, src := range sources {
 		if src.ID == report.SourceID || !strings.EqualFold(src.Name, opts.Name) {
 			continue

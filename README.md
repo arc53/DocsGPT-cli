@@ -191,7 +191,11 @@ second "Product docs" behind and the agent keeps answering from the first one.
 `--replace` (needs `--wait`) deletes your older sources with the same name once
 the new one is ingested; run `agents apply` afterwards so agents that reference
 the source by name are re-pointed at the new one. Team-shared sources are never
-deleted.
+deleted. If you revert documentation to content that was uploaded within the
+last day, the server deduplicates the request and reports the earlier source,
+which may be gone by now; `--replace` then deletes nothing and exits non-zero.
+Re-run with a fresh `--idempotency-key` (for example the commit SHA) to ingest
+it again.
 
 ### GitHub Actions
 
@@ -212,7 +216,7 @@ jobs:
             https://github.com/arc53/DocsGPT-cli/releases/latest/download/docsgpt-cli_linux_amd64.tar.gz
           tar -xzf docsgpt-cli.tar.gz docsgpt-cli && sudo mv docsgpt-cli /usr/local/bin/
       - run: docsgpt-cli whoami
-      - run: docsgpt-cli sources upload docs/*.md --name "Product docs" --wait --replace
+      - run: docsgpt-cli sources upload docs/*.md --name "Product docs" --wait --replace --idempotency-key "docs-${{ github.sha }}"
       - run: docsgpt-cli agents apply -f agents/
       - run: docsgpt-cli bench ./bench --target stream --agent-id "${{ vars.DOCSGPT_AGENT_ID }}" --junit bench.xml
 ```

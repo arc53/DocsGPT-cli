@@ -50,7 +50,13 @@ jobs:
       # Without it every push leaves another source with the same name and the
       # agents below stay bound to the oldest one.
       - name: Upload documentation
-        run: docsgpt-cli sources upload docs/*.md --name "Product docs" --wait --replace --timeout 15m
+        # Keyed by commit: a re-run of this commit is deduplicated, while a revert
+        # to older content is a new commit and is ingested again (the default
+        # content-derived key would repeat and be deduplicated by the server).
+        run: >
+          docsgpt-cli sources upload docs/*.md --name "Product docs"
+          --wait --replace --timeout 15m
+          --idempotency-key "docs-${{ github.sha }}"
       # Must run after the upload: it re-points agents that name the source.
       - name: Apply agents
         run: docsgpt-cli agents apply -f agents/

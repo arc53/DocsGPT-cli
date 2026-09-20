@@ -760,6 +760,20 @@ func TestSourcesUploadReplace(t *testing.T) {
 			opts:      uploadOptions{Files: []string{file}, Name: "Guide", Wait: true, Replace: true, Timeout: 5 * time.Second, Poll: fast},
 		},
 		{
+			// Revert to earlier content: the repeated Idempotency-Key makes the
+			// server answer with the source of that earlier upload, since deleted.
+			name: "refuses when the reported source is not in the listing", taskStatus: `{"status":"SUCCESS","result":{}}`,
+			uploadRes: `{"success":true,"task_id":"task-1","source_id":"src-gone"}`,
+			opts:      uploadOptions{Files: []string{file}, Name: "Guide", Wait: true, Replace: true, Timeout: 5 * time.Second, Poll: fast},
+			wantExit:  1, wantErr: "no longer exists",
+		},
+		{
+			name: "deduplicated reply naming a deleted source deletes nothing", taskStatus: `{"status":"SUCCESS","result":{}}`,
+			uploadRes: `{"success":true,"task_id":"deduplicated","source_id":"src-gone"}`,
+			opts:      uploadOptions{Files: []string{file}, Name: "Guide", Wait: true, Replace: true, Timeout: 5 * time.Second, Poll: fast},
+			wantExit:  1, wantErr: "nothing was deleted",
+		},
+		{
 			name: "off by default", taskStatus: `{"status":"SUCCESS","result":{}}`,
 			opts: uploadOptions{Files: []string{file}, Name: "Guide", Wait: true, Timeout: 5 * time.Second, Poll: fast},
 		},
