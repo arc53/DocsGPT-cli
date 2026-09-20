@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -16,15 +17,16 @@ import (
 )
 
 var (
-	sourcesListJSON   bool
-	sourcesUploadName string
-	sourcesUploadWait bool
-	sourcesUploadTO   time.Duration
-	sourcesUploadKey  string
-	sourcesUploadJSON bool
-	sourcesDeleteYes  bool
-	promptsListJSON   bool
-	toolsListJSON     bool
+	sourcesListJSON      bool
+	sourcesUploadName    string
+	sourcesUploadWait    bool
+	sourcesUploadTO      time.Duration
+	sourcesUploadKey     string
+	sourcesUploadJSON    bool
+	sourcesUploadReplace bool
+	sourcesDeleteYes     bool
+	promptsListJSON      bool
+	toolsListJSON        bool
 )
 
 var sourcesCmd = &cobra.Command{
@@ -77,6 +79,7 @@ Exit codes: 0 ok, 1 upload/ingestion failed or timed out, 2 usage error.`,
 				Key:     sourcesUploadKey,
 				KeySet:  cmd.Flags().Changed("idempotency-key"),
 				JSON:    sourcesUploadJSON,
+				Replace: sourcesUploadReplace,
 			}, os.Stdout, os.Stderr)
 		})
 	},
@@ -142,6 +145,7 @@ func init() {
 	uf.BoolVar(&sourcesUploadWait, "wait", false, "Wait for ingestion to finish; exit non-zero if it fails")
 	uf.DurationVar(&sourcesUploadTO, "timeout", 10*time.Minute, "How long --wait polls before giving up (e.g. 90s, 15m)")
 	uf.StringVar(&sourcesUploadKey, "idempotency-key", "", "Idempotency-Key header (default: derived from --name and file hashes; \"\" sends none)")
+	uf.BoolVar(&sourcesUploadReplace, "replace", false, "After ingestion, delete your older sources with the same name (needs --wait); re-apply agents that use it")
 	uf.BoolVar(&sourcesUploadJSON, "json", false, "Print the result as JSON on stdout")
 
 	sourcesDeleteCmd.Flags().BoolVarP(&sourcesDeleteYes, "yes", "y", false, "Do not ask for confirmation")
@@ -239,6 +243,10 @@ type uploadOptions struct {
 	Key     string
 	KeySet  bool // --idempotency-key was passed explicitly ("" disables the header)
 	JSON    bool
+	// Replace deletes the caller's older sources with the same name once the
+	// new one is ingested, so agents that reference the source by name pick
+	// up the new content on their next apply.
+	Replace bool
 
 	// Poll tunes the --wait backoff; zero values use the client defaults.
 	Poll manage.WaitOptions
@@ -246,14 +254,15 @@ type uploadOptions struct {
 
 // uploadReport is the --json document of `sources upload`.
 type uploadReport struct {
-	Name           string `json:"name"`
-	TaskID         string `json:"task_id"`
-	SourceID       string `json:"source_id,omitempty"`
-	IdempotencyKey string `json:"idempotency_key,omitempty"`
-	Deduplicated   bool   `json:"deduplicated,omitempty"`
-	Waited         bool   `json:"waited"`
-	Status         string `json:"status,omitempty"`
-	Error          string `json:"error,omitempty"`
+	Name           string   `json:"name"`
+	TaskID         string   `json:"task_id"`
+	SourceID       string   `json:"source_id,omitempty"`
+	IdempotencyKey string   `json:"idempotency_key,omitempty"`
+	Deduplicated   bool     `json:"deduplicated,omitempty"`
+	Waited         bool     `json:"waited"`
+	Status         string   `json:"status,omitempty"`
+	Replaced       []string `json:"replaced,omitempty"`
+	Error          string   `json:"error,omitempty"`
 }
 
 // runSourcesUpload uploads the files and, with Wait, polls the ingest task.
@@ -264,6 +273,9 @@ func runSourcesUpload(ctx context.Context, c *manage.Client, opts uploadOptions,
 	}
 	if opts.Wait && opts.Timeout <= 0 {
 		return usageErrf("--timeout must be positive")
+	}
+	if opts.Replace && !opts.Wait {
+		return usageErrf("--replace needs --wait: older sources are only deleted once the new one is ingested")
 	}
 	for _, f := range opts.Files {
 		st, err := os.Stat(f)
@@ -319,7 +331,7 @@ func runSourcesUpload(ctx context.Context, c *manage.Client, opts uploadOptions,
 		// ingest already ran, there is nothing to poll.
 		report.Deduplicated = true
 		fmt.Fprintln(stderr, "the server deduplicated this upload (same Idempotency-Key as an earlier request); nothing new was ingested")
-		return finish(nil)
+		return finish(replaceOlderSources(ctx, c, opts, &report, stderr))
 	}
 	if !opts.Wait {
 		fmt.Fprintf(stderr, "ingestion queued; poll it with --wait or check the web app (task %s)\n", res.TaskID)
@@ -355,5 +367,38 @@ func runSourcesUpload(ctx context.Context, c *manage.Client, opts uploadOptions,
 		}
 		return finish(err)
 	}
-	return finish(nil)
+	return finish(replaceOlderSources(ctx, c, opts, &report, stderr))
+}
+
+// replaceOlderSources implements --replace. The server resolves an agent's
+// source by name and picks the oldest match, so without this every upload of
+// changed content leaves agents pinned to the first upload. Only the caller's
+// own sources are touched, never the one just uploaded, and nothing is deleted
+// unless the server said which source that is.
+func replaceOlderSources(ctx context.Context, c *manage.Client, opts uploadOptions, report *uploadReport, stderr io.Writer) error {
+	if !opts.Replace {
+		return nil
+	}
+	if report.SourceID == "" {
+		fmt.Fprintln(stderr, "--replace skipped: the server did not report the new source id")
+		return nil
+	}
+	sources, _, err := c.ListSources(ctx)
+	if err != nil {
+		return fmt.Errorf("--replace: list sources: %w", err)
+	}
+	for _, src := range sources {
+		if src.ID == report.SourceID || !strings.EqualFold(src.Name, opts.Name) {
+			continue
+		}
+		if src.Ownership != "" && src.Ownership != "user" {
+			continue
+		}
+		if err := c.DeleteSource(ctx, src.ID); err != nil {
+			return fmt.Errorf("--replace: delete older source %s: %w", src.ID, err)
+		}
+		report.Replaced = append(report.Replaced, src.ID)
+		fmt.Fprintf(stderr, "replaced older source %s\n", src.ID)
+	}
+	return nil
 }

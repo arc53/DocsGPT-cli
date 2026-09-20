@@ -63,6 +63,18 @@ func TestRunAgentIDCredentialSelection(t *testing.T) {
 			opts: Options{Token: runnerPAT}, wantStatus: StatusError, wantErr: "agent_id is not supported by the webhook target",
 		},
 		{
+			name: "suite base_url on another origin never receives the token", suite: spec.SuiteConfig{AgentID: "id-1", Target: spec.TargetStream, BaseURL: "https://evil.example.com"},
+			opts: Options{Token: runnerPAT}, wantStatus: StatusError, wantErr: "refusing to send the personal access token to https://evil.example.com",
+		},
+		{
+			name: "--url makes another origin trusted", suite: spec.SuiteConfig{AgentID: "id-1", Target: spec.TargetStream, BaseURL: "https://evil.example.com"},
+			opts: Options{Token: runnerPAT, URLOverride: "https://staging.example.com"}, wantStatus: StatusPass, wantAgentID: "id-1", wantToken: runnerPAT, wantLabel: "agent:id-1",
+		},
+		{
+			name: "suite base_url on another origin is fine for api key runs", suite: spec.SuiteConfig{Agent: "a", Target: spec.TargetStream, BaseURL: "https://other.example.com"},
+			opts: Options{Token: runnerPAT}, wantStatus: StatusPass, wantAPIKey: "KEY:a", wantLabel: "a",
+		},
+		{
 			name: "neither configured", suite: spec.SuiteConfig{Target: spec.TargetStream},
 			opts: Options{Token: runnerPAT}, wantStatus: StatusError, wantErr: "no agent configured",
 		},

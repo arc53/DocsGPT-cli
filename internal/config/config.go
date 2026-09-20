@@ -114,13 +114,28 @@ func (c *Config) Save() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
-	path := configPath()
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	// Write a private temp file and rename it over the config: the file can
+	// hold a personal access token, so it must never be readable by others
+	// (WriteFile keeps the looser mode of a file that already exists until a
+	// later chmod) and a crash mid-write must not leave a truncated config.
+	tmp, err := os.CreateTemp(dir, ".config-*.json")
+	if err != nil {
 		return err
 	}
-	// WriteFile keeps the mode of a file that already exists; the config can
-	// hold a personal access token, so tighten it explicitly.
-	return os.Chmod(path, 0600)
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once renamed
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, configPath())
 }
 
 func (c *Config) ActiveKey() (string, error) {

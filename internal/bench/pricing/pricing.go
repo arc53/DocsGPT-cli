@@ -24,15 +24,18 @@ type Table struct {
 	defaultModelID string
 	prices         map[string]spec.ModelPricing
 	token          string
+	trustedBaseURL string
 }
 
 // SetToken makes Fetch authenticate with a personal access token
 // (`Authorization: Bearer …`), for deployments whose model catalog is not
-// public. Empty keeps the request anonymous.
-func (t *Table) SetToken(token string) {
+// public. The token is sent only to trustedBaseURL's origin; a base URL named
+// by a suite file is fetched anonymously. Empty keeps every request anonymous.
+func (t *Table) SetToken(token, trustedBaseURL string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.token = token
+	t.trustedBaseURL = trustedBaseURL
 }
 
 // DefaultModelID is the registry default reported by /api/models ("" if
@@ -103,6 +106,9 @@ func (t *Table) Fetch(ctx context.Context, baseURL string) error {
 	url := strings.TrimRight(baseURL, "/") + "/api/models"
 	t.mu.RLock()
 	token := t.token
+	if !spec.SameOrigin(baseURL, t.trustedBaseURL) {
+		token = ""
+	}
 	t.mu.RUnlock()
 
 	body, status, err := fetchModels(ctx, url, token)

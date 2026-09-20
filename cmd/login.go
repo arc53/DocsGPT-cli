@@ -124,10 +124,11 @@ func runLogin(ctx context.Context, token, urlFlag string, out io.Writer) error {
 		return fmt.Errorf("token was not accepted by %s: %w", baseURL, err)
 	}
 
+	// Store the token together with the server that accepted it, wherever that
+	// URL came from (--url, DOCSGPT_URL or the config). Otherwise a later run
+	// without DOCSGPT_URL would send the token to a different server.
 	cfg.Token = token
-	if urlFlag != "" {
-		cfg.BaseURL = strings.TrimRight(urlFlag, "/")
-	}
+	cfg.BaseURL = strings.TrimRight(baseURL, "/")
 	if err := cfg.Save(); err != nil {
 		return err
 	}

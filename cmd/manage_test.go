@@ -694,3 +694,120 @@ func TestConfirmDestructive(t *testing.T) {
 		})
 	}
 }
+
+// The token is stored with the server that accepted it even when that URL came
+// from DOCSGPT_URL, so a later run without the variable cannot send it elsewhere.
+func TestLoginStoresTheURLThatValidatedTheToken(t *testing.T) {
+	isolateConfig(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonReply(w, 200, meBody)
+	}))
+	defer srv.Close()
+	t.Setenv(config.EnvURL, srv.URL+"/")
+
+	var out bytes.Buffer
+	if err := runLogin(context.Background(), cmdTestToken, "", &out); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	t.Setenv(config.EnvURL, "")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURL != srv.URL {
+		t.Errorf("stored base_url = %q, want %q", cfg.BaseURL, srv.URL)
+	}
+	if got := cfg.ResolveURL(""); got != srv.URL {
+		t.Errorf("ResolveURL without DOCSGPT_URL = %q, want %q", got, srv.URL)
+	}
+}
+
+func TestSourcesUploadReplace(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "guide.md")
+	os.WriteFile(file, []byte("# guide v2"), 0o644)
+	fast := manage.WaitOptions{Initial: time.Millisecond, Max: 2 * time.Millisecond}
+	const list = `[
+		{"id":"src-new","name":"Guide","ownership":"user"},
+		{"id":"src-old-1","name":"Guide","ownership":"user"},
+		{"id":"src-old-2","name":"guide","ownership":"user"},
+		{"id":"src-team","name":"Guide","ownership":"team"},
+		{"id":"src-other","name":"Handbook","ownership":"user"}
+	]`
+
+	tests := []struct {
+		name        string
+		opts        uploadOptions
+		taskStatus  string
+		uploadRes   string
+		wantExit    int
+		wantErr     string
+		wantDeleted []string
+	}{
+		{
+			name: "deletes older same-named own sources after success", taskStatus: `{"status":"SUCCESS","result":{}}`,
+			opts:        uploadOptions{Files: []string{file}, Name: "Guide", Wait: true, Replace: true, Timeout: 5 * time.Second, Poll: fast},
+			wantDeleted: []string{"src-old-1", "src-old-2"},
+		},
+		{
+			name: "deletes nothing when ingestion fails", taskStatus: `{"status":"FAILURE","result":"boom"}`,
+			opts:     uploadOptions{Files: []string{file}, Name: "Guide", Wait: true, Replace: true, Timeout: 5 * time.Second, Poll: fast},
+			wantExit: 1, wantErr: "boom",
+		},
+		{
+			name: "deletes nothing without the new source id", taskStatus: `{"status":"SUCCESS","result":{}}`,
+			uploadRes: `{"success":true,"task_id":"task-1"}`,
+			opts:      uploadOptions{Files: []string{file}, Name: "Guide", Wait: true, Replace: true, Timeout: 5 * time.Second, Poll: fast},
+		},
+		{
+			name: "off by default", taskStatus: `{"status":"SUCCESS","result":{}}`,
+			opts: uploadOptions{Files: []string{file}, Name: "Guide", Wait: true, Timeout: 5 * time.Second, Poll: fast},
+		},
+		{
+			name: "needs --wait", opts: uploadOptions{Files: []string{file}, Name: "Guide", Replace: true},
+			wantExit: 2, wantErr: "--replace needs --wait",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				mu      sync.Mutex
+				deleted []string
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				switch r.URL.Path {
+				case "/api/upload":
+					io.Copy(io.Discard, r.Body)
+					res := tt.uploadRes
+					if res == "" {
+						res = `{"success":true,"task_id":"task-1","source_id":"src-new"}`
+					}
+					jsonReply(w, 200, res)
+				case "/api/task_status":
+					jsonReply(w, 200, tt.taskStatus)
+				case "/api/sources":
+					jsonReply(w, 200, list)
+				case "/api/delete_old":
+					deleted = append(deleted, r.URL.Query().Get("source_id"))
+					jsonReply(w, 200, `{"success":true}`)
+				default:
+					t.Errorf("unexpected path %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+			var stdout, stderr bytes.Buffer
+			err := runSourcesUpload(context.Background(), manage.New(srv.URL, cmdTestToken, ""), tt.opts, &stdout, &stderr)
+			if got := exitCodeFor(err); got != tt.wantExit {
+				t.Fatalf("exit = %d (%v), want %d", got, err, tt.wantExit)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Errorf("err = %v, want %q", err, tt.wantErr)
+			}
+			if strings.Join(deleted, ",") != strings.Join(tt.wantDeleted, ",") {
+				t.Errorf("deleted = %v, want %v", deleted, tt.wantDeleted)
+			}
+		})
+	}
+}

@@ -46,8 +46,12 @@ jobs:
           tar -xzf docsgpt-cli.tar.gz docsgpt-cli && sudo mv docsgpt-cli /usr/local/bin/
       # Safe to retry: the Idempotency-Key is derived from --name and the file
       # contents, so a re-run of the same commit does not ingest twice.
+      # --replace deletes the older "Product docs" once the new one is ingested.
+      # Without it every push leaves another source with the same name and the
+      # agents below stay bound to the oldest one.
       - name: Upload documentation
-        run: docsgpt-cli sources upload docs/*.md --name "Product docs" --wait --timeout 15m
+        run: docsgpt-cli sources upload docs/*.md --name "Product docs" --wait --replace --timeout 15m
+      # Must run after the upload: it re-points agents that name the source.
       - name: Apply agents
         run: docsgpt-cli agents apply -f agents/
       - name: Smoke-test the agent

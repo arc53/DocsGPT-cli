@@ -231,7 +231,7 @@ func Run(ctx context.Context, opts Options) (*SuiteResult, error) {
 		prices:  pricing.New(opts.Suite.Config.Pricing),
 		fetched: make(map[string]bool),
 	}
-	rc.prices.SetToken(opts.Token)
+	rc.prices.SetToken(opts.Token, trustedBaseURL(opts))
 	start := time.Now()
 	results := make([]*CaseResult, len(opts.Cases))
 	var stopped atomic.Bool
@@ -345,6 +345,13 @@ func (rc *runContext) agentLabel() string {
 	return "mixed"
 }
 
+// trustedBaseURL is the server the user chose (--url, else DOCSGPT_URL or the
+// config file). Only its origin may receive the personal access token; a
+// base_url from the suite YAML never does.
+func trustedBaseURL(opts Options) string {
+	return firstNonEmpty(opts.URLOverride, opts.BaseURL)
+}
+
 // pricingFor returns the pricing table for baseURL, fetching /api/models the
 // first time a base URL is seen (once per run, best effort).
 func (rc *runContext) pricingFor(ctx context.Context, baseURL string) *pricing.Table {
@@ -409,6 +416,10 @@ func (rc *runContext) runCase(ctx context.Context, c *spec.Case) *CaseResult {
 	case agentID != "":
 		if !spec.TargetSupportsAgentID(eff.Target) {
 			setError(cr, spec.AgentIDTargetError(eff.Target).Error())
+			return cr
+		}
+		if trusted := trustedBaseURL(opts); !spec.SameOrigin(resolvedURL, trusted) {
+			setError(cr, fmt.Sprintf("refusing to send the personal access token to %s: the suite's base_url is not the configured server (%s); pass --url %s if you trust it", resolvedURL, trusted, resolvedURL))
 			return cr
 		}
 		if opts.Token == "" {

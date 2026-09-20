@@ -152,6 +152,17 @@ func TestTokenPersistenceAndPermissions(t *testing.T) {
 		}
 	}
 
+	// Save goes through a temp file; none may be left behind.
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "config.json" {
+			t.Errorf("unexpected file left in the config dir: %s", e.Name())
+		}
+	}
+
 	reloaded, err := Load()
 	if err != nil {
 		t.Fatal(err)

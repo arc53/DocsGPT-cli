@@ -129,7 +129,7 @@ func TestFetchCarriesToken(t *testing.T) {
 			}))
 			defer srv.Close()
 			tb := New(nil)
-			tb.SetToken(tt.token)
+			tb.SetToken(tt.token, srv.URL)
 			if err := tb.Fetch(context.Background(), srv.URL); err != nil {
 				t.Fatalf("Fetch: %v", err)
 			}
@@ -145,5 +145,20 @@ func TestFetchCarriesToken(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFetchNeverSendsTokenToAnUntrustedOrigin(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("Authorization"))
+		io.WriteString(w, `{"models":[]}`)
+	}))
+	defer srv.Close()
+	tb := New(nil)
+	tb.SetToken("dgpt_pat_secret", "https://docsgpt.example.com")
+	_ = tb.Fetch(context.Background(), srv.URL)
+	if len(seen) != 1 || seen[0] != "" {
+		t.Fatalf("Authorization sent to an untrusted origin: %q", seen)
 	}
 }

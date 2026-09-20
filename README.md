@@ -171,7 +171,7 @@ reference. Exit codes match `bench`: `0` ok, `1` failed or blocked,
 ### Sources
 
 ```bash
-docsgpt-cli sources upload docs/*.md --name "Product docs" --wait --timeout 15m
+docsgpt-cli sources upload docs/*.md --name "Product docs" --wait --replace --timeout 15m
 docsgpt-cli sources list
 docsgpt-cli sources delete <id> --yes
 ```
@@ -183,6 +183,15 @@ returns the original task instead of ingesting twice (the server remembers keys
 for about a day). Pass `--idempotency-key <k>` to choose your own, or
 `--idempotency-key ""` to send none. `delete` refuses to run without `--yes`
 when there is no terminal.
+
+**Updating a source from CI: use `--replace`.** Every upload creates a new
+source, and the server resolves the source an agent names in its YAML to the
+*oldest* source with that name. Without `--replace`, the second push leaves a
+second "Product docs" behind and the agent keeps answering from the first one.
+`--replace` (needs `--wait`) deletes your older sources with the same name once
+the new one is ingested; run `agents apply` afterwards so agents that reference
+the source by name are re-pointed at the new one. Team-shared sources are never
+deleted.
 
 ### GitHub Actions
 
@@ -203,7 +212,7 @@ jobs:
             https://github.com/arc53/DocsGPT-cli/releases/latest/download/docsgpt-cli_linux_amd64.tar.gz
           tar -xzf docsgpt-cli.tar.gz docsgpt-cli && sudo mv docsgpt-cli /usr/local/bin/
       - run: docsgpt-cli whoami
-      - run: docsgpt-cli sources upload docs/*.md --name "Product docs" --wait
+      - run: docsgpt-cli sources upload docs/*.md --name "Product docs" --wait --replace
       - run: docsgpt-cli agents apply -f agents/
       - run: docsgpt-cli bench ./bench --target stream --agent-id "${{ vars.DOCSGPT_AGENT_ID }}" --junit bench.xml
 ```
@@ -250,6 +259,12 @@ personal access token (scope `chat:run`) instead of an agent API key: set
 pass `--agent-id <id>`. The request then carries `agent_id` plus
 `Authorization: Bearer <token>`; `v1` and `webhook` keep using the agent API
 key / webhook token and reject `agent_id` with a clear error.
+
+The token is only sent to the server you configured (`--url`, else
+`DOCSGPT_URL` or the config file). A suite is data, often from someone else's
+repository: if its `base_url` points at another origin, `agent_id` cases fail
+with an error instead of sending your token there, and pricing for that URL is
+fetched anonymously. Pass `--url <that server>` when you do trust it.
 
 See [`examples/bench`](examples/bench) for a ready-made suite.
 
