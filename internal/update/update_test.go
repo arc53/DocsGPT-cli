@@ -160,3 +160,22 @@ func TestIsHomebrewPath(t *testing.T) {
 		}
 	}
 }
+
+func TestIsNewerRejectsPrereleases(t *testing.T) {
+	// Semver orders a prerelease above the release it follows, but installing
+	// one would stamp the binary with a version IsReleaseVersion rejects,
+	// permanently disabling its update checks.
+	if IsNewer("v1.6.0-rc1", "v1.5.1") {
+		t.Error(`IsNewer("v1.6.0-rc1", "v1.5.1") = true, want false`)
+	}
+	if IsNewer("v2.0.0-beta.1", "v1.5.1") {
+		t.Error(`IsNewer("v2.0.0-beta.1", "v1.5.1") = true, want false`)
+	}
+	if !IsNewer("v1.6.0", "v1.5.1") {
+		t.Error(`IsNewer("v1.6.0", "v1.5.1") = false, want true`)
+	}
+	// A user already on a prerelease is still offered the stable release.
+	if !IsNewer("v1.6.0", "v1.6.0-rc1") {
+		t.Error(`IsNewer("v1.6.0", "v1.6.0-rc1") = false, want true`)
+	}
+}

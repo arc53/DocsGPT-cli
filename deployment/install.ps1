@@ -19,6 +19,19 @@ function Install-DocsGPTCli {
 
     function Say([string]$Message) { Write-Host "==> $Message" }
 
+    # Windows PowerShell 5.1 on older .NET defaults to TLS 1.0/1.1, which
+    # github.com refuses; without this the downloads below fail outright.
+    try {
+        [Net.ServicePointManager]::SecurityProtocol =
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    }
+    catch {}
+
+    # Invoke-WebRequest's progress bar costs more than the transfer on a 17 MB
+    # file in Windows PowerShell.
+    $previousProgress = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+
     # Only amd64 is released for Windows; Windows on ARM runs it emulated.
     $arch = 'amd64'
     if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') {
@@ -81,6 +94,7 @@ function Install-DocsGPTCli {
         Say "Run 'docsgpt-cli --help' to get started."
     }
     finally {
+        $ProgressPreference = $previousProgress
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
     }
 }

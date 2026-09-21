@@ -48,6 +48,11 @@ changelog:
 # releases/latest/download/install.sh (and install-cli.ps1 to install.ps1), so
 # the script a user runs always comes from the newest release.
 release:
+  # A prerelease tag must not become releases/latest: install.sh and the
+  # self-updater both resolve that URL, so an -rc would be pushed to every
+  # user, and a binary stamped with a prerelease version can no longer
+  # auto-update (IsReleaseVersion rejects it) — stranding them there.
+  prerelease: auto
   extra_files:
     - glob: deployment/install.sh
     - glob: deployment/install.ps1

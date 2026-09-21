@@ -36,8 +36,15 @@ brew tap arc53/docsgpt-cli
 brew install --cask docsgpt-cli
 ```
 
-Upgrade with `brew upgrade docsgpt-cli`. Homebrew-managed copies never
+Upgrade with `brew upgrade --cask docsgpt-cli`. Homebrew-managed copies never
 self-update, so `docsgpt-cli update` will point you back at brew.
+
+> **Upgrading from a version installed before 1.6.0?** Those came from a
+> formula, which is no longer updated. Move across once with:
+>
+> ```bash
+> brew uninstall docsgpt-cli && brew install --cask docsgpt-cli
+> ```
 
 Homebrew on Linux is not supported — casks are macOS-only. Use the install
 script above instead.
@@ -123,7 +130,7 @@ docsgpt-cli update --rollback # restore the binary from before the last update
 
 A rollback also tells auto-update to skip the version you rolled back from until you run `docsgpt-cli update` yourself.
 
-Setting the `DOCSGPT_NO_UPDATE_CHECK` environment variable disables everything update-related. Homebrew installs are never touched — update those with `brew upgrade docsgpt-cli`. Long-running hosts (`docsgpt-cli host`) check occasionally while idle, install the new release, and restart themselves into it.
+Setting the `DOCSGPT_NO_UPDATE_CHECK` environment variable disables everything update-related. Homebrew installs are never touched — update those with `brew upgrade --cask docsgpt-cli`. Long-running hosts (`docsgpt-cli host`) check occasionally while idle, install the new release, and restart themselves into it.
 
 ## Personal access tokens / CI usage
 

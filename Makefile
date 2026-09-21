@@ -27,8 +27,10 @@ release:
 	@test -z "$$(git status --porcelain)" \
 		|| { echo "working tree is dirty; commit or stash first"; exit 1; }
 	@git rev-parse -q --verify "refs/tags/$(VERSION)" >/dev/null \
-		&& { echo "tag $(VERSION) already exists"; exit 1; } || true
+		&& { echo "tag $(VERSION) already exists locally"; exit 1; } || true
 	@git fetch --quiet origin $(RELEASE_BRANCH)
+	@git ls-remote --exit-code --tags origin "refs/tags/$(VERSION)" >/dev/null 2>&1 \
+		&& { echo "tag $(VERSION) already exists on origin"; exit 1; } || true
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/$(RELEASE_BRANCH))" \
 		|| { echo "HEAD is not origin/$(RELEASE_BRANCH); push or pull first"; exit 1; }
 	go test ./...

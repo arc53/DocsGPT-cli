@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"docsgpt-cli/internal/display"
+	"docsgpt-cli/internal/update"
 
 	"github.com/spf13/cobra"
 )
@@ -45,6 +46,16 @@ var installCmd = &cobra.Command{
 		}
 		destinationPath := filepath.Join(installDir, binaryName)
 
+		// Under Intel Homebrew /usr/local/bin is user-writable and holds a
+		// symlink into the Caskroom, so without this we would install straight
+		// through it and fight `brew upgrade` over the same binary.
+		if resolved, err := filepath.EvalSymlinks(destinationPath); err == nil &&
+			update.IsHomebrewPath(resolved) {
+			return fmt.Errorf(
+				"%s is managed by Homebrew (%s). Upgrade it with: brew upgrade --cask docsgpt-cli",
+				destinationPath, resolved)
+		}
+
 		if err := os.MkdirAll(installDir, 0755); err != nil {
 			return fmt.Errorf("could not create %s: %w", installDir, err)
 		}
@@ -78,8 +89,14 @@ var installCmd = &cobra.Command{
 	},
 }
 
-// placeBinary moves src onto dst, falling back to a copy across filesystems
-// (the installers unpack into a temp dir, which is often a different mount).
+// placeBinary puts src at dst, replacing whatever is there.
+//
+// The copy always goes to a temporary file in the destination directory and is
+// renamed into place, so an interrupted or short write cannot leave a truncated
+// binary where a working one used to be, and a dst that is a symlink (an Intel
+// Homebrew bin entry, say) is replaced rather than written through. A plain
+// rename of src is tried first: it is the same operation when the installers
+// unpack onto the same filesystem.
 func placeBinary(src, dst string) error {
 	if err := os.Rename(src, dst); err == nil {
 		// Rename keeps the source mode; make sure it is executable either way.
@@ -88,10 +105,61 @@ func placeBinary(src, dst string) error {
 		}
 		return nil
 	}
-	if err := copyFile(src, dst); err != nil {
+
+	staged, err := copyToTemp(src, dst)
+	if err != nil {
+		return fmt.Errorf("could not install to %s: %w", dst, err)
+	}
+	if err := os.Rename(staged, dst); err != nil {
+		// Windows refuses to replace a file that is currently executing; move
+		// the old one aside and retry, leaving it for the OS to clean up.
+		aside := dst + ".old"
+		os.Remove(aside)
+		if renameErr := os.Rename(dst, aside); renameErr == nil {
+			if err2 := os.Rename(staged, dst); err2 == nil {
+				return nil
+			}
+			os.Rename(aside, dst)
+		}
+		os.Remove(staged)
 		return fmt.Errorf("could not install to %s: %w", dst, err)
 	}
 	return nil
+}
+
+// copyToTemp copies src to a new file beside dst and returns its path. The
+// caller renames it over dst; on any error nothing outside the temp file has
+// been touched.
+func copyToTemp(src, dst string) (string, error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+
+	out, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".tmp-*")
+	if err != nil {
+		return "", err
+	}
+	staged := out.Name()
+	cleanup := func(err error) (string, error) {
+		out.Close()
+		os.Remove(staged)
+		return "", err
+	}
+
+	if _, err := io.Copy(out, in); err != nil {
+		return cleanup(err)
+	}
+	// CreateTemp makes the file 0600; the installed binary has to be runnable.
+	if err := out.Chmod(0755); err != nil {
+		return cleanup(err)
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(staged)
+		return "", err
+	}
+	return staged, nil
 }
 
 // getInstallDir picks the directory to install into: a system-wide bin when we
@@ -102,10 +170,20 @@ func getInstallDir() string {
 		if isWritable("/usr/local/bin") {
 			return "/usr/local/bin"
 		}
-		return filepath.Join(os.Getenv("HOME"), ".local", "bin")
+		// Without a home directory the fallback would be the relative path
+		// ".local/bin", installing into whatever the cwd happens to be.
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return ""
+		}
+		return filepath.Join(home, ".local", "bin")
 	case "windows":
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return ""
+		}
 		// Per-user directory; created by the caller if missing, no elevation needed.
-		return filepath.Join(os.Getenv("USERPROFILE"), "bin")
+		return filepath.Join(home, "bin")
 	default:
 		return ""
 	}
@@ -138,15 +216,24 @@ func onPath(dir string) bool {
 		if entry == "" {
 			continue
 		}
-		if entry == dir {
+		if samePathEntry(entry, dir) {
 			return true
 		}
 		// Tolerate a trailing separator and relative spellings of the same dir.
-		if abs, err := filepath.Abs(entry); err == nil && abs == filepath.Clean(dir) {
+		if abs, err := filepath.Abs(entry); err == nil && samePathEntry(abs, filepath.Clean(dir)) {
 			return true
 		}
 	}
 	return false
+}
+
+// samePathEntry compares two PATH entries the way the platform does: Windows
+// paths are case-insensitive, so a differently-cased entry is still a match.
+func samePathEntry(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // ensureOnPath makes the installed binary reachable by name from new shells.
@@ -181,11 +268,14 @@ func ensureOnPath(dir string) {
 // shellPathEntry returns the profile to edit and the line that puts dir on PATH
 // in that shell's syntax.
 func shellPathEntry(dir string) (configPath, entry string, err error) {
-	home := os.Getenv("HOME")
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", "", errors.New("no home directory")
+	}
 	shell := os.Getenv("SHELL")
 	// Keep the profile portable when the directory lives under $HOME.
 	quoted := dir
-	if home != "" && strings.HasPrefix(dir, home+string(os.PathSeparator)) {
+	if strings.HasPrefix(dir, home+string(os.PathSeparator)) {
 		quoted = "$HOME" + strings.TrimPrefix(dir, home)
 	}
 
@@ -198,7 +288,14 @@ func shellPathEntry(dir string) (configPath, entry string, err error) {
 		return filepath.Join(home, ".zshrc"),
 			`export PATH="` + quoted + `:$PATH"`, nil
 	case strings.Contains(shell, "bash"):
-		return filepath.Join(home, ".bashrc"),
+		// Terminal.app and iTerm start login shells, which read .bash_profile
+		// and never .bashrc, so on macOS the latter would never take effect.
+		// On Linux terminals start non-login shells and .bashrc is the one read.
+		profile := ".bashrc"
+		if runtime.GOOS == "darwin" {
+			profile = ".bash_profile"
+		}
+		return filepath.Join(home, profile),
 			`export PATH="` + quoted + `:$PATH"`, nil
 	}
 	return "", "", errors.New("unrecognised shell")
@@ -220,25 +317,6 @@ func addToWindowsPATH(dir string) error {
 	)
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	return cmd.Run()
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Close()
 }
 
 // appendToShellConfig adds entry to configPath unless it is already there.

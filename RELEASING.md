@@ -44,10 +44,33 @@ it cannot overwrite the shared tap with fork URLs.
 
 ## After the release
 
-- `brew upgrade docsgpt-cli` picks up the new cask.
+- `brew upgrade --cask docsgpt-cli` picks up the new cask.
 - Installed binaries auto-update within a day (see the auto-update flow in
   `CLAUDE.md`); `docsgpt-cli update` does it immediately.
 - `curl -fsSL https://docs.ac/install-cli | bash` serves the new version at once.
+
+## One-time migration: formula to cask
+
+Releases before 1.6.0 installed `Formula/docsgpt-cli.rb` from the tap. The
+release now publishes a Cask instead, and **the old formula has to be removed by
+hand** — until it is, existing `brew` users keep resolving the formula, stay
+pinned to its version forever, and `brew install --cask docsgpt-cli` fails for
+them with a binary conflict over `$(brew --prefix)/bin/docsgpt-cli`.
+
+After the first release that publishes a cask, in
+[`arc53/homebrew-DocsGPT-cli`](https://github.com/arc53/homebrew-DocsGPT-cli):
+
+```bash
+# tap_migrations.json at the repository root
+{ "docsgpt-cli": "docsgpt-cli" }
+```
+
+```bash
+rm Formula/docsgpt-cli.rb
+```
+
+`tap_migrations.json` is what moves an existing install across on the user's
+next `brew update`.
 
 ## Prerequisites
 
@@ -61,9 +84,15 @@ check the run, or that a commit landed in the tap.
 
 ## Prereleases
 
-A tag like `v1.6.0-rc1` publishes archives and installers as usual but skips the
-cask (`skip_upload: auto`), so `brew install` keeps serving the last stable
-version.
+A tag like `v1.6.0-rc1` is published as a GitHub **prerelease**
+(`release.prerelease: auto`), so it does not become `releases/latest` and the
+cask is skipped (`skip_upload: auto`). That matters in three places at once:
+`install.sh` resolves `releases/latest/download/...`, the self-updater resolves
+the same release, and a binary stamped with a prerelease version fails
+`IsReleaseVersion` — so it would stop checking for updates entirely. `IsNewer`
+also refuses to update to a prerelease, as a second lock on the same door.
+
+`make release` only accepts `vX.Y.Z`, so an RC has to be tagged by hand.
 
 ## Changing an installer
 

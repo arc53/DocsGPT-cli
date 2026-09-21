@@ -76,18 +76,30 @@ main() {
 
   # An existing Homebrew install would be shadowed by whatever we put on PATH,
   # and `brew upgrade` would then fight this installer over the same command.
+  # Caskroom matters as much as Cellar: an Intel Mac's prefix is /usr/local, so
+  # a cask there resolves to /usr/local/Caskroom/... with "homebrew" nowhere in
+  # the path. `brew --prefix` catches the rest, including a custom prefix.
   local existing
   existing="$(command -v docsgpt-cli 2>/dev/null || true)"
   if [ -n "$existing" ]; then
-    local resolved="$existing"
-    if has readlink; then
-      resolved="$(readlink -f "$existing" 2>/dev/null || echo "$existing")"
+    # readlink -f is GNU; macOS only gained it in 12.3, so fall back to the
+    # unresolved path rather than losing the check on older systems.
+    local resolved="$existing" resolved_link=""
+    if resolved_link="$(readlink -f "$existing" 2>/dev/null)" && [ -n "$resolved_link" ]; then
+      resolved="$resolved_link"
+    fi
+    local brew_bin=""
+    if has brew; then
+      brew_bin="$(brew --prefix 2>/dev/null || true)/bin"
     fi
     case "$resolved" in
-      */Cellar/* | */homebrew/*)
-        die "docsgpt-cli is installed by Homebrew at $existing. Upgrade it with: brew upgrade docsgpt-cli"
+      */Cellar/* | */Caskroom/* | */homebrew/*)
+        die "docsgpt-cli is installed by Homebrew at $existing. Upgrade it with: brew upgrade --cask docsgpt-cli"
         ;;
     esac
+    if [ -n "$brew_bin" ] && [ "$brew_bin" != "/bin" ] && [ "$(dirname "$existing")" = "$brew_bin" ]; then
+      die "docsgpt-cli is installed by Homebrew at $existing. Upgrade it with: brew upgrade --cask docsgpt-cli"
+    fi
   fi
 
   local base archive

@@ -70,7 +70,7 @@ var updateCmd = &cobra.Command{
 			return err
 		}
 		if update.IsHomebrewPath(exePath) {
-			fmt.Println(display.Warn("This binary is managed by Homebrew. Run 'brew upgrade docsgpt-cli' instead."))
+			fmt.Println(display.Warn("This binary is managed by Homebrew. Run 'brew upgrade --cask docsgpt-cli' instead."))
 			return nil
 		}
 		if !isWritable(filepath.Dir(exePath)) {
