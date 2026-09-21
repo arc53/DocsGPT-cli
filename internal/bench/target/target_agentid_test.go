@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"docsgpt-cli/internal/bench/spec"
+	"github.com/arc53/DocsGPT-cli/internal/bench/spec"
 
 	"github.com/tidwall/gjson"
 )

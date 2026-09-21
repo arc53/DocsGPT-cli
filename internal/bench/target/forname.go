@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"docsgpt-cli/internal/bench/spec"
+	"github.com/arc53/DocsGPT-cli/internal/bench/spec"
 )
 
 // ForName maps a spec target name to its wire-protocol implementation.

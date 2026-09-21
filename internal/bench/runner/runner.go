@@ -19,11 +19,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"docsgpt-cli/internal/bench/assert"
-	"docsgpt-cli/internal/bench/judge"
-	"docsgpt-cli/internal/bench/pricing"
-	"docsgpt-cli/internal/bench/spec"
-	"docsgpt-cli/internal/bench/target"
+	"github.com/arc53/DocsGPT-cli/internal/bench/assert"
+	"github.com/arc53/DocsGPT-cli/internal/bench/judge"
+	"github.com/arc53/DocsGPT-cli/internal/bench/pricing"
+	"github.com/arc53/DocsGPT-cli/internal/bench/spec"
+	"github.com/arc53/DocsGPT-cli/internal/bench/target"
 )
 
 // SchemaVersion is stamped into every SuiteResult so persisted run history and

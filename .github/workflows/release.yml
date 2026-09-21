@@ -34,6 +34,11 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The workflow only triggers on v*, so this is always the CLI tag.
+          # Without it GoReleaser derives the version from git describe, which
+          # can pick up an sdk/vX.Y.Z tag on the same commit and stamp the
+          # binary "vsdk/v0.1.0-...". Verified: it does exactly that.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
           # Fine-grained token with contents:write on arc53/homebrew-DocsGPT-cli
           # only; GITHUB_TOKEN cannot reach another repository.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

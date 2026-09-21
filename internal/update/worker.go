@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"docsgpt-cli/internal/config"
+	"github.com/arc53/DocsGPT-cli/internal/config"
 )
 
 // The background worker is a short-lived detached copy of the CLI

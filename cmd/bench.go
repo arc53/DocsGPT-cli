@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"docsgpt-cli/internal/bench/judge"
-	"docsgpt-cli/internal/bench/report"
-	"docsgpt-cli/internal/bench/runner"
-	"docsgpt-cli/internal/bench/spec"
-	"docsgpt-cli/internal/bench/target"
-	"docsgpt-cli/internal/config"
-	"docsgpt-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/bench/judge"
+	"github.com/arc53/DocsGPT-cli/internal/bench/report"
+	"github.com/arc53/DocsGPT-cli/internal/bench/runner"
+	"github.com/arc53/DocsGPT-cli/internal/bench/spec"
+	"github.com/arc53/DocsGPT-cli/internal/bench/target"
+	"github.com/arc53/DocsGPT-cli/internal/config"
+	"github.com/arc53/DocsGPT-cli/internal/display"
 
 	"github.com/spf13/cobra"
 )

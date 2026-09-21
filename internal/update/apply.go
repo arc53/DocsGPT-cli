@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"docsgpt-cli/internal/config"
+	"github.com/arc53/DocsGPT-cli/internal/config"
 
 	"github.com/minio/selfupdate"
 )

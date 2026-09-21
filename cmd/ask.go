@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"docsgpt-cli/internal/api"
-	"docsgpt-cli/internal/config"
-	ctxenrich "docsgpt-cli/internal/context"
-	"docsgpt-cli/internal/display"
-	"docsgpt-cli/internal/tools"
+	"github.com/arc53/DocsGPT-cli/internal/api"
+	"github.com/arc53/DocsGPT-cli/internal/config"
+	ctxenrich "github.com/arc53/DocsGPT-cli/internal/context"
+	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/tools"
 
 	"github.com/spf13/cobra"
 )

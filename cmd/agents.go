@@ -10,8 +10,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"docsgpt-cli/internal/display"
-	"docsgpt-cli/internal/manage"
+	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/manage"
 
 	"github.com/spf13/cobra"
 )

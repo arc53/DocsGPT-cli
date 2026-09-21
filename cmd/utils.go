@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"docsgpt-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/display"
 
 	"github.com/atotto/clipboard"
 )

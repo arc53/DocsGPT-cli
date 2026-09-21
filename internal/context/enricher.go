@@ -6,7 +6,7 @@ import (
 	"os/user"
 	"strings"
 
-	"docsgpt-cli/internal/config"
+	"github.com/arc53/DocsGPT-cli/internal/config"
 )
 
 // BuildContext creates a context string based on the user's settings.

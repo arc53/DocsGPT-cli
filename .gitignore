@@ -17,8 +17,8 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-# Go workspace file
-go.work
+# Go workspace: go.work is committed (it points the CLI at ./sdk for local
+# development), its checksum file is not.
 go.work.sum
 
 # env file

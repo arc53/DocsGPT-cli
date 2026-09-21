@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"docsgpt-cli/internal/bench/runner"
+	"github.com/arc53/DocsGPT-cli/internal/bench/runner"
 )
 
 // formatDuration renders a millisecond duration as seconds with two decimals.

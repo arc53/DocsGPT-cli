@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"docsgpt-cli/internal/bench/spec"
-	"docsgpt-cli/internal/bench/target"
+	"github.com/arc53/DocsGPT-cli/internal/bench/spec"
+	"github.com/arc53/DocsGPT-cli/internal/bench/target"
 )
 
 func boolPtr(b bool) *bool { return &b }

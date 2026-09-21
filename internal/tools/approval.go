@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"docsgpt-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/display"
 )
 
 type ApprovalResult int

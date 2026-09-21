@@ -10,8 +10,8 @@ import (
 	"runtime"
 	"strings"
 
-	"docsgpt-cli/internal/display"
-	"docsgpt-cli/internal/update"
+	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/update"
 
 	"github.com/spf13/cobra"
 )

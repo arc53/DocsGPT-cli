@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"docsgpt-cli/internal/bench/runner"
-	"docsgpt-cli/internal/bench/target"
+	"github.com/arc53/DocsGPT-cli/internal/bench/runner"
+	"github.com/arc53/DocsGPT-cli/internal/bench/target"
 )
 
 func fptr(f float64) *float64 { return &f }

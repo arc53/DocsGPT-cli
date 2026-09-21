@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"docsgpt-cli/internal/bench/runner"
-	"docsgpt-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/bench/runner"
+	"github.com/arc53/DocsGPT-cli/internal/display"
 )
 
 // MatrixSummary is one model's row of the comparison table.

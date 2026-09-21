@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"docsgpt-cli/internal/bench/runner"
+	"github.com/arc53/DocsGPT-cli/internal/bench/runner"
 )
 
 // JSON writes the indented SuiteResult document (schema_version 1) to w.

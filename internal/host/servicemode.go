@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"docsgpt-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/display"
 )
 
 // EnterServiceMode reroutes the daemon's output for running under a service

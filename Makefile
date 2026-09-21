@@ -4,7 +4,7 @@ RELEASE_BRANCH ?= main
 .PHONY: build clean test release
 
 build:
-	go build -ldflags "-X 'docsgpt-cli/cmd.Version=$(VERSION)'" -o docsgpt-cli .
+	go build -ldflags "-X 'github.com/arc53/DocsGPT-cli/cmd.Version=$(VERSION)'" -o docsgpt-cli ./cmd/docsgpt-cli
 
 test:
 	go test ./...

@@ -2,12 +2,18 @@ version: 2
 
 project_name: docsgpt-cli
 
+# The sdk/ module is tagged sdk/vX.Y.Z from this same repository, and those tags
+# are not CLI releases. `git.ignore_tags` would be the obvious guard but it is a
+# GoReleaser Pro feature — it validates and does nothing here — so release.yml
+# passes GORELEASER_CURRENT_TAG instead, pinning the version to the tag that
+# triggered the workflow rather than whatever git describe picks.
+
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - main: .
+  - main: ./cmd/docsgpt-cli
     binary: docsgpt-cli
     env:
       - CGO_ENABLED=0
@@ -22,7 +28,7 @@ builds:
       - goos: windows
         goarch: arm64
     ldflags:
-      - -s -w -X docsgpt-cli/cmd.Version=v{{ .Version }}
+      - -s -w -X github.com/arc53/DocsGPT-cli/cmd.Version=v{{ .Version }}
 
 # Version-less asset names so the self-updater and
 # /releases/latest/download/... URLs stay stable across releases.

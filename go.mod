@@ -1,4 +1,4 @@
-module docsgpt-cli
+module github.com/arc53/DocsGPT-cli
 
 go 1.25.0
 

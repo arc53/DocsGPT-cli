@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"docsgpt-cli/internal/bench/spec"
-	"docsgpt-cli/internal/bench/target"
+	"github.com/arc53/DocsGPT-cli/internal/bench/spec"
+	"github.com/arc53/DocsGPT-cli/internal/bench/target"
 )
 
 // Evaluate runs every assertion in exp against res. golden may be nil (the

@@ -1,0 +1,10 @@
+go 1.25.0
+
+// The CLI is developed against the sdk/ module in this repository rather than
+// the version pinned in go.mod, so a change to both lands in one commit and
+// needs no tag in between. Release builds set GOWORK=off so the binary is
+// built from the pinned version, exactly as `go install` would build it.
+use (
+	.
+	./sdk
+)
