@@ -1,0 +1,46 @@
+name: CI
+
+# Nothing ran Go builds or tests on a pull request before this. That mattered
+# once the CLI started depending on the sdk/ module in this same repository:
+# go.work makes a local build compile ./sdk, so a change to both that forgets
+# to bump the pinned version builds and tests clean for the author and only
+# fails once the release tag is pushed — by which point the module proxy has
+# served that version and it can never be changed.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      # GOWORK=off is how release.yml builds: against the sdk version pinned in
+      # go.mod rather than the working tree.
+      - name: Build and test against the pinned sdk
+        run: |
+          GOWORK=off go build ./...
+          GOWORK=off go vet ./...
+          GOWORK=off go test ./...
+
+      - name: go.mod is tidy
+        run: GOWORK=off go mod tidy -diff
+
+      # A separate module: patterns from the parent never reach it.
+      - name: sdk module
+        run: |
+          go -C sdk build ./...
+          go -C sdk vet ./...
+          go -C sdk test ./...

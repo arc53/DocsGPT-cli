@@ -38,16 +38,21 @@ release:
 		|| { echo "working tree is dirty; commit or stash first"; exit 1; }
 	@git rev-parse -q --verify "refs/tags/$(VERSION)" >/dev/null \
 		&& { echo "tag $(VERSION) already exists locally"; exit 1; } || true
-	@git fetch --quiet $(RELEASE_REMOTE) $(RELEASE_BRANCH)
-	@remote_tag="$$(git ls-remote --tags $(RELEASE_REMOTE) "refs/tags/$(VERSION)")" \
+	@git fetch --quiet "$(RELEASE_REMOTE)" "$(RELEASE_BRANCH)"
+	@remote_tag="$$(git ls-remote --tags "$(RELEASE_REMOTE)" "refs/tags/$(VERSION)")" \
 		|| { echo "could not reach $(RELEASE_REMOTE) to check for tag $(VERSION)"; exit 1; }; \
 		test -z "$$remote_tag" || { echo "tag $(VERSION) already exists on $(RELEASE_REMOTE)"; exit 1; }
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse $(RELEASE_REMOTE)/$(RELEASE_BRANCH))" \
 		|| { echo "HEAD is not $(RELEASE_REMOTE)/$(RELEASE_BRANCH); push or pull first"; exit 1; }
-	go test ./...
+	# Build and test the way the release will: against the sdk version pinned in
+	# go.mod, not the working tree. go.work otherwise hides a forgotten pin bump
+	# until release.yml fails — by which point the tag is pushed, and once the
+	# proxy has served that version it is immutable.
+	GOWORK=off go build ./...
+	GOWORK=off go test ./...
 	go -C sdk test ./...
 	git tag -a "$(VERSION)" -m "$(VERSION)"
-	git push $(RELEASE_REMOTE) "$(VERSION)"
+	git push "$(RELEASE_REMOTE)" "$(VERSION)"
 	@echo
 	@echo "Tagged and pushed $(VERSION). Watch the release run:"
 	@echo "  https://github.com/arc53/DocsGPT-cli/actions/workflows/release.yml"

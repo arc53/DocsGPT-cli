@@ -18,7 +18,7 @@ make release VERSION=v1.6.0 RELEASE_REMOTE=upstream
 ```
 
 The target refuses to tag unless the version is explicit and well-formed, you
-are on `main`, the tree is clean, `HEAD` matches `origin/main`, the tag does not
+are on `main`, the tree is clean, `HEAD` matches the release remote's `main`, the tag does not
 already exist, and the tests pass (both modules). It then creates an annotated tag and
 pushes it, which starts
 [`release.yml`](.github/workflows/release.yml).
@@ -102,8 +102,8 @@ check` and has no effect.)
 The CLI depends on it through a pinned `require` in `go.mod`. `go.work` is
 committed so local builds compile against the working tree's `sdk/`, which means
 a change to both lands in one commit and needs no tag in between. Release builds
-set `GOWORK: "off"`, so the released binary is built from the pinned version —
-byte-for-byte what `go install` of the same tag produces.
+set `GOWORK: "off"`, so the released binary is built from the same pinned sdk
+version that `go install` of that tag resolves.
 
 `go.work` does not widen `./...`, though: a separate module is never matched by
 a pattern from the parent, and `./sdk/...` only resolves in workspace mode. So
@@ -116,9 +116,10 @@ a pattern from the parent, and `./sdk/...` only resolves in workspace mode. So
 3. `GOWORK=off go get github.com/arc53/DocsGPT-cli/sdk@v0.2.0` and commit the
    `go.mod`/`go.sum` bump, so the next CLI release builds against it.
 
-Step 3 matters: without it the CLI keeps building against the older pinned
-version in release builds while local builds silently use the new working-tree
-code, and the two drift apart.
+Step 3 matters: without it local builds silently use the new working-tree code
+while release builds keep compiling the older pinned version. `make release`
+builds and tests with `GOWORK=off` for exactly this reason, so a forgotten bump
+fails before the tag exists rather than after it is published and immutable.
 
 ## Prerequisites
 
