@@ -31,7 +31,10 @@ jobs:
       # would start there and drop everything since the last v* tag.
       - name: Resolve the previous CLI tag
         run: |
-          previous="$(git tag -l 'v*' --sort=-v:refname --merged "${GITHUB_REF_NAME}^" | head -n1)"
+          # refs/tags/ disambiguates a tag from a branch of the same name.
+          # A tag on a root commit has no ^, and must not fail the release.
+          previous="$(git tag -l 'v*' --sort=-v:refname \
+            --merged "refs/tags/${GITHUB_REF_NAME}^" 2>/dev/null | head -n1 || true)"
           if [ -n "$previous" ]; then
             echo "GORELEASER_PREVIOUS_TAG=$previous" >> "$GITHUB_ENV"
           fi

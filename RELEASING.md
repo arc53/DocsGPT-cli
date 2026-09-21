@@ -12,7 +12,7 @@ make release VERSION=v1.6.0
 
 The target refuses to tag unless the version is explicit and well-formed, you
 are on `main`, the tree is clean, `HEAD` matches `origin/main`, the tag does not
-already exist, and `go test ./...` passes. It then creates an annotated tag and
+already exist, and the tests pass (both modules). It then creates an annotated tag and
 pushes it, which starts
 [`release.yml`](.github/workflows/release.yml).
 

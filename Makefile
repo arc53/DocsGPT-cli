@@ -8,9 +8,12 @@ RELEASE_BRANCH ?= main
 build:
 	go build -ldflags "-X 'github.com/arc53/DocsGPT-cli/cmd.Version=$(VERSION)'" -o docsgpt-cli ./cmd/docsgpt-cli
 
-# sdk/ is a separate module, so ./... from the root does not reach it.
+# sdk/ is a separate module: ./... from the root never reaches it, and
+# ./sdk/... only resolves in workspace mode. Running it from its own directory
+# works with or without go.work.
 test:
-	go test ./... ./sdk/...
+	go test ./...
+	go -C sdk test ./...
 
 clean:
 	rm -f docsgpt-cli
@@ -37,7 +40,8 @@ release:
 		test -z "$$remote_tag" || { echo "tag $(VERSION) already exists on origin"; exit 1; }
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/$(RELEASE_BRANCH))" \
 		|| { echo "HEAD is not origin/$(RELEASE_BRANCH); push or pull first"; exit 1; }
-	go test ./... ./sdk/...
+	go test ./...
+	go -C sdk test ./...
 	git tag -a "$(VERSION)" -m "$(VERSION)"
 	git push origin "$(VERSION)"
 	@echo
