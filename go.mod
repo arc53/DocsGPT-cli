@@ -3,6 +3,7 @@ module github.com/arc53/DocsGPT-cli
 go 1.25.0
 
 require (
+	github.com/arc53/DocsGPT-cli/sdk v0.1.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834

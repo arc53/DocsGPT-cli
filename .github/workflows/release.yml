@@ -47,6 +47,11 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Build against the sdk version pinned in go.mod, not the working
+          # tree's sdk/. Without this the workspace wins and the released
+          # binary could be built from code no published sdk version contains
+          # — while `go install` of the same tag builds the pinned one.
+          GOWORK: "off"
           # The workflow only triggers on v*, so this is always the CLI tag.
           # Without it GoReleaser derives the version from git describe, which
           # can pick up an sdk/vX.Y.Z tag on the same commit and stamp the

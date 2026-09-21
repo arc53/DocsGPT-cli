@@ -3,15 +3,15 @@ package tools
 import (
 	"encoding/json"
 
-	"github.com/arc53/DocsGPT-cli/internal/api"
+	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 )
 
 // ToolDefinitions returns the tool schemas to send in chat completion requests.
-func ToolDefinitions() []api.Tool {
-	return []api.Tool{
+func ToolDefinitions() []docsgpt.Tool {
+	return []docsgpt.Tool{
 		{
 			Type: "function",
-			Function: api.ToolFunction{
+			Function: docsgpt.ToolFunction{
 				Name:        "run_command",
 				Description: "Execute a shell command on the user's local machine. The user will be prompted to approve before execution. Use this to help with file operations, git commands, builds, deployments, and system administration tasks.",
 				Parameters: json.RawMessage(`{
@@ -32,7 +32,7 @@ func ToolDefinitions() []api.Tool {
 		},
 		{
 			Type: "function",
-			Function: api.ToolFunction{
+			Function: docsgpt.ToolFunction{
 				Name:        "read_file",
 				Description: "Read the contents of a file on the user's local machine.",
 				Parameters: json.RawMessage(`{
@@ -49,7 +49,7 @@ func ToolDefinitions() []api.Tool {
 		},
 		{
 			Type: "function",
-			Function: api.ToolFunction{
+			Function: docsgpt.ToolFunction{
 				Name:        "write_file",
 				Description: "Write content to a file on the user's local machine. The user will be prompted to approve.",
 				Parameters: json.RawMessage(`{

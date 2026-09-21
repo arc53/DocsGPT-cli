@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/arc53/DocsGPT-cli/internal/api"
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	ctxenrich "github.com/arc53/DocsGPT-cli/internal/context"
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/tools"
+	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 
 	"github.com/spf13/cobra"
 )
@@ -41,13 +41,13 @@ This command will provide a contextual answer and, if applicable, copy a relevan
 		}
 
 		baseURL := cfg.ResolveURL(globalURL)
-		client := api.NewClient(baseURL, apiKey)
+		client := docsgpt.NewClient(baseURL, apiKey)
 
 		question := strings.Join(args, " ")
 		includeContext := !globalNoContext
 		fullQuestion := ctxenrich.BuildQuestion(question, cfg.Settings, includeContext)
 
-		messages := []api.Message{
+		messages := []docsgpt.Message{
 			{Role: "user", Content: fullQuestion},
 		}
 
@@ -56,7 +56,7 @@ This command will provide a contextual answer and, if applicable, copy a relevan
 		fmt.Print(display.Prompt("❯ "))
 
 		ctx := context.Background()
-		var toolDefs []api.Tool
+		var toolDefs []docsgpt.Tool
 		if !globalNoContext {
 			toolDefs = tools.ToolDefinitions()
 		}
@@ -64,11 +64,11 @@ This command will provide a contextual answer and, if applicable, copy a relevan
 
 		renderer := display.NewStreamRenderer()
 
-		onDelta := func(delta api.Delta, finishReason string) {
+		onDelta := func(delta docsgpt.Delta, finishReason string) {
 			renderer.Delta(delta)
 		}
 
-		onToolCall := func(tc api.ToolCall) string {
+		onToolCall := func(tc docsgpt.ToolCall) string {
 			return handleToolCall(ctx, tc, timeout)
 		}
 
