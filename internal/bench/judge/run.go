@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// Uses plain net/http (not internal/api) so the judge stays a self-contained
+// Uses plain net/http (not the sdk module) so the judge stays a self-contained
 // grading client independent of the interactive chat plumbing.
 
 type chatMessage struct {

@@ -10,8 +10,15 @@ is produced by GoReleaser from that one tag.
 make release VERSION=v1.6.0
 ```
 
+Releases are cut on `origin` by default. In a clone where the canonical
+repository is under another remote name — a fork-based one, say — name it:
+
+```bash
+make release VERSION=v1.6.0 RELEASE_REMOTE=upstream
+```
+
 The target refuses to tag unless the version is explicit and well-formed, you
-are on `main`, the tree is clean, `HEAD` matches `origin/main`, the tag does not
+are on `main`, the tree is clean, `HEAD` matches the release remote's `main`, the tag does not
 already exist, and the tests pass (both modules). It then creates an annotated tag and
 pushes it, which starts
 [`release.yml`](.github/workflows/release.yml).
@@ -92,22 +99,27 @@ one from `git describe` and stamp the binary `vsdk/v0.1.0-…`. (`git.ignore_tag
 looks like the right guard but is GoReleaser Pro only — it passes `goreleaser
 check` and has no effect.)
 
-The CLI does not import the sdk module yet — it still uses `internal/api`. Go
-cannot resolve a module in the same repository until that module has a tag: a
-`require` on an unpublished version fails even in workspace mode, and `go mod
-tidy` fails with it. So the switch-over is a follow-up:
+The CLI depends on it through a pinned `require` in `go.mod`. `go.work` is
+committed so local builds compile against the working tree's `sdk/`, which means
+a change to both lands in one commit and needs no tag in between. Release builds
+set `GOWORK: "off"`, so the released binary is built from the same pinned sdk
+version that `go install` of that tag resolves.
 
-1. Merge this, then push `sdk/v0.1.0`, then cut a CLI release: until a `v*`
-   tag carries the renamed module, `go install …@latest` still resolves
-   v1.5.1, whose go.mod says `module docsgpt-cli`, and fails.
-2. `go get github.com/arc53/DocsGPT-cli/sdk@v0.1.0`, delete `internal/api`,
-   point the CLI at the module, and set `GOWORK=off` for release builds so the
-   released binary is built from the pinned version, exactly as `go install`
-   builds it.
+`go.work` does not widen `./...`, though: a separate module is never matched by
+a pattern from the parent, and `./sdk/...` only resolves in workspace mode. So
+`make test` runs `go -C sdk test ./...` as its own step.
 
-`go.work` is committed so the CLI can be developed against the local `sdk/`.
-It does not widen `./...`, though — a separate module is never matched by a
-pattern from the parent — so `make test` runs `go test ./... ./sdk/...`.
+### Releasing a new sdk version
+
+1. Land the change on `main`.
+2. `git tag -a sdk/v0.2.0 -m sdk/v0.2.0 && git push <remote> sdk/v0.2.0`
+3. `GOWORK=off go get github.com/arc53/DocsGPT-cli/sdk@v0.2.0` and commit the
+   `go.mod`/`go.sum` bump, so the next CLI release builds against it.
+
+Step 3 matters: without it local builds silently use the new working-tree code
+while release builds keep compiling the older pinned version. `make release`
+builds and tests with `GOWORK=off` for exactly this reason, so a forgotten bump
+fails before the tag exists rather than after it is published and immutable.
 
 ## Prerequisites
 

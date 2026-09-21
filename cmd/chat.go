@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/arc53/DocsGPT-cli/internal/api"
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	ctxenrich "github.com/arc53/DocsGPT-cli/internal/context"
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/tools"
+	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 
 	prompt "github.com/elk-language/go-prompt"
 	pstrings "github.com/elk-language/go-prompt/strings"
@@ -46,7 +46,7 @@ live autocomplete.`,
 		}
 
 		baseURL := cfg.ResolveURL(globalURL)
-		client := api.NewClient(baseURL, apiKey)
+		client := docsgpt.NewClient(baseURL, apiKey)
 
 		cwd, _ := os.Getwd()
 		fmt.Println(display.RenderHeader(keyName, baseURL, cwd))
@@ -55,13 +55,13 @@ live autocomplete.`,
 		}
 		fmt.Println()
 
-		var history []api.Message
+		var history []docsgpt.Message
 
 		// Optionally add context as system message
 		if !globalNoContext {
 			ctx := ctxenrich.BuildContext(cfg.Settings)
 			if ctx != "" {
-				history = append(history, api.Message{
+				history = append(history, docsgpt.Message{
 					Role:    "system",
 					Content: "Here is context about the user's environment:\n" + ctx,
 				})
@@ -74,11 +74,11 @@ live autocomplete.`,
 
 // chatSession holds the mutable state for an interactive chat.
 type chatSession struct {
-	client        *api.Client
-	history       []api.Message
+	client        *docsgpt.Client
+	history       []docsgpt.Message
 	lastAnswer    string
 	showReasoning bool
-	toolDefs      []api.Tool
+	toolDefs      []docsgpt.Tool
 	timeout       time.Duration
 }
 
@@ -93,7 +93,7 @@ func (s *chatSession) executor(input string) {
 		fmt.Println("Goodbye!")
 		os.Exit(0)
 	case "/clear":
-		var newHistory []api.Message
+		var newHistory []docsgpt.Message
 		if len(s.history) > 0 && s.history[0].Role == "system" {
 			newHistory = append(newHistory, s.history[0])
 		}
@@ -123,7 +123,7 @@ func (s *chatSession) executor(input string) {
 		return
 	}
 
-	s.history = append(s.history, api.Message{Role: "user", Content: input})
+	s.history = append(s.history, docsgpt.Message{Role: "user", Content: input})
 
 	// The prompt library restores cooked mode (ISIG on) while the executor
 	// runs, so Ctrl-C here is a real SIGINT. Turn it into a cancellation of
@@ -134,11 +134,11 @@ func (s *chatSession) executor(input string) {
 	renderer := display.NewStreamRenderer()
 	renderer.ShowReasoning = s.showReasoning
 
-	onDelta := func(delta api.Delta, finishReason string) {
+	onDelta := func(delta docsgpt.Delta, finishReason string) {
 		renderer.Delta(delta)
 	}
 
-	onToolCall := func(tc api.ToolCall) string {
+	onToolCall := func(tc docsgpt.ToolCall) string {
 		return handleToolCall(ctx, tc, s.timeout)
 	}
 
@@ -190,8 +190,8 @@ func (s *chatSession) completer(d prompt.Document) ([]prompt.Suggest, pstrings.R
 	return prompt.FilterHasPrefix(suggestions, text, true), start, end
 }
 
-func runChatLoop(client *api.Client, history []api.Message) error {
-	var toolDefs []api.Tool
+func runChatLoop(client *docsgpt.Client, history []docsgpt.Message) error {
+	var toolDefs []docsgpt.Tool
 	if !globalNoContext {
 		toolDefs = tools.ToolDefinitions()
 	}
@@ -228,7 +228,7 @@ func runChatLoop(client *api.Client, history []api.Message) error {
 // and the user's approval, then executes it. A cancelled ctx (Ctrl-C) skips
 // the call: before the approval prompt, and again after it, so a Ctrl-C
 // pressed while the prompt was waiting never runs the command.
-func handleToolCall(ctx context.Context, tc api.ToolCall, timeout time.Duration) string {
+func handleToolCall(ctx context.Context, tc docsgpt.ToolCall, timeout time.Duration) string {
 	if ctx.Err() != nil {
 		return "User interrupted before this tool call ran."
 	}

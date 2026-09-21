@@ -41,7 +41,7 @@ type v1Message struct {
 }
 
 // v1Request is the request body. It is built locally rather than through
-// internal/api so bench can send parts-array content (inline files) without
+// the sdk module so bench can send parts-array content (inline files) without
 // touching the interactive chat plumbing.
 type v1Request struct {
 	Model         string        `json:"model"`

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/arc53/DocsGPT-cli/internal/api"
+	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 )
 
 // StreamRenderer accumulates streaming content and provides markdown rendering on finish.
@@ -21,7 +21,7 @@ func NewStreamRenderer() *StreamRenderer {
 
 // Delta processes a streaming delta, printing content immediately.
 // Reasoning is printed only if ShowReasoning is true.
-func (r *StreamRenderer) Delta(delta api.Delta) {
+func (r *StreamRenderer) Delta(delta docsgpt.Delta) {
 	if delta.ReasoningContent != "" {
 		r.reasoningBuf.WriteString(delta.ReasoningContent)
 		if r.ShowReasoning {
@@ -65,7 +65,7 @@ func containsMarkdown(s string) bool {
 }
 
 // StreamDelta prints a streaming delta to the terminal (legacy convenience function).
-func StreamDelta(delta api.Delta) {
+func StreamDelta(delta docsgpt.Delta) {
 	if delta.ReasoningContent != "" {
 		fmt.Print(T.Reasoning.Render(delta.ReasoningContent))
 	}

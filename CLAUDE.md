@@ -11,9 +11,13 @@ cmd/docsgpt-cli/     → Entry point (package main), calls cmd.Execute(). Lives 
                        element)
 sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, package
                        docsgpt: the public chat client (Client, Send, SendStream,
-                       RunWithTools, StreamHandler, APIError). Stdlib-only, tagged
-                       sdk/vX.Y.Z independently of the CLI, currently pre-v1. The
-                       CLI does NOT import it yet — see RELEASING.md
+                       RunWithTools, StreamHandler, APIError) — OpenAI-compatible
+                       types and the tool-call loop. Stdlib-only, tagged sdk/vX.Y.Z
+                       independently of the CLI, currently pre-v1. The CLI depends
+                       on it through a pinned require in go.mod (imported as
+                       `docsgpt "…/sdk"`, since the package name is not the last
+                       path element); go.work points local builds at ./sdk, and
+                       release builds set GOWORK=off to use the pinned version
 cmd/
   root.go            → Cobra root command, global flags (--url, --key, --token, --no-stream, --no-context, --auto-approve, --timeout)
   ask.go             → Single-shot Q&A with streaming + tool support
@@ -29,9 +33,6 @@ cmd/
   sources.go         → sources list / upload / delete, prompts list, tools list
   utils.go           → printError, extractCommand, copyToClipboard
 internal/
-  api/
-    types.go         → OpenAI-compatible request/response types (Message, ChatRequest, ChatResponse, Delta, Tool, ToolCall)
-    client.go        → HTTP client: Send (sync), SendStream (SSE), RunWithTools (tool call loop)
   config/
     config.go        → Unified config load/save/migrate from ~/.docsgpt/config.json; token/URL resolution (flag > env > config), token redaction
   bench/

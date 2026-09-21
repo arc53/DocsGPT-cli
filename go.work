@@ -2,9 +2,9 @@ go 1.25.0
 
 // The CLI is developed against the sdk/ module in this repository rather than
 // the version pinned in go.mod, so a change to both lands in one commit and
-// needs no tag in between. Once the CLI pins the sdk module, release builds
-// will set GOWORK=off so the binary comes from the pinned version, exactly as
-// `go install` builds it (see RELEASING.md).
+// needs no tag in between. Release builds and the `make release` gate set
+// GOWORK=off so they compile the version pinned in go.mod instead, which is
+// what `go install` of that tag resolves (see RELEASING.md).
 use (
 	.
 	./sdk
