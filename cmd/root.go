@@ -4,16 +4,58 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"strings"
 
-	"docsgpt-cli/internal/config"
-	"docsgpt-cli/internal/display"
-	"docsgpt-cli/internal/update"
+	"github.com/arc53/DocsGPT-cli/internal/config"
+	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/update"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
+// Version is stamped at link time (see the Makefile and .goreleaser.yaml).
+// It stays "dev" for a plain `go build`, and resolveVersion fills it in for a
+// `go install` build, which carries no ldflags.
 var Version = "dev"
+
+// resolveVersion recovers the version of a binary built by `go install
+// github.com/arc53/DocsGPT-cli/cmd/docsgpt-cli@vX.Y.Z`, which the Go toolchain
+// records in the build info but cannot stamp with ldflags. Without it such a
+// build reports "dev", which IsReleaseVersion rejects — so it would never check
+// for updates and `docsgpt-cli update` would refuse to run.
+func resolveVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	return versionFromBuildInfo(info)
+}
+
+// versionFromBuildInfo returns the release version a binary was installed at,
+// or "" when it was not installed from the module cache at a release version.
+//
+// Go also stamps Main.Version from VCS tags, so `go build` on a clean checkout
+// of v1.5.1 reports v1.5.1 and would otherwise be indistinguishable from a
+// released binary — auto-update would then replace a developer's local build
+// with the latest release behind their back. A module-cache build carries a
+// checksum in Main.Sum; one built from a working tree never does, and carries
+// vcs.* build settings instead.
+func versionFromBuildInfo(info *debug.BuildInfo) string {
+	if info.Main.Sum == "" {
+		return ""
+	}
+	for _, setting := range info.Settings {
+		if strings.HasPrefix(setting.Key, "vcs") {
+			return ""
+		}
+	}
+	if !update.IsReleaseVersion(info.Main.Version) {
+		return ""
+	}
+	return info.Main.Version
+}
 
 var (
 	globalURL         string
@@ -150,6 +192,15 @@ func updateGate() (mode string, exePath string) {
 }
 
 func init() {
+	// Runs after the package-level vars, so rootCmd.Version has already been
+	// copied from the unresolved Version and has to be refreshed here too.
+	if Version == "dev" {
+		if v := resolveVersion(); v != "" {
+			Version = v
+		}
+	}
+	rootCmd.Version = Version
+
 	rootCmd.PersistentFlags().StringVar(&globalURL, "url", "", "Override API base URL")
 	rootCmd.PersistentFlags().StringVar(&globalKey, "key", "", "Use a specific API key by name")
 	rootCmd.PersistentFlags().StringVar(&globalToken, "token", "", "Personal access token (dgpt_pat_…); overrides DOCSGPT_TOKEN and the stored token")

@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"docsgpt-cli/internal/bench/assert"
-	"docsgpt-cli/internal/bench/runner"
+	"github.com/arc53/DocsGPT-cli/internal/bench/assert"
+	"github.com/arc53/DocsGPT-cli/internal/bench/runner"
 )
 
 // JUnit writes a single <testsuite> with one <testcase> per case. Failing cases

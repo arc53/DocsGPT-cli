@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"docsgpt-cli/internal/config"
+	"github.com/arc53/DocsGPT-cli/internal/config"
 )
 
 const checkInterval = 24 * time.Hour

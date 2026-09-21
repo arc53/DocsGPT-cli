@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"time"
 
-	"docsgpt-cli/internal/config"
+	"github.com/arc53/DocsGPT-cli/internal/config"
 )
 
 // A staged update is a fully downloaded and checksum-verified binary waiting

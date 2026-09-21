@@ -3,7 +3,7 @@ package tools
 import (
 	"encoding/json"
 
-	"docsgpt-cli/internal/api"
+	"github.com/arc53/DocsGPT-cli/internal/api"
 )
 
 // ToolDefinitions returns the tool schemas to send in chat completion requests.

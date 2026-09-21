@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"time"
 
-	"docsgpt-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/display"
 )
 
 // stripToolSuffix removes server-appended suffixes like "_ct0" from tool names.

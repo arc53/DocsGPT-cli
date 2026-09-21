@@ -12,7 +12,7 @@ make release VERSION=v1.6.0
 
 The target refuses to tag unless the version is explicit and well-formed, you
 are on `main`, the tree is clean, `HEAD` matches `origin/main`, the tag does not
-already exist, and `go test ./...` passes. It then creates an annotated tag and
+already exist, and the tests pass (both modules). It then creates an annotated tag and
 pushes it, which starts
 [`release.yml`](.github/workflows/release.yml).
 
@@ -25,7 +25,7 @@ git tag -a v1.6.0 -m v1.6.0 && git push origin v1.6.0
 ## What the release run does
 
 1. Builds `linux`/`darwin`/`windows` × `amd64`/`arm64` (no windows/arm64), with
-   the version stamped via `-X docsgpt-cli/cmd.Version`.
+   the version stamped via `-X github.com/arc53/DocsGPT-cli/cmd.Version`.
 2. Publishes archives under **version-less names** —
    `docsgpt-cli_<os>_<arch>.tar.gz` (`.zip` on Windows) — plus `checksums.txt`.
    These names are load-bearing: the self-updater builds them from
@@ -71,6 +71,43 @@ rm Formula/docsgpt-cli.rb
 
 `tap_migrations.json` is what moves an existing install across on the user's
 next `brew update`.
+
+## The sdk module
+
+`sdk/` is a **separate Go module** (`github.com/arc53/DocsGPT-cli/sdk`) that
+ships the public chat client. It is versioned independently of the CLI so it can
+stay below v1 — and reshape its API — while the CLI goes on releasing v1.x.
+
+Its tags are prefixed, which is how Go finds a module in a subdirectory:
+
+```bash
+git tag sdk/v0.1.0 && git push origin sdk/v0.1.0
+```
+
+Those tags are **not** CLI releases. `release.yml` only fires on `v*`, which
+`sdk/v0.1.0` does not match, and it passes `GORELEASER_CURRENT_TAG` so the
+version comes from the tag that triggered the run. That matters when an sdk tag
+and a CLI tag sit on the same commit: GoReleaser would otherwise take the sdk
+one from `git describe` and stamp the binary `vsdk/v0.1.0-…`. (`git.ignore_tags`
+looks like the right guard but is GoReleaser Pro only — it passes `goreleaser
+check` and has no effect.)
+
+The CLI does not import the sdk module yet — it still uses `internal/api`. Go
+cannot resolve a module in the same repository until that module has a tag: a
+`require` on an unpublished version fails even in workspace mode, and `go mod
+tidy` fails with it. So the switch-over is a follow-up:
+
+1. Merge this, then push `sdk/v0.1.0`, then cut a CLI release: until a `v*`
+   tag carries the renamed module, `go install …@latest` still resolves
+   v1.5.1, whose go.mod says `module docsgpt-cli`, and fails.
+2. `go get github.com/arc53/DocsGPT-cli/sdk@v0.1.0`, delete `internal/api`,
+   point the CLI at the module, and set `GOWORK=off` for release builds so the
+   released binary is built from the pinned version, exactly as `go install`
+   builds it.
+
+`go.work` is committed so the CLI can be developed against the local `sdk/`.
+It does not widen `./...`, though — a separate module is never matched by a
+pattern from the parent — so `make test` runs `go test ./... ./sdk/...`.
 
 ## Prerequisites
 

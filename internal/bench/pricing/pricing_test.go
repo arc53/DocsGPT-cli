@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"docsgpt-cli/internal/bench/spec"
+	"github.com/arc53/DocsGPT-cli/internal/bench/spec"
 )
 
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }

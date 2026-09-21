@@ -5,7 +5,15 @@ Go CLI tool for interacting with the DocsGPT API from the terminal (v1.0.0).
 ## Project structure
 
 ```
-main.go              → Entry point, calls cmd.Execute()
+cmd/docsgpt-cli/     → Entry point (package main), calls cmd.Execute(). Lives here
+                       so `go install .../cmd/docsgpt-cli@latest` names the binary
+                       docsgpt-cli rather than DocsGPT-cli (the module path's last
+                       element)
+sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, package
+                       docsgpt: the public chat client (Client, Send, SendStream,
+                       RunWithTools, StreamHandler, APIError). Stdlib-only, tagged
+                       sdk/vX.Y.Z independently of the CLI, currently pre-v1. The
+                       CLI does NOT import it yet — see RELEASING.md
 cmd/
   root.go            → Cobra root command, global flags (--url, --key, --token, --no-stream, --no-context, --auto-approve, --timeout)
   ask.go             → Single-shot Q&A with streaming + tool support
@@ -129,12 +137,14 @@ Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on fi
 ## Build & run
 
 ```bash
-go build -o docsgpt-cli
+go build -o docsgpt-cli ./cmd/docsgpt-cli
 ./docsgpt-cli --help
 ```
 
 ## Notes
 
+- Module path is `github.com/arc53/DocsGPT-cli` (mixed case, matching the repo; the Go proxy escapes it as `!docs!g!p!t-cli`, which users never type). `go.work` is committed and spans `.` and `./sdk`
+- `cmd.Version` is stamped by ldflags for release and `make build`; `resolveVersion` in root.go recovers it from `debug.ReadBuildInfo` for `go install` builds, which carry no ldflags and would otherwise report "dev" and disable their own update checks
 - Releases: pushing a `v*` tag runs `.github/workflows/release.yml` → GoReleaser builds linux/darwin/windows (amd64+arm64) archives + checksums.txt with stable asset names, attaches `deployment/install.sh`/`install.ps1`, and commits a Homebrew **cask** to `arc53/homebrew-DocsGPT-cli` with `HOMEBREW_TAP_TOKEN` (`skip_upload: auto` keeps prereleases out of brew; the job only runs on `arc53/DocsGPT-cli`). `make release VERSION=vX.Y.Z` gates the tag; see `RELEASING.md`
 - Install script: `docs.ac/install-cli` redirects to `releases/latest/download/install.sh`, so the live installer is whatever the newest release carries — a fix lands only on the next tag. Both installers verify the archive against `checksums.txt`, then hand off to `docsgpt-cli install`, which owns the PATH logic for every platform
 - SSE streaming parsed with stdlib bufio.Scanner (no external SSE lib)

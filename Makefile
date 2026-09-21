@@ -1,13 +1,19 @@
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# --match 'v*' keeps an sdk/vX.Y.Z tag, which is usually the nearest one, from
+# becoming the CLI's version.
+VERSION ?= $(shell git describe --tags --always --dirty --match 'v*' 2>/dev/null || echo dev)
 RELEASE_BRANCH ?= main
 
 .PHONY: build clean test release
 
 build:
-	go build -ldflags "-X 'docsgpt-cli/cmd.Version=$(VERSION)'" -o docsgpt-cli .
+	go build -ldflags "-X 'github.com/arc53/DocsGPT-cli/cmd.Version=$(VERSION)'" -o docsgpt-cli ./cmd/docsgpt-cli
 
+# sdk/ is a separate module: ./... from the root never reaches it, and
+# ./sdk/... only resolves in workspace mode. Running it from its own directory
+# works with or without go.work.
 test:
 	go test ./...
+	go -C sdk test ./...
 
 clean:
 	rm -f docsgpt-cli
@@ -35,6 +41,7 @@ release:
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/$(RELEASE_BRANCH))" \
 		|| { echo "HEAD is not origin/$(RELEASE_BRANCH); push or pull first"; exit 1; }
 	go test ./...
+	go -C sdk test ./...
 	git tag -a "$(VERSION)" -m "$(VERSION)"
 	git push origin "$(VERSION)"
 	@echo

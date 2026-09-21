@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"docsgpt-cli/internal/bench/assert"
-	"docsgpt-cli/internal/bench/runner"
-	"docsgpt-cli/internal/bench/target"
-	"docsgpt-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/bench/assert"
+	"github.com/arc53/DocsGPT-cli/internal/bench/runner"
+	"github.com/arc53/DocsGPT-cli/internal/bench/target"
+	"github.com/arc53/DocsGPT-cli/internal/display"
 )
 
 // xmlValid reports whether s is well-formed XML.

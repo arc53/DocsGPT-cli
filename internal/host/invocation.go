@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"time"
 
-	"docsgpt-cli/internal/tools"
+	"github.com/arc53/DocsGPT-cli/internal/tools"
 )
 
 // ExecuteAndStream runs the invocation locally and streams stdout/stderr to

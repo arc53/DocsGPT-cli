@@ -26,6 +26,19 @@ jobs:
         with:
           go-version: stable
 
+      # GoReleaser takes the previous tag from git describe, which sees
+      # sdk/vX.Y.Z tags too. With one between two CLI releases the changelog
+      # would start there and drop everything since the last v* tag.
+      - name: Resolve the previous CLI tag
+        run: |
+          # refs/tags/ disambiguates a tag from a branch of the same name.
+          # A tag on a root commit has no ^, and must not fail the release.
+          previous="$(git tag -l 'v*' --sort=-v:refname \
+            --merged "refs/tags/${GITHUB_REF_NAME}^" 2>/dev/null | head -n1 || true)"
+          if [ -n "$previous" ]; then
+            echo "GORELEASER_PREVIOUS_TAG=$previous" >> "$GITHUB_ENV"
+          fi
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -34,6 +47,11 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The workflow only triggers on v*, so this is always the CLI tag.
+          # Without it GoReleaser derives the version from git describe, which
+          # can pick up an sdk/vX.Y.Z tag on the same commit and stamp the
+          # binary "vsdk/v0.1.0-...". Verified: it does exactly that.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
           # Fine-grained token with contents:write on arc53/homebrew-DocsGPT-cli
           # only; GITHUB_TOKEN cannot reach another repository.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

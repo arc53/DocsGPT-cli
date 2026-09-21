@@ -60,7 +60,23 @@ as is or use the `install` command to add the binary to your system's `PATH`:
 ./docsgpt-cli install
 ```
 
-### 4. Compile from Source
+### 4. go install
+
+```bash
+go install github.com/arc53/DocsGPT-cli/cmd/docsgpt-cli@latest
+```
+
+Requires v1.6.0 or newer — earlier releases predate the module rename.
+
+Installs into `$(go env GOBIN)` (or `$(go env GOPATH)/bin`). The binary knows
+which release it came from and self-updates like any other, so you do not have
+to re-run `go install` to stay current.
+
+The path ends in `/cmd/docsgpt-cli` on purpose: `go install` names the binary
+after the last element of the path, and installing the module root would
+produce one called `DocsGPT-cli`.
+
+### 5. Compile from Source
 
 If you want to make adjustments or compile the binary yourself, clone the repository and compile it:
 
@@ -71,6 +87,29 @@ make build
 ```
 
 After compiling, follow the same steps as for the binary.
+
+---
+
+## Go SDK
+
+The DocsGPT chat client the CLI is built on is published as its own Go module:
+
+```go
+import "github.com/arc53/DocsGPT-cli/sdk"
+
+client := docsgpt.NewClient("https://gptcloud.arc53.com", apiKey)
+resp, err := client.Send(ctx, docsgpt.ChatRequest{
+	Messages: []docsgpt.Message{{Role: "user", Content: "What is DocsGPT?"}},
+})
+```
+
+```bash
+go get github.com/arc53/DocsGPT-cli/sdk
+```
+
+It has no dependencies beyond the standard library, and is versioned
+independently of the CLI under `sdk/vX.Y.Z` tags. It is below v1, so the API
+may still change.
 
 ---
 

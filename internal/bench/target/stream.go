@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"docsgpt-cli/internal/bench/spec"
+	"github.com/arc53/DocsGPT-cli/internal/bench/spec"
 )
 
 // streamTarget runs a question against POST {base}/stream, the native DocsGPT

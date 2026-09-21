@@ -10,9 +10,9 @@ import (
 	"os"
 	"strings"
 
-	"docsgpt-cli/internal/config"
-	"docsgpt-cli/internal/display"
-	"docsgpt-cli/internal/manage"
+	"github.com/arc53/DocsGPT-cli/internal/config"
+	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/manage"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"

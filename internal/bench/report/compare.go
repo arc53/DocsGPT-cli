@@ -5,8 +5,8 @@ import (
 	"io"
 	"strings"
 
-	"docsgpt-cli/internal/bench/runner"
-	"docsgpt-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/bench/runner"
+	"github.com/arc53/DocsGPT-cli/internal/display"
 )
 
 // Compare writes an A/B (or A/B/C…) table: one row per case, one column per

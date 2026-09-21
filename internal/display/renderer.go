@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"docsgpt-cli/internal/api"
+	"github.com/arc53/DocsGPT-cli/internal/api"
 )
 
 // StreamRenderer accumulates streaming content and provides markdown rendering on finish.

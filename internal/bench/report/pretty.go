@@ -5,9 +5,9 @@ import (
 	"io"
 	"strings"
 
-	"docsgpt-cli/internal/bench/assert"
-	"docsgpt-cli/internal/bench/runner"
-	"docsgpt-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/bench/assert"
+	"github.com/arc53/DocsGPT-cli/internal/bench/runner"
+	"github.com/arc53/DocsGPT-cli/internal/display"
 )
 
 // verboseAnswerLimit caps how much of each run's answer is echoed in verbose
