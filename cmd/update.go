@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -34,6 +35,9 @@ var updateCmd = &cobra.Command{
 		if !update.IsReleaseVersion(Version) {
 			fmt.Println(display.Warn(fmt.Sprintf("This binary reports version %q, which is not a tagged release build.", Version)))
 			fmt.Println("If you built from source, update with 'git pull && make build'.")
+			// A prerelease installed with DOCSGPT_CLI_VERSION lands here too,
+			// and for that the installer is the way back to a release build.
+			fmt.Println("If you installed a prerelease, re-run the installer: " + installerCommand())
 			return nil
 		}
 
@@ -70,7 +74,7 @@ var updateCmd = &cobra.Command{
 			return err
 		}
 		if update.IsHomebrewPath(exePath) {
-			fmt.Println(display.Warn("This binary is managed by Homebrew. Run 'brew upgrade docsgpt-cli' instead."))
+			fmt.Println(display.Warn(homebrewAdvice()))
 			return nil
 		}
 		if !isWritable(filepath.Dir(exePath)) {
@@ -145,4 +149,23 @@ func init() {
 	updateCmd.Flags().BoolVar(&updateRollback, "rollback", false, "Restore the binary from before the last update")
 	updateCmd.Flags().BoolVar(&updateWorker, "worker", false, "Run the background check/stage pass")
 	updateCmd.Flags().MarkHidden("worker")
+}
+
+// installerCommand is the install one-liner for this platform.
+func installerCommand() string {
+	if runtime.GOOS == "windows" {
+		return "irm https://docs.ac/install-cli.ps1 | iex"
+	}
+	return "curl -fsSL https://docs.ac/install-cli | bash"
+}
+
+// homebrewAdvice explains how to move a Homebrew-managed binary forward.
+// Casks are macOS-only, so on Linux there is no brew upgrade to point at:
+// Homebrew no longer ships docsgpt-cli there at all.
+func homebrewAdvice() string {
+	if runtime.GOOS == "linux" {
+		return "This binary was installed by Homebrew, which no longer ships docsgpt-cli for Linux. " +
+			"Remove it with 'brew uninstall docsgpt-cli', then install with: " + installerCommand()
+	}
+	return "This binary is managed by Homebrew. Run 'brew upgrade --cask docsgpt-cli' instead."
 }

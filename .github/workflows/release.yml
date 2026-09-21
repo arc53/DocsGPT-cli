@@ -10,6 +10,10 @@ permissions:
 
 jobs:
   release:
+    # Only the canonical repository publishes. A tag pushed on a fork would
+    # otherwise build a Cask whose download URLs point at the fork and commit
+    # it over the real one in the shared tap.
+    if: github.repository == 'arc53/DocsGPT-cli'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -30,3 +34,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained token with contents:write on arc53/homebrew-DocsGPT-cli
+          # only; GITHUB_TOKEN cannot reach another repository.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

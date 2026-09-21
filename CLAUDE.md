@@ -158,7 +158,8 @@ go build -o docsgpt-cli
 
 ## Notes
 
-- Releases: pushing a `v*` tag runs `.github/workflows/release.yml` → GoReleaser builds linux/darwin/windows (amd64+arm64) archives + checksums.txt with stable asset names
+- Releases: pushing a `v*` tag runs `.github/workflows/release.yml` → GoReleaser builds linux/darwin/windows (amd64+arm64) archives + checksums.txt with stable asset names, attaches `deployment/install.sh`/`install.ps1`, and commits a Homebrew **cask** to `arc53/homebrew-DocsGPT-cli` with `HOMEBREW_TAP_TOKEN` (`skip_upload: auto` keeps prereleases out of brew; the job only runs on `arc53/DocsGPT-cli`). `make release VERSION=vX.Y.Z` gates the tag; see `RELEASING.md`
+- Install script: `docs.ac/install-cli` redirects to `releases/latest/download/install.sh`, so the live installer is whatever the newest release carries — a fix lands only on the next tag. Both installers verify the archive against `checksums.txt`, then hand off to `docsgpt-cli install`, which owns the PATH logic for every platform
 - SSE streaming parsed with stdlib bufio.Scanner (no external SSE lib)
 - Shell history: zsh, bash, fish
 - Cross-platform: Unix + Windows

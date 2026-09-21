@@ -130,3 +130,64 @@ func TestExtractBinaryMissing(t *testing.T) {
 		t.Error("extractBinary() without the binary should error")
 	}
 }
+
+func TestIsHomebrewPath(t *testing.T) {
+	managed := []string{
+		// Formula, Apple Silicon and Intel.
+		"/opt/homebrew/Cellar/docsgpt-cli/1.5.1/bin/docsgpt-cli",
+		"/usr/local/Cellar/docsgpt-cli/1.5.1/bin/docsgpt-cli",
+		// Cask, Apple Silicon and Intel. The Intel path contains neither
+		// "Cellar" nor "homebrew", so it only matches on Caskroom.
+		"/opt/homebrew/Caskroom/docsgpt-cli/1.5.1/docsgpt-cli",
+		"/usr/local/Caskroom/docsgpt-cli/1.5.1/docsgpt-cli",
+		// Linuxbrew.
+		"/home/linuxbrew/.linuxbrew/Cellar/docsgpt-cli/1.5.1/bin/docsgpt-cli",
+	}
+	for _, path := range managed {
+		if !IsHomebrewPath(path) {
+			t.Errorf("IsHomebrewPath(%q) = false, want true", path)
+		}
+	}
+
+	unmanaged := []string{
+		"/usr/local/bin/docsgpt-cli",
+		"/home/dev/.local/bin/docsgpt-cli",
+		"C:\\Users\\dev\\bin\\docsgpt-cli.exe",
+	}
+	for _, path := range unmanaged {
+		if IsHomebrewPath(path) {
+			t.Errorf("IsHomebrewPath(%q) = true, want false", path)
+		}
+	}
+}
+
+func TestIsNewerRejectsPrereleases(t *testing.T) {
+	// Semver orders a prerelease above the release it follows, but installing
+	// one would stamp the binary with a version IsReleaseVersion rejects,
+	// permanently disabling its update checks.
+	if IsNewer("v1.6.0-rc1", "v1.5.1") {
+		t.Error(`IsNewer("v1.6.0-rc1", "v1.5.1") = true, want false`)
+	}
+	if IsNewer("v2.0.0-beta.1", "v1.5.1") {
+		t.Error(`IsNewer("v2.0.0-beta.1", "v1.5.1") = true, want false`)
+	}
+	if !IsNewer("v1.6.0", "v1.5.1") {
+		t.Error(`IsNewer("v1.6.0", "v1.5.1") = false, want true`)
+	}
+	// A user already on a prerelease is still offered the stable release.
+	if !IsNewer("v1.6.0", "v1.6.0-rc1") {
+		t.Error(`IsNewer("v1.6.0", "v1.6.0-rc1") = false, want true`)
+	}
+}
+
+func TestIsNewerRejectsBuildMetadata(t *testing.T) {
+	// v1.6.0+hotfix orders above v1.6.0, but IsReleaseVersion rejects build
+	// metadata, so installing it would disable the update checks for good.
+	if IsNewer("v1.6.0+hotfix", "v1.5.1") {
+		t.Error(`IsNewer("v1.6.0+hotfix", "v1.5.1") = true, want false`)
+	}
+	// Not a version at all.
+	if IsNewer("nightly", "v1.5.1") {
+		t.Error(`IsNewer("nightly", "v1.5.1") = true, want false`)
+	}
+}

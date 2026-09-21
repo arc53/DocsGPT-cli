@@ -43,3 +43,48 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^chore:"
+
+# The installers are served from these assets: docs.ac/install-cli redirects to
+# releases/latest/download/install.sh (and install-cli.ps1 to install.ps1), so
+# the script a user runs always comes from the newest release.
+release:
+  # A prerelease tag must not become releases/latest: install.sh and the
+  # self-updater both resolve that URL, so an -rc would be pushed to every
+  # user, and a binary stamped with a prerelease version can no longer
+  # auto-update (IsReleaseVersion rejects it) — stranding them there.
+  prerelease: auto
+  extra_files:
+    - glob: deployment/install.sh
+    - glob: deployment/install.ps1
+
+# Published to arc53/homebrew-DocsGPT-cli with HOMEBREW_TAP_TOKEN, a
+# fine-grained token scoped to that repository alone.
+#
+# This is a Cask, not a Formula: GoReleaser deprecated `brews` in v2.16 because
+# Homebrew wants pre-compiled binaries in Casks. Casks are macOS-only, so
+# Homebrew on Linux is no longer a supported install path — Linux users have
+# install.sh above, `go install`, or the release archives.
+homebrew_casks:
+  - name: docsgpt-cli
+    binaries:
+      - docsgpt-cli
+    directory: Casks
+    homepage: "https://github.com/arc53/DocsGPT-cli"
+    description: "Command-line client for DocsGPT agents"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "Brew cask update for {{ .ProjectName }} version {{ .Tag }}"
+    repository:
+      owner: arc53
+      name: homebrew-DocsGPT-cli
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    # A prerelease tag should not become what `brew install` hands out.
+    skip_upload: auto
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/docsgpt-cli"]
+          end

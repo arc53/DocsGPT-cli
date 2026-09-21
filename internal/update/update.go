@@ -20,9 +20,14 @@ const (
 )
 
 // IsHomebrewPath reports whether a resolved executable path is managed by
-// Homebrew and must be updated via brew instead.
+// Homebrew and must be updated via brew instead. Cellar covers formulae and
+// Caskroom covers casks; on Apple Silicon both sit under /opt/homebrew, but on
+// an Intel Mac the prefix is /usr/local, so the Caskroom check is what catches
+// a cask install there.
 func IsHomebrewPath(path string) bool {
-	return strings.Contains(path, "/Cellar/") || strings.Contains(path, "/homebrew/")
+	return strings.Contains(path, "/Cellar/") ||
+		strings.Contains(path, "/Caskroom/") ||
+		strings.Contains(path, "/homebrew/")
 }
 
 type Release struct {
@@ -50,8 +55,20 @@ func IsReleaseVersion(version string) bool {
 	return semver.IsValid(v) && semver.Prerelease(v) == "" && semver.Build(v) == ""
 }
 
-// IsNewer reports whether latest is a higher version than current.
+// IsNewer reports whether latest is a higher version worth updating to.
+//
+// Anything that is not a plain release is refused, even though semver orders
+// v1.6.0-rc1 above v1.5.1: installing one stamps the binary with a version
+// IsReleaseVersion rejects, so that install would stop checking for updates
+// altogether. release.prerelease in .goreleaser.yaml already keeps an -rc out
+// of releases/latest; this is the second lock on the same door.
 func IsNewer(latest, current string) bool {
+	// IsReleaseVersion covers build metadata as well as prereleases: a
+	// hand-pushed v1.6.0+hotfix orders above v1.6.0 but would strand the
+	// install just the same.
+	if !IsReleaseVersion(latest) {
+		return false
+	}
 	return semver.Compare(normalize(latest), normalize(current)) > 0
 }
 
