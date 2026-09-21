@@ -179,3 +179,15 @@ func TestIsNewerRejectsPrereleases(t *testing.T) {
 		t.Error(`IsNewer("v1.6.0", "v1.6.0-rc1") = false, want true`)
 	}
 }
+
+func TestIsNewerRejectsBuildMetadata(t *testing.T) {
+	// v1.6.0+hotfix orders above v1.6.0, but IsReleaseVersion rejects build
+	// metadata, so installing it would disable the update checks for good.
+	if IsNewer("v1.6.0+hotfix", "v1.5.1") {
+		t.Error(`IsNewer("v1.6.0+hotfix", "v1.5.1") = true, want false`)
+	}
+	// Not a version at all.
+	if IsNewer("nightly", "v1.5.1") {
+		t.Error(`IsNewer("nightly", "v1.5.1") = true, want false`)
+	}
+}

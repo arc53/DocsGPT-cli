@@ -57,17 +57,19 @@ func IsReleaseVersion(version string) bool {
 
 // IsNewer reports whether latest is a higher version worth updating to.
 //
-// Prereleases are never offered, even though semver orders v1.6.0-rc1 above
-// v1.5.1: installing one stamps the binary with a prerelease version, which
+// Anything that is not a plain release is refused, even though semver orders
+// v1.6.0-rc1 above v1.5.1: installing one stamps the binary with a version
 // IsReleaseVersion rejects, so that install would stop checking for updates
 // altogether. release.prerelease in .goreleaser.yaml already keeps an -rc out
 // of releases/latest; this is the second lock on the same door.
 func IsNewer(latest, current string) bool {
-	v := normalize(latest)
-	if semver.Prerelease(v) != "" {
+	// IsReleaseVersion covers build metadata as well as prereleases: a
+	// hand-pushed v1.6.0+hotfix orders above v1.6.0 but would strand the
+	// install just the same.
+	if !IsReleaseVersion(latest) {
 		return false
 	}
-	return semver.Compare(v, normalize(current)) > 0
+	return semver.Compare(normalize(latest), normalize(current)) > 0
 }
 
 // FetchLatest queries GitHub for the most recent release.

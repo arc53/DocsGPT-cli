@@ -43,7 +43,7 @@ self-update, so `docsgpt-cli update` will point you back at brew.
 > formula, which is no longer updated. Move across once with:
 >
 > ```bash
-> brew uninstall docsgpt-cli && brew install --cask docsgpt-cli
+> brew uninstall --formula --force docsgpt-cli && brew install --cask docsgpt-cli
 > ```
 
 Homebrew on Linux is not supported — casks are macOS-only. Use the install

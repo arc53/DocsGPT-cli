@@ -82,23 +82,32 @@ main() {
   local existing
   existing="$(command -v docsgpt-cli 2>/dev/null || true)"
   if [ -n "$existing" ]; then
-    # readlink -f is GNU; macOS only gained it in 12.3, so fall back to the
-    # unresolved path rather than losing the check on older systems.
+    # readlink -f is GNU; macOS only gained it in 12.3. Plain readlink resolves
+    # one level, which is enough here because what Homebrew puts in its bin is a
+    # symlink straight into Cellar or Caskroom. Failing both, use the path as-is
+    # rather than losing the check entirely.
     local resolved="$existing" resolved_link=""
     if resolved_link="$(readlink -f "$existing" 2>/dev/null)" && [ -n "$resolved_link" ]; then
       resolved="$resolved_link"
-    fi
-    local brew_bin=""
-    if has brew; then
-      brew_bin="$(brew --prefix 2>/dev/null || true)/bin"
+    elif resolved_link="$(readlink "$existing" 2>/dev/null)" && [ -n "$resolved_link" ]; then
+      resolved="$resolved_link"
     fi
     case "$resolved" in
       */Cellar/* | */Caskroom/* | */homebrew/*)
         die "docsgpt-cli is installed by Homebrew at $existing. Upgrade it with: brew upgrade --cask docsgpt-cli"
         ;;
     esac
-    if [ -n "$brew_bin" ] && [ "$brew_bin" != "/bin" ] && [ "$(dirname "$existing")" = "$brew_bin" ]; then
-      die "docsgpt-cli is installed by Homebrew at $existing. Upgrade it with: brew upgrade --cask docsgpt-cli"
+    # Backstop for an old macOS where neither readlink form reached the Cellar
+    # (a formula linked via opt/, say). Only a symlink can be Homebrew's: on an
+    # Intel Mac `brew --prefix` is /usr/local and Homebrew makes /usr/local/bin
+    # writable, which is exactly where this installer puts its own regular file,
+    # so without the -L test every re-run would refuse to upgrade itself.
+    if [ -L "$existing" ] && has brew; then
+      local brew_bin=""
+      brew_bin="$(brew --prefix 2>/dev/null || true)"
+      if [ -n "$brew_bin" ] && [ "$(dirname "$existing")" = "$brew_bin/bin" ]; then
+        die "docsgpt-cli is installed by Homebrew at $existing. Upgrade it with: brew upgrade --cask docsgpt-cli"
+      fi
     fi
   fi
 

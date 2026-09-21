@@ -111,15 +111,20 @@ func placeBinary(src, dst string) error {
 		return fmt.Errorf("could not install to %s: %w", dst, err)
 	}
 	if err := os.Rename(staged, dst); err != nil {
-		// Windows refuses to replace a file that is currently executing; move
-		// the old one aside and retry, leaving it for the OS to clean up.
-		aside := dst + ".old"
-		os.Remove(aside)
-		if renameErr := os.Rename(dst, aside); renameErr == nil {
-			if err2 := os.Rename(staged, dst); err2 == nil {
-				return nil
+		// Windows refuses to replace a file that is currently executing, so
+		// move the old one aside and retry. It stays on disk as .old until the
+		// next install overwrites it; nothing else can remove a running binary.
+		// On Unix a rename over a running binary works, so this is not needed
+		// there and would only leave strays behind for unrelated failures.
+		if runtime.GOOS == "windows" {
+			aside := dst + ".old"
+			os.Remove(aside)
+			if renameErr := os.Rename(dst, aside); renameErr == nil {
+				if err2 := os.Rename(staged, dst); err2 == nil {
+					return nil
+				}
+				os.Rename(aside, dst)
 			}
-			os.Rename(aside, dst)
 		}
 		os.Remove(staged)
 		return fmt.Errorf("could not install to %s: %w", dst, err)
@@ -288,17 +293,29 @@ func shellPathEntry(dir string) (configPath, entry string, err error) {
 		return filepath.Join(home, ".zshrc"),
 			`export PATH="` + quoted + `:$PATH"`, nil
 	case strings.Contains(shell, "bash"):
-		// Terminal.app and iTerm start login shells, which read .bash_profile
-		// and never .bashrc, so on macOS the latter would never take effect.
-		// On Linux terminals start non-login shells and .bashrc is the one read.
-		profile := ".bashrc"
-		if runtime.GOOS == "darwin" {
-			profile = ".bash_profile"
-		}
-		return filepath.Join(home, profile),
+		return filepath.Join(home, bashProfile(home)),
 			`export PATH="` + quoted + `:$PATH"`, nil
 	}
 	return "", "", errors.New("unrecognised shell")
+}
+
+// bashProfile names the file to add a PATH line to, relative to home.
+//
+// On Linux a terminal starts a non-login shell, which reads .bashrc. On macOS
+// Terminal and iTerm start login shells, which never read .bashrc — they read
+// the FIRST of .bash_profile, .bash_login and .profile that exists. Creating
+// .bash_profile when the user keeps their setup in .profile would stop that
+// file being read at all, so an existing one always wins.
+func bashProfile(home string) string {
+	if runtime.GOOS != "darwin" {
+		return ".bashrc"
+	}
+	for _, name := range []string{".bash_profile", ".bash_login", ".profile"} {
+		if _, err := os.Stat(filepath.Join(home, name)); err == nil {
+			return name
+		}
+	}
+	return ".bash_profile"
 }
 
 func addToWindowsPATH(dir string) error {

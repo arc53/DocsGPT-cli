@@ -29,8 +29,9 @@ release:
 	@git rev-parse -q --verify "refs/tags/$(VERSION)" >/dev/null \
 		&& { echo "tag $(VERSION) already exists locally"; exit 1; } || true
 	@git fetch --quiet origin $(RELEASE_BRANCH)
-	@git ls-remote --exit-code --tags origin "refs/tags/$(VERSION)" >/dev/null 2>&1 \
-		&& { echo "tag $(VERSION) already exists on origin"; exit 1; } || true
+	@remote_tag="$$(git ls-remote --tags origin "refs/tags/$(VERSION)")" \
+		|| { echo "could not reach origin to check for tag $(VERSION)"; exit 1; }; \
+		test -z "$$remote_tag" || { echo "tag $(VERSION) already exists on origin"; exit 1; }
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/$(RELEASE_BRANCH))" \
 		|| { echo "HEAD is not origin/$(RELEASE_BRANCH); push or pull first"; exit 1; }
 	go test ./...

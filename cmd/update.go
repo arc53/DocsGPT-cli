@@ -34,6 +34,9 @@ var updateCmd = &cobra.Command{
 		if !update.IsReleaseVersion(Version) {
 			fmt.Println(display.Warn(fmt.Sprintf("This binary reports version %q, which is not a tagged release build.", Version)))
 			fmt.Println("If you built from source, update with 'git pull && make build'.")
+			// A prerelease installed with DOCSGPT_CLI_VERSION lands here too,
+			// and for that the installer is the way back to a release build.
+			fmt.Println("If you installed a prerelease, re-run the installer: curl -fsSL https://docs.ac/install-cli | bash")
 			return nil
 		}
 

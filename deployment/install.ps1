@@ -21,11 +21,18 @@ function Install-DocsGPTCli {
 
     # Windows PowerShell 5.1 on older .NET defaults to TLS 1.0/1.1, which
     # github.com refuses; without this the downloads below fail outright.
-    try {
-        [Net.ServicePointManager]::SecurityProtocol =
-        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    # Only for 5.1: ServicePointManager is static and this script runs inside
+    # the caller's session via `iex`, and anywhere the default is already
+    # SystemDefault (PowerShell 7, or 5.1 on .NET 4.7+) -bor would pin their
+    # whole session to TLS 1.2 for everything else they do afterwards.
+    if ($PSVersionTable.PSVersion.Major -lt 6 -and
+        [Net.ServicePointManager]::SecurityProtocol -ne [Net.SecurityProtocolType]::SystemDefault) {
+        try {
+            [Net.ServicePointManager]::SecurityProtocol =
+            [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        }
+        catch {}
     }
-    catch {}
 
     # Invoke-WebRequest's progress bar costs more than the transfer on a 17 MB
     # file in Windows PowerShell.
