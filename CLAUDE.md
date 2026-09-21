@@ -160,7 +160,7 @@ Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on fi
 ## Build & run
 
 ```bash
-go build -o docsgpt-cli
+go build -o docsgpt-cli ./cmd/docsgpt-cli
 ./docsgpt-cli --help
 ```
 

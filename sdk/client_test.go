@@ -37,10 +37,11 @@ func TestSendReturnsAPIError(t *testing.T) {
 }
 
 func TestSendSetsAuthAndDisablesStreaming(t *testing.T) {
-	var gotAuth string
+	var gotAuth, gotPath string
 	var gotBody ChatRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
 		json.NewDecoder(r.Body).Decode(&gotBody)
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"hi"}}]}`)
 	}))
@@ -54,6 +55,9 @@ func TestSendSetsAuthAndDisablesStreaming(t *testing.T) {
 	}
 	if gotAuth != "Bearer secret" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer secret")
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Errorf("path = %q, want /v1/chat/completions (the trailing slash on the base URL must be trimmed)", gotPath)
 	}
 	if gotBody.Stream {
 		t.Error("Send() sent stream:true; it must force streaming off")

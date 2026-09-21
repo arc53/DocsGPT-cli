@@ -97,14 +97,17 @@ cannot resolve a module in the same repository until that module has a tag: a
 `require` on an unpublished version fails even in workspace mode, and `go mod
 tidy` fails with it. So the switch-over is a follow-up:
 
-1. Merge this, then push `sdk/v0.1.0`.
+1. Merge this, then push `sdk/v0.1.0`, then cut a CLI release: until a `v*`
+   tag carries the renamed module, `go install …@latest` still resolves
+   v1.5.1, whose go.mod says `module docsgpt-cli`, and fails.
 2. `go get github.com/arc53/DocsGPT-cli/sdk@v0.1.0`, delete `internal/api`,
    point the CLI at the module, and set `GOWORK=off` for release builds so the
    released binary is built from the pinned version, exactly as `go install`
    builds it.
 
-`go.work` is committed so `go build ./...` and `go test ./...` cover both
-modules from the repository root.
+`go.work` is committed so the CLI can be developed against the local `sdk/`.
+It does not widen `./...`, though — a separate module is never matched by a
+pattern from the parent — so `make test` runs `go test ./... ./sdk/...`.
 
 ## Prerequisites
 

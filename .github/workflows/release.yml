@@ -26,6 +26,16 @@ jobs:
         with:
           go-version: stable
 
+      # GoReleaser takes the previous tag from git describe, which sees
+      # sdk/vX.Y.Z tags too. With one between two CLI releases the changelog
+      # would start there and drop everything since the last v* tag.
+      - name: Resolve the previous CLI tag
+        run: |
+          previous="$(git tag -l 'v*' --sort=-v:refname --merged "${GITHUB_REF_NAME}^" | head -n1)"
+          if [ -n "$previous" ]; then
+            echo "GORELEASER_PREVIOUS_TAG=$previous" >> "$GITHUB_ENV"
+          fi
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

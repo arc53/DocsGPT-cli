@@ -66,6 +66,8 @@ as is or use the `install` command to add the binary to your system's `PATH`:
 go install github.com/arc53/DocsGPT-cli/cmd/docsgpt-cli@latest
 ```
 
+Requires v1.6.0 or newer — earlier releases predate the module rename.
+
 Installs into `$(go env GOBIN)` (or `$(go env GOPATH)/bin`). The binary knows
 which release it came from and self-updates like any other, so you do not have
 to re-run `go install` to stay current.

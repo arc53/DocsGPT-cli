@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/display"
@@ -20,17 +21,35 @@ import (
 var Version = "dev"
 
 // resolveVersion recovers the version of a binary built by `go install
-// github.com/arc53/DocsGPT-cli@vX.Y.Z`, which the Go toolchain records in the
-// build info but cannot stamp with ldflags. Without it such a build reports
-// "dev", which IsReleaseVersion rejects — so it would never check for updates
-// and `docsgpt-cli update` would refuse to run.
-//
-// Returns "" when there is nothing better than what we already have: a plain
-// `go build` reports the main module version as "(devel)".
+// github.com/arc53/DocsGPT-cli/cmd/docsgpt-cli@vX.Y.Z`, which the Go toolchain
+// records in the build info but cannot stamp with ldflags. Without it such a
+// build reports "dev", which IsReleaseVersion rejects — so it would never check
+// for updates and `docsgpt-cli update` would refuse to run.
 func resolveVersion() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return ""
+	}
+	return versionFromBuildInfo(info)
+}
+
+// versionFromBuildInfo returns the release version a binary was installed at,
+// or "" when it was not installed from the module cache at a release version.
+//
+// Go also stamps Main.Version from VCS tags, so `go build` on a clean checkout
+// of v1.5.1 reports v1.5.1 and would otherwise be indistinguishable from a
+// released binary — auto-update would then replace a developer's local build
+// with the latest release behind their back. A module-cache build carries a
+// checksum in Main.Sum; one built from a working tree never does, and carries
+// vcs.* build settings instead.
+func versionFromBuildInfo(info *debug.BuildInfo) string {
+	if info.Main.Sum == "" {
+		return ""
+	}
+	for _, setting := range info.Settings {
+		if strings.HasPrefix(setting.Key, "vcs") {
+			return ""
+		}
 	}
 	if !update.IsReleaseVersion(info.Main.Version) {
 		return ""
