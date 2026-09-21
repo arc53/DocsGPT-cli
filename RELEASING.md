@@ -13,10 +13,12 @@ becomes `v1.6.1`. Prereleases are skipped when picking that base: git sorts
 `v1.7.0-rc1` above `v1.7.0`, and it is not a version to add one to. An explicit
 version is taken as given, and may carry a prerelease suffix.
 
-The run refuses a tag that already exists, refuses `none`/`none`, and refuses to
-be re-run — re-running a dispatch recomputes versions against the tags the first
+The run refuses a CLI tag that already exists, refuses `none`/`none`, and
+refuses to be re-run — re-running a dispatch recomputes versions against the tags the first
 attempt created, which mints a further version instead of finishing the failed
-one. (Re-running a release started by a pushed tag is fine.)
+one. (The guard allows re-running a release started by a pushed tag, but if the
+first attempt already uploaded assets GoReleaser will refuse the duplicates —
+delete the release and tag first.)
 
 The pin commit is pushed to the branch the workflow was dispatched from
 (normally `main`), so a dispatch has to come from a branch, not a tag.
@@ -39,8 +41,10 @@ release itself uses, since `go.work` would otherwise resolve the working tree
 and hide a stale pin.
 
 A CLI-only release (`sdk: none`) skips all of that and just tags and releases —
-after checking that `go.mod` already pins the newest published sdk tag, so a
-release cannot silently ship against an older sdk than the one that exists.
+after checking that `go.mod` does not pin an sdk version *older* than the newest
+published `sdk/v*` tag, so a release cannot silently ship against an sdk older
+than the one that exists. A pin ahead of the newest release — a prerelease, say
+— is fine.
 
 A change that spans both modules — new sdk API that the CLI then uses — is two
 runs: release the sdk first, let the pin bump land, then release the CLI. The
@@ -92,12 +96,13 @@ that commit is pushed.
 If a run fails after the sdk tag was pushed but before the pin landed, that tag
 is published and nothing references it. Do **not** re-run the job — start a new
 one with `sdk:` set to that exact version (e.g. `0.2.0`). The workflow sees the
-tag already exists and the pin has not caught up, skips tagging, and just pins
-and commits it. A CLI-only release in that state is refused, with that remedy in
+tag already exists and the pin is behind it, skips tagging, and just pins and
+commits it. A CLI-only release in that state is refused, with that remedy in
 the message.
 
-Asking to release an sdk version that is already published *and* already pinned
-is an error rather than a silent no-op.
+Asking for an sdk version that is already published and *not* behind the current
+pin is an error rather than a silent no-op — otherwise a typo would push a pin
+downgrade and build the CLI against an older sdk.
 
 If GoReleaser itself fails after the CLI tag was pushed — an expired
 `HOMEBREW_TAP_TOKEN`, say — the tag and possibly a partial release exist. Fix
