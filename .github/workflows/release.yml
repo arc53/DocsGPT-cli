@@ -34,7 +34,12 @@ concurrency:
 
 jobs:
   release:
-    if: github.repository == 'arc53/DocsGPT-cli'
+    # A dispatch pushes the pin commit to the ref it was started from, so that
+    # ref has to be a branch. Dispatching from a tag would try to push
+    # HEAD:v1.6.0 and be rejected, after the sdk tag was already published.
+    if: |
+      github.repository == 'arc53/DocsGPT-cli'
+      && (github.event_name == 'push' || github.ref_type == 'branch')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -54,16 +59,19 @@ jobs:
 
       # Everything the old `make release` guarded, minus the parts that only
       # existed because it ran on someone's laptop.
+      # Everything the old `make release` guarded, minus the parts that only
+      # existed because it ran on someone's laptop.
       - name: Resolve versions
         id: v
         env:
           CLI_INPUT: ${{ inputs.cli }}
           SDK_INPUT: ${{ inputs.sdk }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
           # For a pushed tag there is nothing to compute: release exactly it.
-          if [ "${{ github.event_name }}" = push ]; then
+          if [ "$EVENT" = push ]; then
             {
               echo "cli_tag=${GITHUB_REF_NAME}"
               echo "do_cli=true"
@@ -72,18 +80,47 @@ jobs:
             exit 0
           fi
 
-          # next <current x.y.z> <patch|minor|major|x.y.z>
+          # Re-running this job would recompute versions against the tags the
+          # first attempt created, minting a further version rather than
+          # finishing the one that failed. Start a new run instead.
+          if [ "${GITHUB_RUN_ATTEMPT:-1}" != 1 ]; then
+            echo "::error::Re-running a release recomputes versions and would mint a new one. Start a fresh run; see RELEASING.md for recovering a partial release." >&2
+            exit 1
+          fi
+
+          # Newest strict release tag with the given prefix, or "" if none.
+          # Prereleases are skipped: git's version sort puts v1.7.0-rc1 ABOVE
+          # v1.7.0, and "0-rc1" is not something to add one to. for-each-ref
+          # with a shell-side loop avoids a `| head -1` that would fail the
+          # step with SIGPIPE once the tag list outgrows a pipe buffer.
+          latest_release() {
+            local prefix="$1" ref version
+            while IFS= read -r ref; do
+              version="${ref#"$prefix"}"
+              case "$version" in
+                *[!0-9.]*) continue ;;
+              esac
+              printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || continue
+              printf '%s' "$version"
+              return
+            done < <(git for-each-ref --sort=-v:refname \
+              --format='%(refname:strip=2)' "refs/tags/${prefix}*")
+          }
+
+          # next <current x.y.z> <patch|minor|major|explicit>
           next() {
             local cur="$1" bump="$2" major minor patch
             if [ "$bump" != patch ] && [ "$bump" != minor ] && [ "$bump" != major ]; then
-              # An explicit version, with or without the leading v.
+              # An explicit version, with or without the leading v. A
+              # prerelease suffix is allowed: GoReleaser publishes it as a
+              # prerelease and keeps it out of the cask and releases/latest.
               bump="${bump#v}"
-              printf '%s' "$bump" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
-                || { echo "::error::'$2' is not a bump type or an x.y.z version"; exit 1; }
+              printf '%s' "$bump" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+                || { echo "::error::'$2' is not a bump type or an x.y.z version" >&2; return 1; }
               printf '%s' "$bump"
               return
             fi
-            IFS=. read -r major minor patch <<<"${cur#v}"
+            IFS=. read -r major minor patch <<<"$cur"
             case "$bump" in
               major) printf '%s.0.0' "$((major + 1))" ;;
               minor) printf '%s.%s.0' "$major" "$((minor + 1))" ;;
@@ -92,32 +129,46 @@ jobs:
           }
 
           if [ "$CLI_INPUT" = none ] && [ "$SDK_INPUT" = none ]; then
-            echo "::error::Nothing to release: both bumps are 'none'."
+            echo "::error::Nothing to release: both bumps are 'none'." >&2
             exit 1
           fi
 
-          # 'v*' already excludes the sdk/* tags, and -v:refname orders
-          # v1.10.0 above v1.9.0 rather than lexically.
-          cli_cur="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
-          sdk_cur="$(git tag -l 'sdk/v*' --sort=-v:refname | head -n1)"
-          : "${cli_cur:=v0.0.0}"
-          : "${sdk_cur:=sdk/v0.0.0}"
-          echo "Current: CLI ${cli_cur}, sdk ${sdk_cur}"
+          cli_cur="$(latest_release v)"
+          sdk_cur="$(latest_release sdk/v)"
+          : "${cli_cur:=0.0.0}"
+          : "${sdk_cur:=0.0.0}"
+          echo "Current: CLI v${cli_cur}, sdk v${sdk_cur}"
 
           if [ "$SDK_INPUT" != none ]; then
-            sdk_next="$(next "${sdk_cur#sdk/}" "$SDK_INPUT")"
-            echo "sdk_tag=sdk/v${sdk_next}" >> "$GITHUB_OUTPUT"
-            echo "sdk_version=v${sdk_next}" >> "$GITHUB_OUTPUT"
-            echo "do_sdk=true" >> "$GITHUB_OUTPUT"
+            sdk_next="$(next "$sdk_cur" "$SDK_INPUT")"
+            {
+              echo "sdk_tag=sdk/v${sdk_next}"
+              echo "sdk_version=v${sdk_next}"
+              echo "do_sdk=true"
+            } >> "$GITHUB_OUTPUT"
             echo "Releasing sdk/v${sdk_next}"
           else
             echo "do_sdk=false" >> "$GITHUB_OUTPUT"
+            # A previous run can have published an sdk tag and failed before
+            # pushing the pin. Releasing the CLI now would ship it built
+            # against the older sdk — the one thing this workflow exists to
+            # prevent — so say so instead.
+            # Scans fields rather than assuming a column: the require can be
+            # a line in a require(...) block or a single-line directive, and
+            # the module sits in a different position in each.
+            pinned="$(awk '{ for (i = 1; i < NF; i++) if ($i == "github.com/arc53/DocsGPT-cli/sdk") { print $(i + 1); exit } }' go.mod)"
+            if [ -n "$pinned" ] && [ "$sdk_cur" != 0.0.0 ] && [ "$pinned" != "v${sdk_cur}" ]; then
+              echo "::error::go.mod pins sdk ${pinned} but sdk/v${sdk_cur} is published. Release the sdk too (sdk: ${sdk_cur}) or land the pin bump first; see RELEASING.md." >&2
+              exit 1
+            fi
           fi
 
           if [ "$CLI_INPUT" != none ]; then
             cli_next="$(next "$cli_cur" "$CLI_INPUT")"
-            echo "cli_tag=v${cli_next}" >> "$GITHUB_OUTPUT"
-            echo "do_cli=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "cli_tag=v${cli_next}"
+              echo "do_cli=true"
+            } >> "$GITHUB_OUTPUT"
             echo "Releasing v${cli_next}"
           else
             echo "do_cli=false" >> "$GITHUB_OUTPUT"
@@ -168,15 +219,27 @@ jobs:
           SDK_VERSION: ${{ steps.v.outputs.sdk_version }}
         run: |
           set -euo pipefail
-          for attempt in 1 2 3 4 5 6 7 8; do
+          resolved=false
+          # proxy.golang.org fetches a version the first time it is asked for,
+          # which is usually seconds but occasionally minutes. Giving up here
+          # costs the sdk tag, so the budget is generous.
+          for attempt in $(seq 1 40); do
             if GOWORK=off go get "github.com/arc53/DocsGPT-cli/sdk@${SDK_VERSION}"; then
-              exit 0
+              resolved=true
+              break
             fi
             echo "sdk ${SDK_VERSION} not resolvable yet (attempt ${attempt}); retrying"
             sleep 15
           done
-          echo "::error::sdk ${SDK_VERSION} never became resolvable"
-          exit 1
+          if [ "$resolved" != true ]; then
+            echo "::error::sdk ${SDK_VERSION} never became resolvable" >&2
+            exit 1
+          fi
+          # `go get` adds the new version but leaves the old one's hashes
+          # behind. ci.yml checks `go mod tidy -diff` on every PR, so an
+          # untidy pin commit turns the next pull request red.
+          GOWORK=off go mod tidy
+          GOWORK=off go mod tidy -diff
 
       # Re-run against the pin that will actually ship. A failure here has cost
       # only an sdk tag, which is a valid module version either way.
@@ -259,8 +322,10 @@ jobs:
           CLI_TAG: ${{ steps.v.outputs.cli_tag }}
           SDK_TAG: ${{ steps.v.outputs.sdk_tag }}
         run: |
+          # Plain `[ -n "$X" ] && echo` returns 1 when X is empty, and as the
+          # last command in the step that fails an otherwise good release.
           {
             echo "### Release"
-            [ -n "$SDK_TAG" ] && echo "- sdk: \`$SDK_TAG\`"
-            [ -n "$CLI_TAG" ] && echo "- CLI: \`$CLI_TAG\`"
+            if [ -n "$SDK_TAG" ]; then echo "- sdk: \`$SDK_TAG\`"; fi
+            if [ -n "$CLI_TAG" ]; then echo "- CLI: \`$CLI_TAG\`"; fi
           } >> "$GITHUB_STEP_SUMMARY"
