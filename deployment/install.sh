@@ -36,6 +36,14 @@ main() {
   say() { printf '%s==>%s %s\n' "$bold" "$reset" "$*" >&2; }
   die() { printf '%serror:%s %s\n' "$red" "$reset" "$*" >&2; exit 1; }
   has() { command -v "$1" >/dev/null 2>&1; }
+  # Casks are macOS-only, so a Linux Homebrew install has no upgrade path left:
+  # telling those users to run `brew upgrade --cask` would send them back here.
+  die_brew_managed() {
+    if [ "$os" = linux ]; then
+      die "docsgpt-cli at $1 was installed by Homebrew, which no longer ships it for Linux. Remove it with 'brew uninstall docsgpt-cli', then run this installer again."
+    fi
+    die "docsgpt-cli is installed by Homebrew at $1. Upgrade it with: brew upgrade --cask docsgpt-cli"
+  }
   download() {
     if has curl; then
       curl -fsSL --retry 3 "$1"
@@ -86,27 +94,32 @@ main() {
     # one level, which is enough here because what Homebrew puts in its bin is a
     # symlink straight into Cellar or Caskroom. Failing both, use the path as-is
     # rather than losing the check entirely.
-    local resolved="$existing" resolved_link=""
+    local resolved="$existing" resolved_link="" fully_resolved=0
     if resolved_link="$(readlink -f "$existing" 2>/dev/null)" && [ -n "$resolved_link" ]; then
       resolved="$resolved_link"
+      fully_resolved=1
     elif resolved_link="$(readlink "$existing" 2>/dev/null)" && [ -n "$resolved_link" ]; then
       resolved="$resolved_link"
     fi
     case "$resolved" in
       */Cellar/* | */Caskroom/* | */homebrew/*)
-        die "docsgpt-cli is installed by Homebrew at $existing. Upgrade it with: brew upgrade --cask docsgpt-cli"
+        die_brew_managed "$existing"
         ;;
     esac
-    # Backstop for an old macOS where neither readlink form reached the Cellar
-    # (a formula linked via opt/, say). Only a symlink can be Homebrew's: on an
-    # Intel Mac `brew --prefix` is /usr/local and Homebrew makes /usr/local/bin
-    # writable, which is exactly where this installer puts its own regular file,
-    # so without the -L test every re-run would refuse to upgrade itself.
-    if [ -L "$existing" ] && has brew; then
+    # Backstop for an old macOS where plain readlink stopped short of the Cellar
+    # (a formula linked via opt/, say). Skipped when readlink -f already
+    # resolved the whole chain, since the case above then had the real answer
+    # and anything else there is the user's own symlink.
+    #
+    # Only a symlink can be Homebrew's: on an Intel Mac `brew --prefix` is
+    # /usr/local and Homebrew makes /usr/local/bin writable, which is exactly
+    # where this installer puts its own regular file, so without the -L test
+    # every re-run would refuse to upgrade itself.
+    if [ "$fully_resolved" = 0 ] && [ -L "$existing" ] && has brew; then
       local brew_bin=""
       brew_bin="$(brew --prefix 2>/dev/null || true)"
       if [ -n "$brew_bin" ] && [ "$(dirname "$existing")" = "$brew_bin/bin" ]; then
-        die "docsgpt-cli is installed by Homebrew at $existing. Upgrade it with: brew upgrade --cask docsgpt-cli"
+        die_brew_managed "$existing"
       fi
     fi
   fi

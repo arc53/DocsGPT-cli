@@ -25,14 +25,17 @@ function Install-DocsGPTCli {
     # the caller's session via `iex`, and anywhere the default is already
     # SystemDefault (PowerShell 7, or 5.1 on .NET 4.7+) -bor would pin their
     # whole session to TLS 1.2 for everything else they do afterwards.
-    if ($PSVersionTable.PSVersion.Major -lt 6 -and
-        [Net.ServicePointManager]::SecurityProtocol -ne [Net.SecurityProtocolType]::SystemDefault) {
-        try {
+    # Wholly inside the try: on .NET < 4.7 SecurityProtocolType has no
+    # SystemDefault member, and a caller whose session has Set-StrictMode -Version 2
+    # would have the reference itself throw before we could pin anything.
+    try {
+        if ($PSVersionTable.PSVersion.Major -lt 6 -and
+            [Net.ServicePointManager]::SecurityProtocol -ne [Net.SecurityProtocolType]::SystemDefault) {
             [Net.ServicePointManager]::SecurityProtocol =
             [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         }
-        catch {}
     }
+    catch {}
 
     # Invoke-WebRequest's progress bar costs more than the transfer on a 17 MB
     # file in Windows PowerShell.
