@@ -1,9 +1,39 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+RELEASE_BRANCH ?= main
 
-.PHONY: build clean
+.PHONY: build clean test release
 
 build:
 	go build -ldflags "-X 'docsgpt-cli/cmd.Version=$(VERSION)'" -o docsgpt-cli .
 
+test:
+	go test ./...
+
 clean:
 	rm -f docsgpt-cli
+
+# Cut a release: make release VERSION=v1.6.0
+#
+# Pushing the tag is the only manual step in the release. Everything after it
+# (archives, checksums, the installers, the Homebrew cask) is GoReleaser's job,
+# so the checks below all run before the tag exists anywhere but locally.
+release:
+	@test "$(origin VERSION)" = "command line" \
+		|| { echo "set the version explicitly: make release VERSION=v1.6.0"; exit 1; }
+	@echo "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$' \
+		|| { echo "VERSION must look like v1.6.0, got '$(VERSION)'"; exit 1; }
+	@test "$$(git rev-parse --abbrev-ref HEAD)" = "$(RELEASE_BRANCH)" \
+		|| { echo "releases are cut from $(RELEASE_BRANCH), not $$(git rev-parse --abbrev-ref HEAD)"; exit 1; }
+	@test -z "$$(git status --porcelain)" \
+		|| { echo "working tree is dirty; commit or stash first"; exit 1; }
+	@git rev-parse -q --verify "refs/tags/$(VERSION)" >/dev/null \
+		&& { echo "tag $(VERSION) already exists"; exit 1; } || true
+	@git fetch --quiet origin $(RELEASE_BRANCH)
+	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/$(RELEASE_BRANCH))" \
+		|| { echo "HEAD is not origin/$(RELEASE_BRANCH); push or pull first"; exit 1; }
+	go test ./...
+	git tag -a "$(VERSION)" -m "$(VERSION)"
+	git push origin "$(VERSION)"
+	@echo
+	@echo "Tagged and pushed $(VERSION). Watch the release run:"
+	@echo "  https://github.com/arc53/DocsGPT-cli/actions/workflows/release.yml"

@@ -6,18 +6,54 @@ DocsGPT-cli is a command-line interface (CLI) tool that allows you to interact w
 
 ## Installation
 
-You can install DocsGPT-cli in three ways:
+### 1. Install script (macOS and Linux)
 
-### 1. Download the Binary
+```bash
+curl -fsSL https://docs.ac/install-cli | bash
+```
 
-Download the latest binary from the [Releases page](https://github.com/arc53/DocsGPT-cli/releases). You can run it as is or use the `install` command to add the binary to your system's `PATH`:
+On Windows, in PowerShell:
+
+```powershell
+irm https://docs.ac/install-cli.ps1 | iex
+```
+
+This downloads the release build for your platform, checks it against the
+published `checksums.txt`, and puts it on your `PATH`. Run it again to upgrade.
+
+To read the script before running it, download it first:
+`curl -fsSL https://docs.ac/install-cli -o install.sh`, then `bash install.sh`.
+
+Environment:
+
+- `DOCSGPT_CLI_VERSION` — install a specific release instead of the latest (e.g. `v1.5.1`)
+- `DOCSGPT_NO_MODIFY_PATH=1` — install the binary but leave shell profiles alone
+
+### 2. Homebrew (macOS)
+
+```bash
+brew tap arc53/docsgpt-cli
+brew install --cask docsgpt-cli
+```
+
+Upgrade with `brew upgrade docsgpt-cli`. Homebrew-managed copies never
+self-update, so `docsgpt-cli update` will point you back at brew.
+
+Homebrew on Linux is not supported — casks are macOS-only. Use the install
+script above instead.
+
+### 3. Download the Binary
+
+Download the latest archive for your platform from the
+[Releases page](https://github.com/arc53/DocsGPT-cli/releases). You can run it
+as is or use the `install` command to add the binary to your system's `PATH`:
 
 ```bash
 ./docsgpt-cli
 ./docsgpt-cli install
 ```
 
-### 2. Compile from Source
+### 4. Compile from Source
 
 If you want to make adjustments or compile the binary yourself, clone the repository and compile it:
 
@@ -27,16 +63,7 @@ cd docsgpt-cli
 make build
 ```
 
-After compiling, follow the same steps as for the binary:
-
-### 3. Install via Homebrew
-
-If you prefer using Homebrew, you can install DocsGPT-cli with the following commands:
-
-```bash
-brew tap arc53/docsgpt-cli
-brew install docsgpt-cli
-```
+After compiling, follow the same steps as for the binary.
 
 ---
 

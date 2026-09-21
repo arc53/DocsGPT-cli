@@ -130,3 +130,33 @@ func TestExtractBinaryMissing(t *testing.T) {
 		t.Error("extractBinary() without the binary should error")
 	}
 }
+
+func TestIsHomebrewPath(t *testing.T) {
+	managed := []string{
+		// Formula, Apple Silicon and Intel.
+		"/opt/homebrew/Cellar/docsgpt-cli/1.5.1/bin/docsgpt-cli",
+		"/usr/local/Cellar/docsgpt-cli/1.5.1/bin/docsgpt-cli",
+		// Cask, Apple Silicon and Intel. The Intel path contains neither
+		// "Cellar" nor "homebrew", so it only matches on Caskroom.
+		"/opt/homebrew/Caskroom/docsgpt-cli/1.5.1/docsgpt-cli",
+		"/usr/local/Caskroom/docsgpt-cli/1.5.1/docsgpt-cli",
+		// Linuxbrew.
+		"/home/linuxbrew/.linuxbrew/Cellar/docsgpt-cli/1.5.1/bin/docsgpt-cli",
+	}
+	for _, path := range managed {
+		if !IsHomebrewPath(path) {
+			t.Errorf("IsHomebrewPath(%q) = false, want true", path)
+		}
+	}
+
+	unmanaged := []string{
+		"/usr/local/bin/docsgpt-cli",
+		"/home/dev/.local/bin/docsgpt-cli",
+		"C:\\Users\\dev\\bin\\docsgpt-cli.exe",
+	}
+	for _, path := range unmanaged {
+		if IsHomebrewPath(path) {
+			t.Errorf("IsHomebrewPath(%q) = true, want false", path)
+		}
+	}
+}

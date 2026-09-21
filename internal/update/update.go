@@ -20,9 +20,14 @@ const (
 )
 
 // IsHomebrewPath reports whether a resolved executable path is managed by
-// Homebrew and must be updated via brew instead.
+// Homebrew and must be updated via brew instead. Cellar covers formulae and
+// Caskroom covers casks; on Apple Silicon both sit under /opt/homebrew, but on
+// an Intel Mac the prefix is /usr/local, so the Caskroom check is what catches
+// a cask install there.
 func IsHomebrewPath(path string) bool {
-	return strings.Contains(path, "/Cellar/") || strings.Contains(path, "/homebrew/")
+	return strings.Contains(path, "/Cellar/") ||
+		strings.Contains(path, "/Caskroom/") ||
+		strings.Contains(path, "/homebrew/")
 }
 
 type Release struct {

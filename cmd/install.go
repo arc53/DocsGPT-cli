@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,83 +15,193 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// noModifyPathEnv mirrors the installer scripts: set it to 1 and we report what
+// to add to PATH instead of touching a shell profile.
+const noModifyPathEnv = "DOCSGPT_NO_MODIFY_PATH"
+
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install docsgpt-cli to your system PATH",
-	Run: func(cmd *cobra.Command, args []string) {
+	// install.sh and install.ps1 run this to place the binary they unpacked, so
+	// a failure has to exit non-zero and must not bury the reason in usage text.
+	SilenceUsage: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
 		binaryName := "docsgpt-cli"
 		if runtime.GOOS == "windows" {
 			binaryName += ".exe"
 		}
 		sourcePath, err := os.Executable()
 		if err != nil {
-			printError("Failed to determine the executable path: " + err.Error())
-			return
+			return fmt.Errorf("could not determine the running executable: %w", err)
+		}
+		// A symlinked binary would otherwise be "moved" by relinking the link.
+		if resolved, err := filepath.EvalSymlinks(sourcePath); err == nil {
+			sourcePath = resolved
 		}
 
-		destinationPath := getInstallPath(binaryName)
-		if destinationPath == "" {
-			printError("Could not determine a suitable installation path for your OS.")
-			return
+		installDir := getInstallDir()
+		if installDir == "" {
+			return fmt.Errorf("no installation directory is known for %s", runtime.GOOS)
+		}
+		destinationPath := filepath.Join(installDir, binaryName)
+
+		if err := os.MkdirAll(installDir, 0755); err != nil {
+			return fmt.Errorf("could not create %s: %w", installDir, err)
 		}
 
-		// Ensure the target directory exists
-		installDir := filepath.Dir(destinationPath)
-		if _, err := os.Stat(installDir); os.IsNotExist(err) {
-			err = os.MkdirAll(installDir, os.ModePerm)
-			if err != nil {
-				printError("Failed to create the installation directory: " + err.Error())
-				return
+		if sameFile(sourcePath, destinationPath) {
+			fmt.Println(display.Success("docsgpt-cli is already installed at " + destinationPath))
+		} else {
+			if err := placeBinary(sourcePath, destinationPath); err != nil {
+				return err
 			}
-		}
-
-		if err := os.Rename(sourcePath, destinationPath); err != nil {
-			// Rename fails across volumes/drives; fall back to copying.
-			if copyErr := copyFile(sourcePath, destinationPath); copyErr != nil {
-				printError("Failed to move the binary to the installation path: " + copyErr.Error())
-				return
-			}
+			fmt.Println(display.Success("docsgpt-cli installed to " + destinationPath))
 		}
 
 		if runtime.GOOS == "windows" {
-			if err := addToWindowsPATH(filepath.Dir(destinationPath)); err != nil {
-				printError("Failed to add to PATH: " + err.Error())
-				return
+			if onPath(installDir) {
+				return nil
 			}
-			fmt.Println(display.Success("docsgpt-cli successfully installed! Open a new terminal to pick up the PATH change, then use the 'docsgpt-cli' command."))
-			return
+			if os.Getenv(noModifyPathEnv) == "1" {
+				fmt.Println(display.Muted("Add " + installDir + " to your PATH to run docsgpt-cli by name."))
+				return nil
+			}
+			if err := addToWindowsPATH(installDir); err != nil {
+				return fmt.Errorf("could not add %s to PATH: %w", installDir, err)
+			}
+			fmt.Println(display.Muted("Added " + installDir + " to your PATH. Open a new terminal to pick it up."))
+			return nil
 		}
 
-		fmt.Println(display.Success("docsgpt-cli successfully installed! You can now use it with 'docsgpt-cli' command."))
+		ensureOnPath(installDir)
+		return nil
 	},
 }
 
-func getInstallPath(binaryName string) string {
-	var installDir string
+// placeBinary moves src onto dst, falling back to a copy across filesystems
+// (the installers unpack into a temp dir, which is often a different mount).
+func placeBinary(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		// Rename keeps the source mode; make sure it is executable either way.
+		if err := os.Chmod(dst, 0755); err != nil {
+			return fmt.Errorf("could not make %s executable: %w", dst, err)
+		}
+		return nil
+	}
+	if err := copyFile(src, dst); err != nil {
+		return fmt.Errorf("could not install to %s: %w", dst, err)
+	}
+	return nil
+}
 
+// getInstallDir picks the directory to install into: a system-wide bin when we
+// can write to it, otherwise a per-user one that never needs elevation.
+func getInstallDir() string {
 	switch runtime.GOOS {
 	case "linux", "darwin":
-		installDir = "/usr/local/bin/" // Typical path for Unix-like systems
-		if !isWritable(installDir) {
-			installDir = filepath.Join(os.Getenv("HOME"), ".local/bin/")
+		if isWritable("/usr/local/bin") {
+			return "/usr/local/bin"
 		}
+		return filepath.Join(os.Getenv("HOME"), ".local", "bin")
 	case "windows":
-		// Per-user directory; created below if missing, no elevation needed.
-		installDir = filepath.Join(os.Getenv("USERPROFILE"), "bin")
+		// Per-user directory; created by the caller if missing, no elevation needed.
+		return filepath.Join(os.Getenv("USERPROFILE"), "bin")
 	default:
 		return ""
 	}
+}
 
-	return filepath.Join(installDir, binaryName)
+func sameFile(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
 }
 
 func isWritable(dir string) bool {
-	testFile := filepath.Join(dir, ".testwrite")
+	testFile := filepath.Join(dir, ".docsgpt-write-test")
 	if err := os.WriteFile(testFile, []byte{}, 0644); err != nil {
 		return false
 	}
 	os.Remove(testFile)
 	return true
+}
+
+// onPath reports whether dir is already one of the PATH entries.
+func onPath(dir string) bool {
+	for _, entry := range filepath.SplitList(os.Getenv("PATH")) {
+		if entry == "" {
+			continue
+		}
+		if entry == dir {
+			return true
+		}
+		// Tolerate a trailing separator and relative spellings of the same dir.
+		if abs, err := filepath.Abs(entry); err == nil && abs == filepath.Clean(dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureOnPath makes the installed binary reachable by name from new shells.
+// Failing to edit a profile is reported, not fatal: the binary is installed
+// and the user can add the directory themselves.
+func ensureOnPath(dir string) {
+	if onPath(dir) {
+		return
+	}
+	if os.Getenv(noModifyPathEnv) == "1" {
+		fmt.Println(display.Muted("Add " + dir + " to your PATH to run docsgpt-cli by name."))
+		return
+	}
+	configPath, entry, err := shellPathEntry(dir)
+	if err != nil {
+		fmt.Println(display.Muted("Add " + dir + " to your PATH to run docsgpt-cli by name."))
+		return
+	}
+	added, err := appendToShellConfig(configPath, entry)
+	if err != nil {
+		fmt.Println(display.Muted("Could not update " + configPath + ": " + err.Error()))
+		fmt.Println(display.Muted("Add " + dir + " to your PATH to run docsgpt-cli by name."))
+		return
+	}
+	if added {
+		fmt.Println(display.Muted("Added " + dir + " to your PATH in " + configPath + ". Open a new terminal to pick it up."))
+		return
+	}
+	fmt.Println(display.Muted(configPath + " already adds " + dir + " to PATH. Open a new terminal to pick it up."))
+}
+
+// shellPathEntry returns the profile to edit and the line that puts dir on PATH
+// in that shell's syntax.
+func shellPathEntry(dir string) (configPath, entry string, err error) {
+	home := os.Getenv("HOME")
+	shell := os.Getenv("SHELL")
+	// Keep the profile portable when the directory lives under $HOME.
+	quoted := dir
+	if home != "" && strings.HasPrefix(dir, home+string(os.PathSeparator)) {
+		quoted = "$HOME" + strings.TrimPrefix(dir, home)
+	}
+
+	switch {
+	case strings.Contains(shell, "fish"):
+		// fish_add_path is idempotent, so re-running install is harmless.
+		return filepath.Join(home, ".config", "fish", "config.fish"),
+			"fish_add_path " + dir, nil
+	case strings.Contains(shell, "zsh"):
+		return filepath.Join(home, ".zshrc"),
+			`export PATH="` + quoted + `:$PATH"`, nil
+	case strings.Contains(shell, "bash"):
+		return filepath.Join(home, ".bashrc"),
+			`export PATH="` + quoted + `:$PATH"`, nil
+	}
+	return "", "", errors.New("unrecognised shell")
 }
 
 func addToWindowsPATH(dir string) error {
@@ -130,42 +241,33 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-func addToPATH(binaryPath string) error {
-	shellConfigPath, shellConfigFound := getShellConfigPath()
-
-	if !shellConfigFound {
-		return fmt.Errorf("unable to find shell configuration file")
+// appendToShellConfig adds entry to configPath unless it is already there.
+// It reports whether the file was changed.
+func appendToShellConfig(configPath, entry string) (bool, error) {
+	existing, err := os.ReadFile(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
 	}
-
-	pathEntry := fmt.Sprintf("export PATH=\"$HOME/.local/bin:$PATH\"")
-	return appendToShellConfig(shellConfigPath, pathEntry)
-}
-
-func getShellConfigPath() (string, bool) {
-	homeDir := os.Getenv("HOME")
-	shell := os.Getenv("SHELL")
-
-	if strings.Contains(shell, "zsh") {
-		return filepath.Join(homeDir, ".zshrc"), true
-	} else if strings.Contains(shell, "bash") {
-		return filepath.Join(homeDir, ".bashrc"), true
-	} else if strings.Contains(shell, "fish") {
-		return filepath.Join(homeDir, ".config/fish/config.fish"), true
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(line) == entry {
+			return false, nil
+		}
 	}
-
-	return "", false
-}
-
-func appendToShellConfig(configPath, content string) error {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return false, err
+	}
 	file, err := os.OpenFile(configPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return fmt.Errorf("unable to open shell config: %w", err)
+		return false, err
 	}
 	defer file.Close()
 
-	if _, err := file.WriteString(content + "\n"); err != nil {
-		return fmt.Errorf("unable to write to shell config: %w", err)
+	prefix := "\n"
+	if len(existing) == 0 || strings.HasSuffix(string(existing), "\n") {
+		prefix = ""
 	}
-
-	return nil
+	if _, err := file.WriteString(prefix + "# Added by docsgpt-cli install\n" + entry + "\n"); err != nil {
+		return false, err
+	}
+	return true, file.Close()
 }
