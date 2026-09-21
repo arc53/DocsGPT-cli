@@ -42,7 +42,7 @@ and hide a stale pin.
 
 A CLI-only release (`sdk: none`) skips all of that and just tags and releases —
 after checking that `go.mod` does not pin an sdk version *older* than the newest
-published `sdk/v*` tag, so a release cannot silently ship against an sdk older
+published sdk **release** tag (prereleases are not counted), so a release cannot silently ship against an sdk older
 than the one that exists. A pin ahead of the newest release — a prerelease, say
 — is fine.
 
@@ -98,7 +98,8 @@ is published and nothing references it. Do **not** re-run the job — start a ne
 one with `sdk:` set to that exact version (e.g. `0.2.0`). The workflow sees the
 tag already exists and the pin is behind it, skips tagging, and just pins and
 commits it. A CLI-only release in that state is refused, with that remedy in
-the message.
+the message — unless the tag that was published is a prerelease, which the
+staleness check does not count.
 
 Asking for an sdk version that is already published and *not* behind the current
 pin is an error rather than a silent no-op — otherwise a typo would push a pin

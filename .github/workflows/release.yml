@@ -138,7 +138,11 @@ jobs:
           #
           # `sort -V` puts v0.2.0-rc1 AFTER v0.2.0, the opposite of semver,
           # where a prerelease precedes its release. Mapping the first '-' to
-          # '~' fixes it: sort -V ranks '~' below end-of-string.
+          # '~' fixes it: sort -V ranks '~' below end-of-string (documented
+          # coreutils behaviour). The remaining divergence from semver is
+          # numeric prerelease identifiers — sort -V says rc9 < rc10, semver
+          # says the opposite because it compares them as strings — and the
+          # version sort gives the intended answer there.
           semver_sort_key() { printf '%s' "$1" | sed 's/-/~/'; }
           older_than() {
             [ "$1" != "$2" ] || return 1
@@ -166,24 +170,25 @@ jobs:
           if [ "$SDK_INPUT" != none ]; then
             sdk_next="$(next "$sdk_cur" "$SDK_INPUT")"
             tag_sdk=true
+            pinned="$(pinned_sdk)"
+            if [ -z "$pinned" ]; then
+              echo "::error::go.mod does not pin github.com/arc53/DocsGPT-cli/sdk." >&2
+              exit 1
+            fi
+            # Whatever we end up pinning has to be above what is pinned now.
+            # Minting sdk/v0.2.1 while main pins v0.3.0-rc1 would move the pin
+            # down and publish newer content under a lower version.
+            if ! older_than "$pinned" "v${sdk_next}"; then
+              echo "::error::go.mod pins sdk ${pinned}; releasing v${sdk_next} would move the pin backwards. Pick a higher version." >&2
+              exit 1
+            fi
             if git rev-parse -q --verify "refs/tags/sdk/v${sdk_next}" >/dev/null; then
               # Already published. That is a legitimate request in exactly one
               # case: a previous run tagged the sdk and died before the pin
               # landed, so catching the pin up is the recovery RELEASING.md
               # prescribes...
-              # ...and the pin must be BEHIND it. Anything else — a typo, a
-              # version copied from an old run — would push a pin downgrade to
-              # the branch and build the CLI against an older sdk, which is the
-              # one thing this workflow exists to prevent.
-              pinned="$(pinned_sdk)"
-              if [ -z "$pinned" ]; then
-                echo "::error::go.mod does not pin github.com/arc53/DocsGPT-cli/sdk, so there is nothing to catch up." >&2
-                exit 1
-              fi
-              if ! older_than "$pinned" "v${sdk_next}"; then
-                echo "::error::sdk/v${sdk_next} is already published and go.mod pins ${pinned}, which is the same or newer. Pick a bump, or use sdk: none." >&2
-                exit 1
-              fi
+              # The ordering check above already established the pin is behind
+              # it, which is exactly the partial-failure state this recovers.
               tag_sdk=false
               echo "sdk/v${sdk_next} is already tagged; pinning ${pinned} up to it without re-tagging."
             fi
@@ -213,6 +218,13 @@ jobs:
 
           if [ "$CLI_INPUT" != none ]; then
             cli_next="$(next "$cli_cur" "$CLI_INPUT")"
+            # releases/latest is what install.sh downloads and what the
+            # self-updater compares against, so publishing below the current
+            # release would serve an older CLI to every new install.
+            if older_than "v${cli_next}" "v${cli_cur}"; then
+              echo "::error::v${cli_next} is below the current release v${cli_cur}; it would become releases/latest. Pick a higher version." >&2
+              exit 1
+            fi
             {
               echo "cli_tag=v${cli_next}"
               echo "do_cli=true"
@@ -246,6 +258,7 @@ jobs:
           go -C sdk test ./...
 
       - name: Tag the sdk module
+        id: tag_sdk_step
         if: steps.v.outputs.tag_sdk == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -297,6 +310,7 @@ jobs:
           GOWORK=off go test ./...
 
       - name: Commit the pin bump
+        id: pin_commit
         if: steps.v.outputs.do_sdk == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -351,6 +365,7 @@ jobs:
           fi
 
       - name: Run GoReleaser
+        id: goreleaser
         if: steps.v.outputs.do_cli == 'true'
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -376,15 +391,27 @@ jobs:
           CLI_TAG: ${{ steps.v.outputs.cli_tag }}
           SDK_TAG: ${{ steps.v.outputs.sdk_tag }}
           TAG_SDK: ${{ steps.v.outputs.tag_sdk }}
+          # Outcomes, not intentions: this step runs even when the release
+          # failed, and reporting what Resolve planned would claim a release
+          # that never happened.
+          SDK_PINNED: ${{ steps.pin_commit.outcome }}
+          CLI_RELEASED: ${{ steps.goreleaser.outcome }}
         run: |
           # Plain `[ -n "$X" ] && echo` returns 1 when X is empty, and as the
           # last command in the step that fails an otherwise good release.
           {
             echo "### Release"
-            if [ -n "$SDK_TAG" ] && [ "${TAG_SDK:-}" = true ]; then
-              echo "- sdk: \`$SDK_TAG\` (released)"
-            elif [ -n "$SDK_TAG" ]; then
-              echo "- sdk: \`$SDK_TAG\` (pinned; was already published)"
+            if [ "${SDK_PINNED:-}" = success ]; then
+              if [ "${TAG_SDK:-}" = true ]; then
+                echo "- sdk: \`$SDK_TAG\` released and pinned"
+              else
+                echo "- sdk: \`$SDK_TAG\` pinned (was already published)"
+              fi
             fi
-            if [ -n "$CLI_TAG" ]; then echo "- CLI: \`$CLI_TAG\`"; fi
+            if [ "${CLI_RELEASED:-}" = success ]; then
+              echo "- CLI: \`$CLI_TAG\` released"
+            fi
+            if [ "${SDK_PINNED:-}" != success ] && [ "${CLI_RELEASED:-}" != success ]; then
+              echo "Nothing was released. See the failing step; RELEASING.md covers recovery."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
