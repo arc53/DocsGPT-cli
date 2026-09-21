@@ -21,6 +21,7 @@ docsgpt-cli bench --vs other-agent        # A/B compare two agents
 docsgpt-cli bench --model gpt-5.6-terra   # pin one model for every case
 docsgpt-cli bench --matrix m1,m2,m3       # run once per model, print the comparison table
 docsgpt-cli bench --run-tag nightly       # tag requests for server-side telemetry
+docsgpt-cli bench --target stream --agent-id <id>   # run an agent by id with your personal access token
 docsgpt-cli bench --baseline last         # diff against the previous saved run
 docsgpt-cli bench record                  # snapshot answers into golden.json files
 docsgpt-cli bench init my-suite           # scaffold a fresh suite
@@ -31,6 +32,13 @@ docsgpt-cli bench init my-suite           # scaffold a fresh suite
 wins; `$$` escapes a literal dollar; unset variables fail the load). So commit
 `agent: ${DOCSGPT_BENCH_KEY}` and keep the key in `.env` (gitignored) or CI
 secrets. The webhook token can also be passed with `--webhook-url`.
+
+**Agent by id (personal access token)**: instead of an agent API key, the
+`stream` and `answer` targets can address an agent by id — set `agent_id:` in
+`bench.yaml` or a `case.yaml` (mutually exclusive with `agent:`), or pass
+`--agent-id`. The request then carries `agent_id` plus
+`Authorization: Bearer <token>` (scope `chat:run`), with the token taken from
+`--token`, `DOCSGPT_TOKEN` or `docsgpt-cli login`. See `09-agent-id`.
 
 Each case is a directory with a `case.yaml` (a `question` or a list of
 `turns` + `expect` assertions) and optional attachment files. Targets: `v1`

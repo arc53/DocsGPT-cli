@@ -34,6 +34,16 @@ func setBenchHeaders(req *http.Request, tag string) {
 	}
 }
 
+// setAgentAuth authenticates a stream/answer request that addresses its agent
+// by id: the personal access token goes in the Authorization header. Requests
+// using an agent api_key (in the body) carry no Authorization header, exactly
+// as before.
+func setAgentAuth(httpReq *http.Request, req Request) {
+	if req.AgentID != "" && req.Token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+req.Token)
+	}
+}
+
 // errorMessage extracts a human-readable message from an error response body:
 // OpenAI-style {"error": {"message": ...}}, DocsGPT-style {"error": "..."} or
 // {"message": "..."}, an SSE error frame, or the trimmed body itself.
@@ -54,6 +64,17 @@ func errorMessage(body []byte) string {
 				return m
 			}
 		}
+	}
+	// Token rejections carry a machine code plus the explanation:
+	// {"error": "insufficient_scope", "message": ..., "required_scope": ...}.
+	// Report all of it, keeping the code first so existing matches still hold.
+	if code, msg := gjson.GetBytes(body, "error"), gjson.GetBytes(body, "message"); code.Type == gjson.String &&
+		code.String() != "" && msg.Type == gjson.String && msg.String() != "" {
+		out := code.String() + ": " + msg.String()
+		if scope := gjson.GetBytes(body, "required_scope").String(); scope != "" {
+			out += " (required scope: " + scope + ")"
+		}
+		return out
 	}
 	for _, path := range []string{"error.message", "error", "message", "detail"} {
 		if r := gjson.GetBytes(body, path); r.Exists() {
@@ -124,8 +145,10 @@ func extractToolCalls(rawArray json.RawMessage) []ToolCallInfo {
 // as transient and polling continues: the endpoint answers 503 whenever no
 // idle Celery worker responds to its control ping, and a busy solo-pool
 // worker — busy running our task — produces exactly that false negative.
-// It is shared by the webhook target and attachment uploads.
-func pollTaskStatus(ctx context.Context, baseURL, taskID string, interval time.Duration) ([]byte, error) {
+// It is shared by the webhook target and attachment uploads. token, when set,
+// is sent as the Bearer credential (agent_id runs: /api/task_status accepts a
+// personal access token holding chat:run); "" polls anonymously as before.
+func pollTaskStatus(ctx context.Context, baseURL, taskID string, interval time.Duration, token string) ([]byte, error) {
 	if interval <= 0 {
 		interval = 2 * time.Second // defensive fallback; mirrors spec.DefaultPollInterval
 	}
@@ -145,7 +168,7 @@ func pollTaskStatus(ctx context.Context, baseURL, taskID string, interval time.D
 		case <-ticker.C:
 		}
 
-		body, status, err := getJSON(ctx, statusURL)
+		body, status, err := getJSON(ctx, statusURL, token)
 		if err != nil {
 			return nil, err
 		}
@@ -204,12 +227,16 @@ func unwrapURLError(err error) error {
 }
 
 // getJSON performs a context-aware GET and returns the body and status code.
-func getJSON(ctx context.Context, target string) ([]byte, int, error) {
+// A non-empty token is sent as `Authorization: Bearer`.
+func getJSON(ctx context.Context, target, token string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("build GET %s: %w", target, err)
 	}
 	setBenchHeaders(req, "")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("GET %s: %w", target, err)

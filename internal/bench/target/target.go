@@ -71,8 +71,14 @@ type Request struct {
 	ConversationID string
 	History        []Exchange
 
-	BaseURL      string
-	APIKey       string
+	BaseURL string
+	APIKey  string // agent API key (v1: Bearer; stream/answer: api_key in the body)
+	// AgentID + Token select an agent by id instead of by API key
+	// (stream/answer only): the body carries agent_id and the request is
+	// authenticated with `Authorization: Bearer <personal access token>`
+	// (scope chat:run). Exactly one of APIKey / AgentID is set.
+	AgentID      string
+	Token        string
 	WebhookURL   string        // webhook target only
 	Timeout      time.Duration // whole-run budget, including webhook polling
 	PollInterval time.Duration // webhook polling cadence

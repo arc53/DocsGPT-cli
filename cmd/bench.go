@@ -44,6 +44,7 @@ var (
 	benchModel        string
 	benchMatrix       string
 	benchRunTag       string
+	benchAgentID      string
 )
 
 var benchCmd = &cobra.Command{
@@ -61,6 +62,11 @@ agent through one of four targets and checks the answer:
   target: answer   POST /api/answer           (api_key in body, single JSON reply)
   target: webhook  POST <webhook_url>         (async, polled to completion)
 
+The stream and answer targets can also address an agent by id instead of by
+API key: set agent_id: (bench.yaml or case.yaml) or pass --agent-id, and the
+request carries agent_id plus your personal access token (scope chat:run) as
+the Bearer credential — see 'docsgpt-cli login' / DOCSGPT_TOKEN.
+
 Assertions live under a case's expect: block (answer text, JSON paths, sources,
 tools, limits incl. time-to-first-token, stream integrity, an expected server
 error for negative cases, golden.json, or an LLM-as-judge rubric).
@@ -72,6 +78,7 @@ Examples:
   docsgpt-cli bench --model gpt-5.6-terra          # pin one model for every case
   docsgpt-cli bench --matrix m1,m2,m3 --tags hard   # run once per model, compare
   docsgpt-cli bench --vs staging-agent  # A/B two agents
+  docsgpt-cli bench --target stream --agent-id <id>   # run by agent id with DOCSGPT_TOKEN
   docsgpt-cli bench init                # scaffold a starter suite
   docsgpt-cli bench record              # refresh golden answers`,
 	Args: cobra.MaximumNArgs(1),
@@ -126,6 +133,7 @@ func addSharedBenchFlags(c *cobra.Command) {
 	f := c.Flags()
 	f.StringVar(&benchTarget, "target", "", "Override the target for every case (v1, stream, answer, webhook)")
 	f.StringVar(&benchModel, "model", "", "Model id sent with every request (overrides suite/case model)")
+	f.StringVar(&benchAgentID, "agent-id", "", "Run every case against this agent id using the personal access token (stream/answer targets; overrides agent/agent_id)")
 	f.StringVar(&benchRunTag, "run-tag", "", "Tag sent as X-DocsGPT-Bench-Tag: bench:<tag> so server telemetry can attribute bench traffic")
 	f.StringVar(&benchWebhookURL, "webhook-url", "", "Override webhook_url for every case (keeps the token out of YAML)")
 	f.StringVarP(&benchFilter, "filter", "k", "", "Only run cases whose name or description contains this text")
@@ -172,10 +180,15 @@ func runBenchSuite(args []string, record bool) {
 		benchFatal("--matrix and --vs are mutually exclusive")
 	}
 
+	if benchAgentID != "" && globalKey != "" {
+		benchFatal("--agent-id and --key are mutually exclusive")
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		benchFatal("load config: " + err.Error())
 	}
+	benchToken, _ := cfg.ResolveToken(globalToken)
 
 	resolver := func(nameOrKey string) (string, string, error) {
 		if nameOrKey == "" {
@@ -228,6 +241,8 @@ func runBenchSuite(args []string, record bool) {
 		BaseURL:              cfg.ResolveURL(""),
 		URLOverride:          globalURL,
 		AgentOverride:        globalKey,
+		Token:                benchToken,
+		AgentIDOverride:      benchAgentID,
 		ModelOverride:        benchModel,
 		TargetOverride:       benchTarget,
 		WebhookURLOverride:   benchWebhookURL,
@@ -267,6 +282,7 @@ func runBenchSuite(args []string, record bool) {
 		for _, key := range benchVS {
 			vopts := opts
 			vopts.AgentOverride = key
+			vopts.AgentIDOverride = "" // --vs compares against an API-key agent
 			vopts.UpdateGolden = false // vs runs must never overwrite goldens
 			vr, err := runner.Run(ctx, vopts)
 			if err != nil {
@@ -524,6 +540,12 @@ const benchYAMLTemplate = `# Suite defaults applied to every case (each case may
 # secrets in the environment:
 # agent: ${DOCSGPT_BENCH_KEY}
 # agent: my-agent
+#
+# Alternative for the stream/answer targets: address the agent by id and
+# authenticate with your personal access token (scope chat:run; from
+# 'docsgpt-cli login', DOCSGPT_TOKEN or --token) instead of an agent API key.
+# Mutually exclusive with agent. Overridable with --agent-id.
+# agent_id: ${DOCSGPT_BENCH_AGENT_ID}
 
 # Wire protocol: v1 (default), stream, answer, or webhook. Overridable with --target.
 target: v1

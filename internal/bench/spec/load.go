@@ -48,6 +48,9 @@ func Load(dir string) (*Suite, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
+	if suite.Config.Agent != "" && suite.Config.AgentID != "" {
+		return nil, fmt.Errorf("%s: agent and agent_id are mutually exclusive (set the other one per case)", suitePath)
+	}
 	if suite.Config.Timeout < 0 || suite.Config.PollInterval < 0 {
 		return nil, fmt.Errorf("%s: timeout and poll_interval must be positive", suitePath)
 	}

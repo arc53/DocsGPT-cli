@@ -40,8 +40,11 @@ const SchemaVersion = 2
 var (
 	lookup            = target.ForName
 	uploadAttachments = target.UploadAttachments
-	judgeRun          = judge.Run
-	fetchPricing      = func(ctx context.Context, t *pricing.Table, baseURL string) error { return t.Fetch(ctx, baseURL) }
+	// uploadAttachmentsWithToken serves agent_id runs, which have no agent
+	// api_key: the upload is authenticated with the personal access token.
+	uploadAttachmentsWithToken = target.UploadAttachmentsWithToken
+	judgeRun                   = judge.Run
+	fetchPricing               = func(ctx context.Context, t *pricing.Table, baseURL string) error { return t.Fetch(ctx, baseURL) }
 )
 
 // KeyResolver maps an agent reference (a key name from the config, or a literal
@@ -56,8 +59,17 @@ type Options struct {
 
 	BaseURL       string // config base URL; lowest URL precedence
 	URLOverride   string // --url; wins over case/suite/config
-	AgentOverride string // --key; wins over case/suite agent
-	ModelOverride string // --model / --matrix entry; wins over case/suite model
+	AgentOverride string // --key; wins over case/suite agent and agent_id
+
+	// Token is the personal access token (--token > DOCSGPT_TOKEN > config).
+	// It authenticates agent_id runs (scope chat:run), their attachment
+	// uploads, and the /api/models pricing fetch. Runs that use an agent API
+	// key are unaffected by it.
+	Token string
+	// AgentIDOverride (--agent-id) runs every case against this agent id with
+	// the token; mutually exclusive with AgentOverride.
+	AgentIDOverride string
+	ModelOverride   string // --model / --matrix entry; wins over case/suite model
 
 	TargetOverride       string // --target
 	WebhookURLOverride   string // --webhook-url; wins over case/suite webhook_url
@@ -201,6 +213,9 @@ func Run(ctx context.Context, opts Options) (*SuiteResult, error) {
 	if opts.ResolveKey == nil {
 		return nil, fmt.Errorf("runner: ResolveKey is required")
 	}
+	if opts.AgentOverride != "" && opts.AgentIDOverride != "" {
+		return nil, fmt.Errorf("runner: --key and --agent-id are mutually exclusive")
+	}
 
 	concurrency := opts.Concurrency
 	if concurrency < 1 {
@@ -216,6 +231,7 @@ func Run(ctx context.Context, opts Options) (*SuiteResult, error) {
 		prices:  pricing.New(opts.Suite.Config.Pricing),
 		fetched: make(map[string]bool),
 	}
+	rc.prices.SetToken(opts.Token, trustedBaseURL(opts))
 	start := time.Now()
 	results := make([]*CaseResult, len(opts.Cases))
 	var stopped atomic.Bool
@@ -329,6 +345,13 @@ func (rc *runContext) agentLabel() string {
 	return "mixed"
 }
 
+// trustedBaseURL is the server the user chose (--url, else DOCSGPT_URL or the
+// config file). Only its origin may receive the personal access token; a
+// base_url from the suite YAML never does.
+func trustedBaseURL(opts Options) string {
+	return firstNonEmpty(opts.URLOverride, opts.BaseURL)
+}
+
 // pricingFor returns the pricing table for baseURL, fetching /api/models the
 // first time a base URL is seen (once per run, best effort).
 func (rc *runContext) pricingFor(ctx context.Context, baseURL string) *pricing.Table {
@@ -378,17 +401,45 @@ func (rc *runContext) runCase(ctx context.Context, c *spec.Case) *CaseResult {
 	cr.RequiredPass = required
 
 	resolvedURL := firstNonEmpty(opts.URLOverride, eff.BaseURL, opts.BaseURL)
-	agentName := firstNonEmpty(opts.AgentOverride, eff.Agent)
-	if agentName == "" {
-		setError(cr, "no agent configured (set agent in bench.yaml/case.yaml or pass --key)")
+	// Exactly one credential addresses the agent: an API key (agent / --key)
+	// or an agent id run with the personal access token (agent_id /
+	// --agent-id). A command-line override replaces whatever the YAML chose.
+	agentName, agentID := eff.Agent, eff.AgentID
+	switch {
+	case opts.AgentOverride != "":
+		agentName, agentID = opts.AgentOverride, ""
+	case opts.AgentIDOverride != "":
+		agentName, agentID = "", opts.AgentIDOverride
+	}
+	var keyValue string
+	switch {
+	case agentID != "":
+		if !spec.TargetSupportsAgentID(eff.Target) {
+			setError(cr, spec.AgentIDTargetError(eff.Target).Error())
+			return cr
+		}
+		if trusted := trustedBaseURL(opts); !spec.SameOrigin(resolvedURL, trusted) {
+			setError(cr, fmt.Sprintf("refusing to send the personal access token to %s: the suite's base_url is not the configured server (%s); pass --url %s if you trust it", resolvedURL, trusted, resolvedURL))
+			return cr
+		}
+		if opts.Token == "" {
+			setError(cr, "agent_id requires a personal access token with the chat:run scope (run 'docsgpt-cli login', set DOCSGPT_TOKEN, or pass --token)")
+			return cr
+		}
+		rc.addLabel(agentIDLabel(agentID))
+	case agentName != "":
+		var displayName string
+		var err error
+		keyValue, displayName, err = opts.ResolveKey(agentName)
+		if err != nil {
+			setError(cr, "resolve agent: "+err.Error())
+			return cr
+		}
+		rc.addLabel(displayName)
+	default:
+		setError(cr, "no agent configured (set agent or agent_id in bench.yaml/case.yaml, or pass --key / --agent-id)")
 		return cr
 	}
-	keyValue, displayName, err := opts.ResolveKey(agentName)
-	if err != nil {
-		setError(cr, "resolve agent: "+err.Error())
-		return cr
-	}
-	rc.addLabel(displayName)
 
 	if resolvedURL == "" {
 		setError(cr, "no base URL configured (set base_url or pass --url)")
@@ -440,10 +491,14 @@ func (rc *runContext) runCase(ctx context.Context, c *spec.Case) *CaseResult {
 		Stream:       eff.Stream,
 		BaseURL:      resolvedURL,
 		APIKey:       keyValue,
+		AgentID:      agentID,
 		WebhookURL:   eff.WebhookURL,
 		Timeout:      eff.Timeout,
 		PollInterval: eff.PollInterval,
 		RunTag:       opts.RunTag,
+	}
+	if agentID != "" {
+		req.Token = opts.Token
 	}
 	if len(c.Attachments) > 0 {
 		paths := make([]string, len(c.Attachments))
@@ -456,7 +511,13 @@ func (rc *runContext) runCase(ctx context.Context, c *spec.Case) *CaseResult {
 			}
 		} else {
 			aCtx, cancel := context.WithTimeout(ctx, eff.Timeout)
-			ids, err := uploadAttachments(aCtx, resolvedURL, keyValue, paths, eff.PollInterval)
+			var ids []string
+			var err error
+			if agentID != "" {
+				ids, err = uploadAttachmentsWithToken(aCtx, resolvedURL, opts.Token, paths, eff.PollInterval)
+			} else {
+				ids, err = uploadAttachments(aCtx, resolvedURL, keyValue, paths, eff.PollInterval)
+			}
 			cancel()
 			if err != nil {
 				setError(cr, "upload attachments: "+err.Error())
@@ -734,6 +795,9 @@ func (o Options) effective(c *spec.Case) spec.Effective {
 	}
 	return eff
 }
+
+// agentIDLabel is the report label of an agent addressed by id.
+func agentIDLabel(id string) string { return "agent:" + id }
 
 // setError marks a case as errored with a single synthetic run carrying msg, so
 // reporters can surface the failure uniformly.

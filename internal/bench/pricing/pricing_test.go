@@ -101,3 +101,64 @@ func TestFetchErrors(t *testing.T) {
 		t.Errorf("failed fetches must not add prices")
 	}
 }
+
+func TestFetchCarriesToken(t *testing.T) {
+	const body = `{"models":[{"id":"m1","input_cost_per_million":1,"output_cost_per_million":2}]}`
+	tests := []struct {
+		name      string
+		token     string
+		rejectPAT bool
+		wantAuth  []string // Authorization header of each request, in order
+	}{
+		{"anonymous (unchanged)", "", false, []string{""}},
+		{"token accepted", "dgpt_pat_x", false, []string{"Bearer dgpt_pat_x"}},
+		{"token lacks models:read, anonymous retry", "dgpt_pat_x", true, []string{"Bearer dgpt_pat_x", ""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var seen []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				auth := r.Header.Get("Authorization")
+				seen = append(seen, auth)
+				if tt.rejectPAT && auth != "" {
+					w.WriteHeader(http.StatusForbidden)
+					io.WriteString(w, `{"error":"insufficient_scope"}`)
+					return
+				}
+				io.WriteString(w, body)
+			}))
+			defer srv.Close()
+			tb := New(nil)
+			tb.SetToken(tt.token, srv.URL)
+			if err := tb.Fetch(context.Background(), srv.URL); err != nil {
+				t.Fatalf("Fetch: %v", err)
+			}
+			if !tb.Has("m1") {
+				t.Errorf("pricing not loaded")
+			}
+			if len(seen) != len(tt.wantAuth) {
+				t.Fatalf("requests = %q, want %q", seen, tt.wantAuth)
+			}
+			for i := range seen {
+				if seen[i] != tt.wantAuth[i] {
+					t.Errorf("request %d Authorization = %q, want %q", i, seen[i], tt.wantAuth[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFetchNeverSendsTokenToAnUntrustedOrigin(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("Authorization"))
+		io.WriteString(w, `{"models":[]}`)
+	}))
+	defer srv.Close()
+	tb := New(nil)
+	tb.SetToken("dgpt_pat_secret", "https://docsgpt.example.com")
+	_ = tb.Fetch(context.Background(), srv.URL)
+	if len(seen) != 1 || seen[0] != "" {
+		t.Fatalf("Authorization sent to an untrusted origin: %q", seen)
+	}
+}

@@ -60,6 +60,9 @@ type v1DocsGPTExt struct {
 }
 
 func (v1Target) Run(ctx context.Context, req Request) (*Result, error) {
+	if req.AgentID != "" {
+		return nil, fmt.Errorf("v1 target: %w", spec.AgentIDTargetError(spec.TargetV1))
+	}
 	if req.Timeout <= 0 {
 		req.Timeout = spec.DefaultTimeout // never hang unbounded
 	}

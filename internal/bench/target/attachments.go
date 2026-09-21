@@ -21,9 +21,28 @@ import (
 // a task instead of a direct id, it polls /api/task_status until the id is
 // ready. One file is sent per request for simplicity.
 func UploadAttachments(ctx context.Context, baseURL, apiKey string, paths []string, pollInterval time.Duration) ([]string, error) {
+	return uploadAll(ctx, baseURL, attachmentAuth{apiKey: apiKey}, paths, pollInterval)
+}
+
+// UploadAttachmentsWithToken is UploadAttachments for runs that address the
+// agent by id: there is no agent api_key, so the upload is authenticated with
+// the personal access token as the Bearer credential and the attachment is
+// owned by the token's user.
+func UploadAttachmentsWithToken(ctx context.Context, baseURL, token string, paths []string, pollInterval time.Duration) ([]string, error) {
+	return uploadAll(ctx, baseURL, attachmentAuth{token: token}, paths, pollInterval)
+}
+
+// attachmentAuth is how one upload authenticates: an agent api_key form field
+// or a Bearer personal access token.
+type attachmentAuth struct {
+	apiKey string
+	token  string
+}
+
+func uploadAll(ctx context.Context, baseURL string, auth attachmentAuth, paths []string, pollInterval time.Duration) ([]string, error) {
 	ids := make([]string, 0, len(paths))
 	for _, p := range paths {
-		id, err := uploadAttachment(ctx, baseURL, apiKey, p, pollInterval)
+		id, err := uploadAttachment(ctx, baseURL, auth, p, pollInterval)
 		if err != nil {
 			return nil, fmt.Errorf("upload attachment %s: %w", p, err)
 		}
@@ -32,7 +51,7 @@ func UploadAttachments(ctx context.Context, baseURL, apiKey string, paths []stri
 	return ids, nil
 }
 
-func uploadAttachment(ctx context.Context, baseURL, apiKey, path string, pollInterval time.Duration) (string, error) {
+func uploadAttachment(ctx context.Context, baseURL string, auth attachmentAuth, path string, pollInterval time.Duration) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open file: %w", err)
@@ -48,8 +67,10 @@ func uploadAttachment(ctx context.Context, baseURL, apiKey, path string, pollInt
 	if _, err := io.Copy(fw, f); err != nil {
 		return "", fmt.Errorf("copy file body: %w", err)
 	}
-	if err := mw.WriteField("api_key", apiKey); err != nil {
-		return "", fmt.Errorf("write api_key field: %w", err)
+	if auth.apiKey != "" {
+		if err := mw.WriteField("api_key", auth.apiKey); err != nil {
+			return "", fmt.Errorf("write api_key field: %w", err)
+		}
 	}
 	if err := mw.Close(); err != nil {
 		return "", fmt.Errorf("finalize multipart body: %w", err)
@@ -61,6 +82,9 @@ func uploadAttachment(ctx context.Context, baseURL, apiKey, path string, pollInt
 		return "", fmt.Errorf("build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", mw.FormDataContentType())
+	if auth.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+auth.token)
+	}
 	setBenchHeaders(httpReq, "")
 
 	resp, err := httpClient.Do(httpReq)
@@ -93,7 +117,7 @@ func uploadAttachment(ctx context.Context, baseURL, apiKey, path string, pollInt
 	// has run; sending the question at that point races the parser. Whenever a
 	// task is reported, wait for it to finish even if an id is already known.
 	if taskID != "" {
-		polled, err := pollAttachmentID(ctx, baseURL, taskID, pollInterval)
+		polled, err := pollAttachmentID(ctx, baseURL, taskID, pollInterval, auth.token)
 		if err != nil {
 			return "", err
 		}
@@ -113,8 +137,8 @@ func uploadAttachment(ctx context.Context, baseURL, apiKey, path string, pollInt
 
 // pollAttachmentID polls task_status until SUCCESS and returns the attachment
 // id from the task result ("" when the result carries none).
-func pollAttachmentID(ctx context.Context, baseURL, taskID string, pollInterval time.Duration) (string, error) {
-	statusBody, err := pollTaskStatus(ctx, baseURL, taskID, pollInterval)
+func pollAttachmentID(ctx context.Context, baseURL, taskID string, pollInterval time.Duration, token string) (string, error) {
+	statusBody, err := pollTaskStatus(ctx, baseURL, taskID, pollInterval, token)
 	if err != nil {
 		return "", err
 	}

@@ -1,0 +1,19 @@
+description: Run an agent by id with a personal access token instead of an agent API key
+tags: [pat]
+
+skip: "set agent_id below (e.g. agent_id: $${DOCSGPT_BENCH_AGENT_ID}) or pass --agent-id, make a token available (docsgpt-cli login / DOCSGPT_TOKEN), then delete this skip line"
+
+# agent_id replaces the suite's `agent:` for this case. The request carries
+# agent_id in the body and `Authorization: Bearer <token>` (scope chat:run)
+# instead of an agent api_key. Supported by the stream and answer targets only;
+# v1 and webhook authenticate with the agent API key / webhook token.
+target: stream
+agent_id: 00000000-0000-0000-0000-000000000000
+
+question: Reply with exactly the single word PONG.
+
+expect:
+  answer:
+    contains: PONG
+  stream:
+    end_frame: true

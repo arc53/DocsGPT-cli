@@ -15,7 +15,9 @@ import (
 )
 
 // streamTarget runs a question against POST {base}/stream, the native DocsGPT
-// SSE endpoint. Auth is the api_key field inside the JSON body.
+// SSE endpoint. Auth is the api_key field inside the JSON body, or — when the
+// request addresses the agent by id — agent_id in the body plus a personal
+// access token as the Bearer credential.
 type streamTarget struct{}
 
 func (streamTarget) Name() string { return spec.TargetStream }
@@ -23,7 +25,8 @@ func (streamTarget) Name() string { return spec.TargetStream }
 // streamRequest is the /stream request body.
 type streamRequest struct {
 	Question       string   `json:"question"`
-	APIKey         string   `json:"api_key"`
+	APIKey         string   `json:"api_key,omitempty"`
+	AgentID        string   `json:"agent_id,omitempty"`
 	ConversationID string   `json:"conversation_id,omitempty"`
 	ModelID        string   `json:"model_id,omitempty"`
 	Attachments    []string `json:"attachments,omitempty"`
@@ -52,6 +55,7 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 	body, err := json.Marshal(streamRequest{
 		Question:       req.Question,
 		APIKey:         req.APIKey,
+		AgentID:        req.AgentID,
 		ConversationID: req.ConversationID,
 		ModelID:        req.Model,
 		Attachments:    req.AttachmentIDs,
@@ -67,6 +71,7 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	setBenchHeaders(httpReq, req.RunTag)
+	setAgentAuth(httpReq, req)
 
 	start := time.Now()
 	resp, err := httpClient.Do(httpReq)
