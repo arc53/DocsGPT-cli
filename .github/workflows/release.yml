@@ -1,45 +1,240 @@
 name: Release
 
+# Releases are cut from here, not from a laptop. "Run workflow" with a bump
+# type for the CLI, the sdk module, or both.
+#
+# Both live in this repository and the CLI pins the sdk in go.mod, so the order
+# matters: the sdk has to be tagged and the pin bumped and pushed BEFORE the CLI
+# is tagged, or the released binary is built against the previous sdk version.
+# This workflow does that in one run.
+#
+# A tag pushed by hand still works and takes the push trigger below.
+
 on:
+  workflow_dispatch:
+    inputs:
+      cli:
+        description: "CLI bump: none | patch | minor | major | explicit (1.7.0)"
+        required: true
+        default: patch
+      sdk:
+        description: "sdk module bump: none | patch | minor | major | explicit (0.2.0)"
+        required: true
+        default: none
   push:
     tags:
       - "v*"
 
-permissions:
-  contents: write
+permissions: {}
+
+# Two releases at once would race over the pin commit and the tags.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
-    # Only the canonical repository publishes. A tag pushed on a fork would
-    # otherwise build a Cask whose download URLs point at the fork and commit
-    # it over the real one in the shared tap.
     if: github.repository == 'arc53/DocsGPT-cli'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # The one push below uses a tokenized URL instead, so the token is
+          # never left behind in .git/config.
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: stable
 
+      # Everything the old `make release` guarded, minus the parts that only
+      # existed because it ran on someone's laptop.
+      - name: Resolve versions
+        id: v
+        env:
+          CLI_INPUT: ${{ inputs.cli }}
+          SDK_INPUT: ${{ inputs.sdk }}
+        run: |
+          set -euo pipefail
+
+          # For a pushed tag there is nothing to compute: release exactly it.
+          if [ "${{ github.event_name }}" = push ]; then
+            {
+              echo "cli_tag=${GITHUB_REF_NAME}"
+              echo "do_cli=true"
+              echo "do_sdk=false"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # next <current x.y.z> <patch|minor|major|x.y.z>
+          next() {
+            local cur="$1" bump="$2" major minor patch
+            if [ "$bump" != patch ] && [ "$bump" != minor ] && [ "$bump" != major ]; then
+              # An explicit version, with or without the leading v.
+              bump="${bump#v}"
+              printf '%s' "$bump" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+                || { echo "::error::'$2' is not a bump type or an x.y.z version"; exit 1; }
+              printf '%s' "$bump"
+              return
+            fi
+            IFS=. read -r major minor patch <<<"${cur#v}"
+            case "$bump" in
+              major) printf '%s.0.0' "$((major + 1))" ;;
+              minor) printf '%s.%s.0' "$major" "$((minor + 1))" ;;
+              patch) printf '%s.%s.%s' "$major" "$minor" "$((patch + 1))" ;;
+            esac
+          }
+
+          if [ "$CLI_INPUT" = none ] && [ "$SDK_INPUT" = none ]; then
+            echo "::error::Nothing to release: both bumps are 'none'."
+            exit 1
+          fi
+
+          # 'v*' already excludes the sdk/* tags, and -v:refname orders
+          # v1.10.0 above v1.9.0 rather than lexically.
+          cli_cur="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
+          sdk_cur="$(git tag -l 'sdk/v*' --sort=-v:refname | head -n1)"
+          : "${cli_cur:=v0.0.0}"
+          : "${sdk_cur:=sdk/v0.0.0}"
+          echo "Current: CLI ${cli_cur}, sdk ${sdk_cur}"
+
+          if [ "$SDK_INPUT" != none ]; then
+            sdk_next="$(next "${sdk_cur#sdk/}" "$SDK_INPUT")"
+            echo "sdk_tag=sdk/v${sdk_next}" >> "$GITHUB_OUTPUT"
+            echo "sdk_version=v${sdk_next}" >> "$GITHUB_OUTPUT"
+            echo "do_sdk=true" >> "$GITHUB_OUTPUT"
+            echo "Releasing sdk/v${sdk_next}"
+          else
+            echo "do_sdk=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ "$CLI_INPUT" != none ]; then
+            cli_next="$(next "$cli_cur" "$CLI_INPUT")"
+            echo "cli_tag=v${cli_next}" >> "$GITHUB_OUTPUT"
+            echo "do_cli=true" >> "$GITHUB_OUTPUT"
+            echo "Releasing v${cli_next}"
+          else
+            echo "do_cli=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Refuse to reuse a tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CLI_TAG: ${{ steps.v.outputs.cli_tag }}
+          SDK_TAG: ${{ steps.v.outputs.sdk_tag }}
+        run: |
+          set -euo pipefail
+          for tag in "$CLI_TAG" "$SDK_TAG"; do
+            [ -n "$tag" ] || continue
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "::error::Tag $tag already exists. Pick a different bump."
+              exit 1
+            fi
+          done
+
+      # Builds and tests the way the release does — against the sdk version
+      # pinned in go.mod, not the working tree that go.work would resolve.
+      - name: Verify
+        run: |
+          set -euo pipefail
+          GOWORK=off go build ./...
+          GOWORK=off go vet ./...
+          GOWORK=off go test ./...
+          go -C sdk test ./...
+
+      - name: Tag the sdk module
+        if: steps.v.outputs.do_sdk == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SDK_TAG: ${{ steps.v.outputs.sdk_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$SDK_TAG" -m "$SDK_TAG"
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$SDK_TAG"
+
+      # The proxy fetches a version the first time it is asked for, so the tag
+      # we just pushed may take a few seconds to resolve.
+      - name: Pin the new sdk version
+        if: steps.v.outputs.do_sdk == 'true'
+        env:
+          SDK_VERSION: ${{ steps.v.outputs.sdk_version }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if GOWORK=off go get "github.com/arc53/DocsGPT-cli/sdk@${SDK_VERSION}"; then
+              exit 0
+            fi
+            echo "sdk ${SDK_VERSION} not resolvable yet (attempt ${attempt}); retrying"
+            sleep 15
+          done
+          echo "::error::sdk ${SDK_VERSION} never became resolvable"
+          exit 1
+
+      # Re-run against the pin that will actually ship. A failure here has cost
+      # only an sdk tag, which is a valid module version either way.
+      - name: Verify against the new pin
+        if: steps.v.outputs.do_sdk == 'true'
+        run: |
+          set -euo pipefail
+          GOWORK=off go build ./...
+          GOWORK=off go test ./...
+
+      - name: Commit the pin bump
+        if: steps.v.outputs.do_sdk == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SDK_TAG: ${{ steps.v.outputs.sdk_tag }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet go.mod go.sum; then
+            echo "Pin already current; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add go.mod go.sum
+          git commit -m "chore: build against ${SDK_TAG}"
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:"${GITHUB_REF_NAME}"
+
+      - name: Tag the CLI
+        if: steps.v.outputs.do_cli == 'true' && github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLI_TAG: ${{ steps.v.outputs.cli_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$CLI_TAG" -m "$CLI_TAG"
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$CLI_TAG"
+
       # GoReleaser takes the previous tag from git describe, which sees
       # sdk/vX.Y.Z tags too. With one between two CLI releases the changelog
       # would start there and drop everything since the last v* tag.
       - name: Resolve the previous CLI tag
+        if: steps.v.outputs.do_cli == 'true'
+        env:
+          CLI_TAG: ${{ steps.v.outputs.cli_tag }}
         run: |
+          set -euo pipefail
           # refs/tags/ disambiguates a tag from a branch of the same name.
           # A tag on a root commit has no ^, and must not fail the release.
           previous="$(git tag -l 'v*' --sort=-v:refname \
-            --merged "refs/tags/${GITHUB_REF_NAME}^" 2>/dev/null | head -n1 || true)"
+            --merged "refs/tags/${CLI_TAG}^" 2>/dev/null | head -n1 || true)"
           if [ -n "$previous" ]; then
             echo "GORELEASER_PREVIOUS_TAG=$previous" >> "$GITHUB_ENV"
           fi
 
       - name: Run GoReleaser
+        if: steps.v.outputs.do_cli == 'true'
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -47,16 +242,25 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The tag this run is releasing. Without it GoReleaser derives the
+          # version from git describe, which can pick up an sdk/vX.Y.Z tag on
+          # the same commit and stamp the binary "vsdk/v0.1.0-...".
+          GORELEASER_CURRENT_TAG: ${{ steps.v.outputs.cli_tag }}
           # Build against the sdk version pinned in go.mod, not the working
-          # tree's sdk/. Without this the workspace wins and the released
-          # binary could be built from code no published sdk version contains
-          # — while `go install` of the same tag builds the pinned one.
+          # tree's sdk/ that go.work would otherwise resolve.
           GOWORK: "off"
-          # The workflow only triggers on v*, so this is always the CLI tag.
-          # Without it GoReleaser derives the version from git describe, which
-          # can pick up an sdk/vX.Y.Z tag on the same commit and stamp the
-          # binary "vsdk/v0.1.0-...". Verified: it does exactly that.
-          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
           # Fine-grained token with contents:write on arc53/homebrew-DocsGPT-cli
           # only; GITHUB_TOKEN cannot reach another repository.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Summary
+        if: always()
+        env:
+          CLI_TAG: ${{ steps.v.outputs.cli_tag }}
+          SDK_TAG: ${{ steps.v.outputs.sdk_tag }}
+        run: |
+          {
+            echo "### Release"
+            [ -n "$SDK_TAG" ] && echo "- sdk: \`$SDK_TAG\`"
+            [ -n "$CLI_TAG" ] && echo "- CLI: \`$CLI_TAG\`"
+          } >> "$GITHUB_STEP_SUMMARY"
