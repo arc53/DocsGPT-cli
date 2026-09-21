@@ -14,8 +14,9 @@ becomes `v1.6.1`. Prereleases are skipped when picking that base: git sorts
 version is taken as given, and may carry a prerelease suffix.
 
 The run refuses a tag that already exists, refuses `none`/`none`, and refuses to
-be re-run — re-running recomputes versions against the tags the first attempt
-created, which mints a further version instead of finishing the failed one.
+be re-run — re-running a dispatch recomputes versions against the tags the first
+attempt created, which mints a further version instead of finishing the failed
+one. (Re-running a release started by a pushed tag is fine.)
 
 The pin commit is pushed to the branch the workflow was dispatched from
 (normally `main`), so a dispatch has to come from a branch, not a tag.
@@ -90,9 +91,13 @@ that commit is pushed.
 
 If a run fails after the sdk tag was pushed but before the pin landed, that tag
 is published and nothing references it. Do **not** re-run the job — start a new
-one with `sdk:` set to that exact version (e.g. `0.2.0`), which pins and commits
-it without minting another. A CLI-only release in that state is refused with a
-message saying so.
+one with `sdk:` set to that exact version (e.g. `0.2.0`). The workflow sees the
+tag already exists and the pin has not caught up, skips tagging, and just pins
+and commits it. A CLI-only release in that state is refused, with that remedy in
+the message.
+
+Asking to release an sdk version that is already published *and* already pinned
+is an error rather than a silent no-op.
 
 If GoReleaser itself fails after the CLI tag was pushed — an expired
 `HOMEBREW_TAP_TOKEN`, say — the tag and possibly a partial release exist. Fix

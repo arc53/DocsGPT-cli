@@ -59,8 +59,6 @@ jobs:
 
       # Everything the old `make release` guarded, minus the parts that only
       # existed because it ran on someone's laptop.
-      # Everything the old `make release` guarded, minus the parts that only
-      # existed because it ran on someone's laptop.
       - name: Resolve versions
         id: v
         env:
@@ -115,7 +113,7 @@ jobs:
               # prerelease suffix is allowed: GoReleaser publishes it as a
               # prerelease and keeps it out of the cask and releases/latest.
               bump="${bump#v}"
-              printf '%s' "$bump" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+              printf '%s' "$bump" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
                 || { echo "::error::'$2' is not a bump type or an x.y.z version" >&2; return 1; }
               printf '%s' "$bump"
               return
@@ -128,6 +126,20 @@ jobs:
             esac
           }
 
+          # The sdk version go.mod currently builds against. Parsed by the go
+          # tool rather than scanned out of the file: a comment, an exclude or
+          # a replace can otherwise win the match.
+          pinned_sdk() {
+            GOWORK=off go mod edit -json \
+              | jq -r '.Require[]? | select(.Path == "github.com/arc53/DocsGPT-cli/sdk") | .Version'
+          }
+
+          # older_than A B: A sorts strictly below B.
+          older_than() {
+            [ "$1" != "$2" ] || return 1
+            [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" = "$1" ]
+          }
+
           if [ "$CLI_INPUT" = none ] && [ "$SDK_INPUT" = none ]; then
             echo "::error::Nothing to release: both bumps are 'none'." >&2
             exit 1
@@ -135,16 +147,34 @@ jobs:
 
           cli_cur="$(latest_release v)"
           sdk_cur="$(latest_release sdk/v)"
-          : "${cli_cur:=0.0.0}"
-          : "${sdk_cur:=0.0.0}"
+          # Both exist in this repository. An empty answer means the tag
+          # lookup failed, and defaulting to 0.0.0 would quietly mint v0.0.1.
+          if [ -z "$cli_cur" ] || [ -z "$sdk_cur" ]; then
+            echo "::error::Could not read the current versions from tags (CLI='${cli_cur}', sdk='${sdk_cur}'). Is this a full checkout?" >&2
+            exit 1
+          fi
           echo "Current: CLI v${cli_cur}, sdk v${sdk_cur}"
 
           if [ "$SDK_INPUT" != none ]; then
             sdk_next="$(next "$sdk_cur" "$SDK_INPUT")"
+            tag_sdk=true
+            if git rev-parse -q --verify "refs/tags/sdk/v${sdk_next}" >/dev/null; then
+              # Already published. That is a legitimate request in exactly one
+              # case: a previous run tagged the sdk and died before the pin
+              # landed. Pin it without minting another version — which is the
+              # recovery RELEASING.md prescribes.
+              if [ "$(pinned_sdk)" = "v${sdk_next}" ]; then
+                echo "::error::sdk/v${sdk_next} is already published and already pinned. Pick a bump, or use sdk: none." >&2
+                exit 1
+              fi
+              tag_sdk=false
+              echo "sdk/v${sdk_next} is already tagged; pinning it without re-tagging."
+            fi
             {
               echo "sdk_tag=sdk/v${sdk_next}"
               echo "sdk_version=v${sdk_next}"
               echo "do_sdk=true"
+              echo "tag_sdk=${tag_sdk}"
             } >> "$GITHUB_OUTPUT"
             echo "Releasing sdk/v${sdk_next}"
           else
@@ -153,11 +183,8 @@ jobs:
             # pushing the pin. Releasing the CLI now would ship it built
             # against the older sdk — the one thing this workflow exists to
             # prevent — so say so instead.
-            # Scans fields rather than assuming a column: the require can be
-            # a line in a require(...) block or a single-line directive, and
-            # the module sits in a different position in each.
-            pinned="$(awk '{ for (i = 1; i < NF; i++) if ($i == "github.com/arc53/DocsGPT-cli/sdk") { print $(i + 1); exit } }' go.mod)"
-            if [ -n "$pinned" ] && [ "$sdk_cur" != 0.0.0 ] && [ "$pinned" != "v${sdk_cur}" ]; then
+            pinned="$(pinned_sdk)"
+            if [ -n "$pinned" ] && older_than "$pinned" "v${sdk_cur}"; then
               echo "::error::go.mod pins sdk ${pinned} but sdk/v${sdk_cur} is published. Release the sdk too (sdk: ${sdk_cur}) or land the pin bump first; see RELEASING.md." >&2
               exit 1
             fi
@@ -178,7 +205,8 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           CLI_TAG: ${{ steps.v.outputs.cli_tag }}
-          SDK_TAG: ${{ steps.v.outputs.sdk_tag }}
+          # Empty in pin-only mode, where the sdk tag exists on purpose.
+          SDK_TAG: ${{ steps.v.outputs.tag_sdk == 'true' && steps.v.outputs.sdk_tag || '' }}
         run: |
           set -euo pipefail
           for tag in "$CLI_TAG" "$SDK_TAG"; do
@@ -200,7 +228,7 @@ jobs:
           go -C sdk test ./...
 
       - name: Tag the sdk module
-        if: steps.v.outputs.do_sdk == 'true'
+        if: steps.v.outputs.tag_sdk == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SDK_TAG: ${{ steps.v.outputs.sdk_tag }}
@@ -290,8 +318,16 @@ jobs:
           set -euo pipefail
           # refs/tags/ disambiguates a tag from a branch of the same name.
           # A tag on a root commit has no ^, and must not fail the release.
-          previous="$(git tag -l 'v*' --sort=-v:refname \
-            --merged "refs/tags/${CLI_TAG}^" 2>/dev/null | head -n1 || true)"
+          # Same strictness as picking the current version: a v1.7.0-rc1 in
+          # between would otherwise make the final release's changelog cover
+          # only rc1..final.
+          previous=""
+          while IFS= read -r ref; do
+            printf '%s' "$ref" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || continue
+            previous="$ref"
+            break
+          done < <(git for-each-ref --sort=-v:refname --format='%(refname:strip=2)' \
+            --merged "refs/tags/${CLI_TAG}^" 'refs/tags/v*' 2>/dev/null || true)
           if [ -n "$previous" ]; then
             echo "GORELEASER_PREVIOUS_TAG=$previous" >> "$GITHUB_ENV"
           fi
