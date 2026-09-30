@@ -13,8 +13,9 @@ const DefaultBaseURL = "https://gptcloud.arc53.com"
 // Environment variables consulted by the resolvers below. They let CI jobs
 // run the CLI without a config file.
 const (
-	EnvToken = "DOCSGPT_TOKEN" // personal access token (dgpt_pat_…)
-	EnvURL   = "DOCSGPT_URL"   // API base URL
+	EnvToken      = "DOCSGPT_TOKEN"       // personal access token (dgpt_pat_…)
+	EnvURL        = "DOCSGPT_URL"         // API base URL
+	EnvWebhookURL = "DOCSGPT_WEBHOOK_URL" // agent incoming webhook URL (agents trigger)
 )
 
 // TokenPrefix is the fixed prefix of a DocsGPT personal access token.

@@ -825,3 +825,357 @@ func TestSourcesUploadReplace(t *testing.T) {
 		})
 	}
 }
+
+const hookTestToken = "hookSECRETtok_abc-123"
+
+// triggerServer fakes the agent webhook, /api/agent_webhook and task_status.
+type triggerServer struct {
+	t        *testing.T
+	statuses []string // task_status replies ("<code> <body>"), in order; the last repeats
+	hookResp string   // webhook reply; default a task_id
+	// statusAuth makes task_status answer 401 unless it carries the PAT.
+	statusAuth bool
+
+	mu          sync.Mutex
+	posts       int
+	postAuth    string
+	postUA      string
+	postKey     string
+	postBody    string
+	lookups     int
+	lookupAuth  string
+	polls       int
+	pollAuth    []string
+	lookupAgent string
+}
+
+func (s *triggerServer) handler(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case r.URL.Path == manage.WebhookPath+hookTestToken && r.Method == http.MethodPost:
+		s.posts++
+		s.postAuth, s.postUA, s.postKey = r.Header.Get("Authorization"), r.Header.Get("User-Agent"), r.Header.Get("Idempotency-Key")
+		b, _ := io.ReadAll(r.Body)
+		s.postBody = string(b)
+		if r.Header.Get("Content-Type") != "application/json" {
+			s.t.Errorf("webhook Content-Type = %q", r.Header.Get("Content-Type"))
+		}
+		res := s.hookResp
+		if res == "" {
+			res = `200 {"success":true,"task_id":"task-1"}`
+		}
+		var code int
+		fmt.Sscanf(res, "%d", &code)
+		jsonReply(w, code, res[4:])
+	case r.URL.Path == "/api/agent_webhook":
+		s.lookups++
+		s.lookupAuth, s.lookupAgent = r.Header.Get("Authorization"), r.URL.Query().Get("id")
+		// API_URL on the server is not the address the CLI uses.
+		jsonReply(w, 200, `{"success":true,"webhook_url":"http://localhost:7091/api/webhooks/agents/`+hookTestToken+`"}`)
+	case r.URL.Path == "/api/task_status":
+		s.polls++
+		auth := r.Header.Get("Authorization")
+		s.pollAuth = append(s.pollAuth, auth)
+		if s.statusAuth && auth != "Bearer "+cmdTestToken {
+			jsonReply(w, 401, `{"message":"Authentication required","error":"unauthorized"}`)
+			return
+		}
+		i := s.polls - 1
+		if i >= len(s.statuses) {
+			i = len(s.statuses) - 1
+		}
+		var code int
+		fmt.Sscanf(s.statuses[i], "%d", &code)
+		jsonReply(w, code, s.statuses[i][4:])
+	default:
+		s.t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		jsonReply(w, 404, `{"success":false}`)
+	}
+}
+
+func writePayload(t *testing.T, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "payload.json")
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+const triggerPayload = `{"kind":"diagnostic","repo":"arc53/DocsGPT","trigger":{"manual":true}}`
+
+func TestAgentsTrigger(t *testing.T) {
+	payload := writePayload(t, triggerPayload+"\n")
+	fast := manage.WaitOptions{Initial: time.Millisecond, Max: 2 * time.Millisecond}
+	success := `200 {"status":"SUCCESS","result":{"status":"success","result":{"answer":"login: arc53-machine\n","sources":[],"tool_calls":[{"tool_name":"get_me"}],"thought":""}}}`
+
+	tests := []struct {
+		name       string
+		opts       triggerOptions // WebhookURL "HOOK" is replaced by the server's webhook URL, BaseURL "" by the server URL
+		stdin      string
+		statuses   []string
+		hookResp   string
+		statusAuth bool
+		wantExit   int
+		wantOut    string
+		wantErr    string
+		wantLog    []string
+		wantPosts  int
+		wantKey    string
+		wantLookup bool
+	}{
+		{
+			name:    "webhook url, file, no wait prints the task id",
+			opts:    triggerOptions{WebhookURL: "HOOK", File: payload, Key: "pr-12-abc"},
+			wantOut: "task-1\n", wantLog: []string{"api/webhooks/agents/...", "queued as task task-1"},
+			wantPosts: 1, wantKey: "pr-12-abc",
+		},
+		{
+			name: "stdin payload", opts: triggerOptions{WebhookURL: "HOOK", File: "-"}, stdin: "  " + triggerPayload + "\n",
+			wantOut: "task-1\n", wantPosts: 1,
+		},
+		{
+			name:    "agent id resolves the webhook with the token",
+			opts:    triggerOptions{AgentID: "agent-1", File: payload, Token: cmdTestToken},
+			wantOut: "task-1\n", wantPosts: 1, wantLookup: true,
+		},
+		{
+			name: "wait success prints the answer",
+			opts: triggerOptions{WebhookURL: "HOOK", File: payload, Wait: true, Timeout: 5 * time.Second, Poll: fast},
+			statuses: []string{`200 {"status":"PENDING","result":null}`, `503 {"success":false,"message":"Service unavailable"}`,
+				`200 {"status":"PROGRESS","result":{"current":50}}`, success},
+			wantOut: "login: arc53-machine\n", wantPosts: 1,
+			wantLog: []string{"PENDING", "WAITING", "PROGRESS", "SUCCESS", "1 tool call(s)"},
+		},
+		{
+			name:     "wait failure",
+			opts:     triggerOptions{WebhookURL: "HOOK", File: payload, Wait: true, Timeout: 5 * time.Second, Poll: fast},
+			statuses: []string{`200 {"status":"STARTED"}`, `200 {"status":"FAILURE","result":"LLM provider error"}`},
+			wantExit: 1, wantErr: "LLM provider error", wantPosts: 1,
+		},
+		{
+			name:     "agent-level failure inside a SUCCESS task",
+			opts:     triggerOptions{WebhookURL: "HOOK", File: payload, Wait: true, Timeout: 5 * time.Second, Poll: fast},
+			statuses: []string{`200 {"status":"SUCCESS","result":{"status":"quota_exceeded","error":"Monthly token quota reached"}}`},
+			wantExit: 1, wantErr: "quota_exceeded", wantPosts: 1,
+		},
+		{
+			name:     "wait timeout",
+			opts:     triggerOptions{WebhookURL: "HOOK", File: payload, Wait: true, Timeout: 30 * time.Millisecond, Poll: fast},
+			statuses: []string{`200 {"status":"STARTED"}`},
+			wantExit: 1, wantErr: "timed out after 30ms", wantPosts: 1,
+		},
+		{
+			name:     "deduplicated sentinel is not polled",
+			opts:     triggerOptions{WebhookURL: "HOOK", File: payload, Key: "k1", Wait: true, Timeout: time.Second, Poll: fast},
+			hookResp: `200 {"success":true,"task_id":"deduplicated"}`,
+			wantLog:  []string{"deduplicated"}, wantPosts: 1, wantKey: "k1",
+		},
+		{
+			name: "webhook error", opts: triggerOptions{WebhookURL: "HOOK", File: payload},
+			hookResp: `404 {"success":false,"message":"Agent not found"}`,
+			wantExit: 1, wantErr: "Agent not found", wantPosts: 1,
+		},
+		{
+			name: "server echoing the token is redacted", opts: triggerOptions{WebhookURL: "HOOK", File: payload},
+			hookResp: `400 {"success":false,"message":"bad webhook ` + hookTestToken + `"}`,
+			wantExit: 1, wantErr: "bad webhook ...", wantPosts: 1,
+		},
+		{
+			name:       "task_status needing auth without a token",
+			opts:       triggerOptions{WebhookURL: "HOOK", File: payload, Wait: true, Timeout: time.Second, Poll: fast},
+			statusAuth: true, statuses: []string{success},
+			wantExit: 2, wantErr: "requires authentication", wantPosts: 1,
+		},
+		{
+			name:       "task_status needing auth falls back to the token on the same host",
+			opts:       triggerOptions{WebhookURL: "HOOK", File: payload, Token: cmdTestToken, Wait: true, Timeout: time.Second, Poll: fast},
+			statusAuth: true, statuses: []string{success},
+			wantOut: "login: arc53-machine\n", wantPosts: 1, wantLog: []string{"polling with the personal access token"},
+		},
+		{
+			name: "the token is never sent to another host",
+			opts: triggerOptions{WebhookURL: "HOOK", File: payload, Token: cmdTestToken, BaseURL: "https://other.example",
+				Wait: true, Timeout: time.Second, Poll: fast},
+			statusAuth: true, statuses: []string{success},
+			wantExit: 2, wantErr: "only sent to https://other.example", wantPosts: 1,
+		},
+		{name: "both targets", opts: triggerOptions{AgentID: "agent-1", WebhookURL: "HOOK", File: payload}, wantExit: 2, wantErr: "not both"},
+		{name: "no target", opts: triggerOptions{File: payload}, wantExit: 2, wantErr: "DOCSGPT_WEBHOOK_URL"},
+		{name: "no payload", opts: triggerOptions{WebhookURL: "HOOK"}, wantExit: 2, wantErr: "-f <file>"},
+		{name: "agent id without a token", opts: triggerOptions{AgentID: "agent-1", File: payload}, wantExit: 2, wantErr: "agents:keys"},
+		{name: "invalid JSON", opts: triggerOptions{WebhookURL: "HOOK", File: writePayload(t, `{"kind":`)}, wantExit: 2, wantErr: "not valid JSON"},
+		{name: "invalid JSON on stdin", opts: triggerOptions{WebhookURL: "HOOK", File: "-"}, stdin: "kind: yaml", wantExit: 2, wantErr: "payload from stdin is not valid JSON"},
+		{name: "empty payload", opts: triggerOptions{WebhookURL: "HOOK", File: writePayload(t, " \n")}, wantExit: 2, wantErr: "empty"},
+		{name: "null payload", opts: triggerOptions{WebhookURL: "HOOK", File: writePayload(t, "null")}, wantExit: 2, wantErr: "JSON null"},
+		{name: "missing file", opts: triggerOptions{WebhookURL: "HOOK", File: "/nonexistent/payload.json"}, wantExit: 2, wantErr: "no such file"},
+		{name: "malformed webhook url", opts: triggerOptions{WebhookURL: "https://example.com/api/answer", File: payload}, wantExit: 2, wantErr: "--webhook-url"},
+		{
+			name: "idempotency key too long", opts: triggerOptions{WebhookURL: "HOOK", File: payload, Key: strings.Repeat("k", 257)},
+			wantExit: 2, wantErr: "exceeds 256",
+		},
+		{name: "non-positive timeout", opts: triggerOptions{WebhookURL: "HOOK", File: payload, Wait: true}, wantExit: 2, wantErr: "--timeout"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := &triggerServer{t: t, statuses: tt.statuses, hookResp: tt.hookResp, statusAuth: tt.statusAuth}
+			srv := httptest.NewServer(http.HandlerFunc(ts.handler))
+			defer srv.Close()
+			opts := tt.opts
+			if opts.WebhookURL == "HOOK" {
+				opts.WebhookURL = srv.URL + manage.WebhookPath + hookTestToken
+			}
+			if opts.BaseURL == "" {
+				opts.BaseURL = srv.URL
+			}
+			opts.UserAgent = "docsgpt-cli/test"
+
+			var stdout, stderr bytes.Buffer
+			err := runAgentsTrigger(context.Background(), opts, strings.NewReader(tt.stdin), &stdout, &stderr)
+			if got := exitCodeFor(err); got != tt.wantExit {
+				t.Fatalf("exit = %d, want %d (err %v)\nstderr: %s", got, tt.wantExit, err, stderr.String())
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Errorf("err = %v, want %q", err, tt.wantErr)
+			}
+			if tt.wantOut != "" && stdout.String() != tt.wantOut {
+				t.Errorf("stdout = %q, want %q", stdout.String(), tt.wantOut)
+			}
+			for _, want := range tt.wantLog {
+				if !strings.Contains(stderr.String(), want) {
+					t.Errorf("stderr lacks %q:\n%s", want, stderr.String())
+				}
+			}
+			all := stdout.String() + stderr.String()
+			if err != nil {
+				all += err.Error()
+			}
+			if strings.Contains(all, hookTestToken) {
+				t.Errorf("the webhook token leaked:\n%s", all)
+			}
+
+			ts.mu.Lock()
+			defer ts.mu.Unlock()
+			if ts.posts != tt.wantPosts {
+				t.Errorf("webhook posts = %d, want %d", ts.posts, tt.wantPosts)
+			}
+			if ts.posts > 0 {
+				if ts.postAuth != "" {
+					t.Errorf("the webhook got an Authorization header")
+				}
+				if ts.postUA != "docsgpt-cli/test" || ts.postKey != tt.wantKey {
+					t.Errorf("webhook UA %q, Idempotency-Key %q (want %q)", ts.postUA, ts.postKey, tt.wantKey)
+				}
+				if ts.postBody != triggerPayload {
+					t.Errorf("webhook body = %q", ts.postBody)
+				}
+			}
+			if tt.wantLookup != (ts.lookups > 0) {
+				t.Errorf("agent_webhook lookups = %d", ts.lookups)
+			}
+			if tt.wantLookup && (ts.lookupAuth != "Bearer "+cmdTestToken || ts.lookupAgent != "agent-1") {
+				t.Errorf("lookup auth %q agent %q", ts.lookupAuth, ts.lookupAgent)
+			}
+			if len(ts.pollAuth) > 0 && ts.pollAuth[0] != "" {
+				t.Errorf("the first task_status poll must be anonymous, got %q", ts.pollAuth[0])
+			}
+			if opts.BaseURL != srv.URL {
+				for _, a := range ts.pollAuth {
+					if a != "" {
+						t.Errorf("the token was sent to a host it was not configured for")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestAgentsTriggerJSON(t *testing.T) {
+	payload := writePayload(t, triggerPayload)
+	fast := manage.WaitOptions{Initial: time.Millisecond}
+	ts := &triggerServer{t: t, statuses: []string{
+		`200 {"status":"SUCCESS","result":{"status":"success","result":{"answer":"hi","tool_calls":[]}}}`,
+	}}
+	srv := httptest.NewServer(http.HandlerFunc(ts.handler))
+	defer srv.Close()
+	hook := srv.URL + manage.WebhookPath + hookTestToken
+
+	var stdout, stderr bytes.Buffer
+	err := runAgentsTrigger(context.Background(), triggerOptions{
+		WebhookURL: hook, File: payload, Key: "k", Wait: true, Timeout: time.Second, JSON: true, Poll: fast, BaseURL: srv.URL,
+	}, nil, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	var report triggerReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if report.TaskID != "task-1" || report.Status != "SUCCESS" || report.Answer != "hi" || !report.Waited ||
+		report.IdempotencyKey != "k" || !strings.Contains(string(report.Result), `"answer": "hi"`) {
+		t.Errorf("report = %+v", report)
+	}
+
+	// A failed run is still a JSON document, with the error and exit 1.
+	ts.statuses = []string{`200 {"status":"FAILURE","result":"boom"}`}
+	ts.polls = 0
+	stdout.Reset()
+	err = runAgentsTrigger(context.Background(), triggerOptions{
+		WebhookURL: hook, File: payload, Wait: true, Timeout: time.Second, JSON: true, Poll: fast, BaseURL: srv.URL,
+	}, nil, &stdout, &stderr)
+	if exitCodeFor(err) != 1 {
+		t.Fatalf("err = %v", err)
+	}
+	report = triggerReport{}
+	if jsonErr := json.Unmarshal(stdout.Bytes(), &report); jsonErr != nil || report.Status != "FAILURE" || !strings.Contains(report.Error, "boom") {
+		t.Errorf("report = %+v (%v)", report, jsonErr)
+	}
+
+	// Without --wait the document carries the task id only.
+	stdout.Reset()
+	if err := runAgentsTrigger(context.Background(), triggerOptions{WebhookURL: hook, File: payload, JSON: true, BaseURL: srv.URL}, nil, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), `"task_id": "task-1"`) || !strings.Contains(stdout.String(), `"waited": false`) {
+		t.Errorf("stdout = %s", stdout.String())
+	}
+}
+
+// The command reads the webhook URL from DOCSGPT_WEBHOOK_URL only when
+// neither --webhook-url nor an agent id is given.
+func TestAgentsTriggerWebhookURLFromEnv(t *testing.T) {
+	isolateConfig(t)
+	ts := &triggerServer{t: t}
+	srv := httptest.NewServer(http.HandlerFunc(ts.handler))
+	defer srv.Close()
+	t.Setenv(config.EnvWebhookURL, srv.URL+manage.WebhookPath+hookTestToken)
+	old := agentsTriggerFile
+	agentsTriggerFile = writePayload(t, triggerPayload)
+	t.Cleanup(func() { agentsTriggerFile = old })
+
+	if err := agentsTriggerCmd.RunE(agentsTriggerCmd, nil); err != nil {
+		t.Fatalf("env webhook: %v", err)
+	}
+	if ts.posts != 1 || ts.lookups != 0 {
+		t.Fatalf("posts %d lookups %d", ts.posts, ts.lookups)
+	}
+
+	// An agent id wins over the environment: it is looked up with the token.
+	globalToken, globalURL = cmdTestToken, srv.URL
+	if err := agentsTriggerCmd.RunE(agentsTriggerCmd, []string{"agent-1"}); err != nil {
+		t.Fatalf("agent id: %v", err)
+	}
+	if ts.posts != 2 || ts.lookups != 1 || ts.lookupAgent != "agent-1" {
+		t.Errorf("posts %d lookups %d agent %q", ts.posts, ts.lookups, ts.lookupAgent)
+	}
+}
+
+func TestAgentsTriggerIsAManagementCommand(t *testing.T) {
+	if !hasNoBanner(agentsTriggerCmd) || !agentsTriggerCmd.SilenceUsage {
+		t.Error("agents trigger should skip the banner and not dump usage on runtime errors")
+	}
+	if err := agentsTriggerCmd.Args(agentsTriggerCmd, []string{"a", "b"}); exitCodeFor(err) != exitUsage {
+		t.Errorf("two agent ids: %v", err)
+	}
+}

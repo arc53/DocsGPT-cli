@@ -124,7 +124,7 @@ docsgpt-cli [command]
 
 ### Available Commands:
 
-- `agents` — List, export, plan, apply and delete agents (personal access token)
+- `agents` — List, export, plan, apply, delete and trigger agents (personal access token; `trigger --webhook-url` needs none)
 - `ask` — Ask a question to DocsGPT
 - `bench` — Run benchmark suites against your agents (see below)
 - `chat` — Start an interactive chat session
@@ -196,6 +196,7 @@ first characters (`dgpt_pat_AbCdEf…`).
 | --- | --- |
 | `agents list`, `agents export <id> [-o file]` | `agents:read` |
 | `agents plan -f …`, `agents apply -f …`, `agents delete <id> [--yes]` | `agents:write` |
+| `agents trigger <id> -f …` (`agents trigger --webhook-url …` needs no token) | `agents:keys` |
 | `sources list` | `sources:read` |
 | `sources upload <file…> --name N [--wait]`, `sources delete <id> [--yes]` | `sources:write` |
 | `prompts list`, `tools list` | `prompts:read`, `tools:read` |
@@ -240,6 +241,74 @@ stays unattached); `tool:<sel>=reuse:<tool-id>|create|skip` decides a tool and
 [`examples/agents`](examples/agents) for a sample definition and the full
 reference. Exit codes match `bench`: `0` ok, `1` failed or blocked,
 `2` usage / validation error.
+
+### Triggering an agent
+
+`agents trigger` posts a JSON payload to an agent's incoming webhook. The whole
+payload becomes the agent's input; the agent runs asynchronously and the
+command prints the task id. `--wait` polls the run and prints the agent's
+answer instead.
+
+```bash
+docsgpt-cli agents trigger --webhook-url "$WEBHOOK_URL" -f payload.json   # prints the task id
+echo '{"event":"deploy","env":"prod"}' | docsgpt-cli agents trigger <agent-id> -f - --wait
+docsgpt-cli agents trigger <agent-id> -f payload.json --wait --json | jq -r .answer
+```
+
+Address the agent in one of two ways, not both:
+
+- `--webhook-url <url>` (or `DOCSGPT_WEBHOOK_URL` when neither the flag nor an
+  agent id is given): no personal access token is needed, since the URL itself
+  is the secret. Copy it from the agent's details in the web app.
+- `<agent-id>`: the CLI looks the webhook up with your token (scope
+  `agents:keys`), honouring `--url`/`DOCSGPT_URL` and
+  `--token`/`DOCSGPT_TOKEN`/the stored token. The server creates the webhook if
+  the agent has none yet.
+
+The payload comes from `-f <file>` or `-f -` (stdin) and must be valid JSON; it
+is checked before anything is sent. `--idempotency-key <k>` makes retries safe:
+a repeat with the same key within about 24 hours returns the original task
+instead of running the agent again. `--wait` polls for up to `--timeout`
+(default `10m`) and `--json` prints `task_id`, `status`, `answer` and the task's
+`result` verbatim (`result.result.tool_calls`, `sources`, `thought`). The
+webhook URL is never printed: output and errors show it as
+`<base>/api/webhooks/agents/...`.
+
+`--wait` reads `/api/task_status` without credentials, which is how DocsGPT
+serves it. If a server requires them anyway, the token is used (it needs
+`chat:run`, `sources:read` or `sources:write`), and only when it is configured
+for the webhook's host.
+
+Exit codes: `0` ok, `1` the webhook call or the agent run failed or timed out
+(including a run the server reports as not successful, such as an exceeded
+quota), `2` usage error (no target or both, missing or invalid JSON, a
+malformed webhook URL).
+
+A GitHub Actions job that relays an issue or pull request to a triage agent:
+
+```yaml
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    env:
+      DOCSGPT_WEBHOOK_URL: ${{ secrets.TRIAGE_WEBHOOK_URL }}
+      DOCSGPT_NO_UPDATE_CHECK: "1"
+      NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+    steps:
+      - name: Install docsgpt-cli
+        run: |
+          curl -fsSL -o docsgpt-cli.tar.gz \
+            https://github.com/arc53/DocsGPT-cli/releases/latest/download/docsgpt-cli_linux_amd64.tar.gz
+          tar -xzf docsgpt-cli.tar.gz docsgpt-cli && sudo mv docsgpt-cli /usr/local/bin/
+      - name: Send the event to the agent
+        run: |
+          jq -n --arg repo "$GITHUB_REPOSITORY" --arg event "$GITHUB_EVENT_NAME" --argjson number "$NUMBER" \
+            '{kind: $event, repo: $repo, number: $number}' > payload.json
+          docsgpt-cli agents trigger -f payload.json --idempotency-key "run-$GITHUB_RUN_ID"
+```
+
+`GITHUB_RUN_ID` stays the same when a failed job is re-run, so a re-run does not
+start the agent a second time, while every new event gets its own key.
 
 ### Sources
 

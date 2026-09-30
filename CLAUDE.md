@@ -29,7 +29,7 @@ cmd/
   bench.go           → Benchmark suites vs agents (bench / bench record / bench init; --model, --matrix, --run-tag, --agent-id)
   manage.go          → Shared plumbing of the account-level (PAT) commands: client construction, exit codes (0/1/2), banner/usage suppression, confirmations
   login.go           → login / logout / whoami (personal access token in config.json)
-  agents.go          → agents list / export / plan / apply / delete (agents as code)
+  agents.go          → agents list / export / plan / apply / delete (agents as code), agents trigger (incoming webhook)
   sources.go         → sources list / upload / delete, prompts list, tools list
   utils.go           → printError, extractCommand, copyToClipboard
 internal/
@@ -48,6 +48,7 @@ internal/
     agents.go        → /api/user/me, get_agents, export_agent, import_agent/plan + import_agent (Plan, Resolution, ApplyResult), delete_agent
     sources.go       → /api/sources, /api/upload (multipart, Idempotency-Key, deterministic default key), /api/task_status polling with backoff, delete_old
     catalog.go       → get_prompts, get_tools
+    webhooks.go      → agent incoming webhooks: URL parsing/redaction (Webhook), /api/agent_webhook lookup, webhook POST (no Authorization, Idempotency-Key), agent run result decoding
     documents.go     → -f expansion: files / directories / stdin, verbatim multi-document YAML splitting, kind: Agent validation
     resolve.go       → --resolve parsing, mapping onto the server `resolution` object, missing/unavailable gating
   context/
@@ -115,7 +116,8 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set-a
 4. `agents plan|apply -f`: files, directories (`*.yaml`/`*.yml`, sorted, not recursive) and `-`; multi-document files are split textually (the server gets each document verbatim); non-`Agent` kinds are rejected before any request. ALL documents are planned first (`POST /api/import_agent/plan {"yaml"}`, scope `agents:write`); if any reference is `missing`/`unavailable` and not covered by `--resolve`, nothing is applied and the exit code is 1. Then `POST /api/import_agent {"yaml","resolution"}` per document, stopping at the first failure. `plan` = `apply --dry-run`
 5. `--resolve <kind>:<selector>=<value>` → server `resolution`: `source:<name>=<id>` → `sources[name]`; `tool:<sel>=reuse:<id>|create|skip` and `tool:<sel>.secret.<field>=<v>` → `tools["tool-N"] = {decision, tool_id, secrets}`; `model:<display_name>=<api_key>` → `models[name] = {api_key}`. `source:…=skip` / `model:…=skip` are CLI-side acknowledgements (the server has no such decision; it just leaves the reference off) and are never sent. `<sel>` = `tool-N` or an unambiguous tool name/type; positional keys are refused across several documents; an entry matching nothing is a usage error
 6. `sources upload`: multipart `user` (legacy, required by the server), `name`, repeated `file`, with an explicit Content-Length and streamed file bodies. Default `Idempotency-Key` = `docsgpt-cli-upload-` + sha256(name + sorted (basename, file sha256)), so CI retries dedupe; `--wait` polls `/api/task_status` (1s → 10s backoff, 503 = transient, progress on stderr) until SUCCESS / FAILURE / `--timeout`; the `deduplicated` task id sentinel is not polled. `--replace` (needs `--wait`) then deletes the caller's older same-named sources (never the new one, never team-shared, never without a reported `source_id`, and never unless that id is in the current listing: a content revert repeats the Idempotency-Key, and the deduplicated reply then names the earlier, already deleted source; the command fails with exit 1 instead of deleting the only live one): the server resolves an agent's source name to the OLDEST match, so without it agents stay pinned to the first upload; `agents apply` must run after
-7. Exit codes mirror bench: 0 ok, 1 failure/blocked/timeout, 2 usage or validation (`exitError` in cmd/manage.go, mapped in `Execute`). These commands skip the banner, never dump usage on runtime errors, print errors to stderr, and refuse destructive actions without `--yes` when stdin is not a terminal
+7. `agents trigger`: payload from `-f <file|->`, validated as JSON (not null) before any request. Target = `--webhook-url` (else `DOCSGPT_WEBHOOK_URL` when no agent id is given; no PAT needed) XOR `<agent-id>` (PAT, scope `agents:keys`, `GET /api/agent_webhook?id=`; the returned token is re-rooted on the configured base URL, since the server builds the URL from its `API_URL`). The webhook POST never carries the PAT (the server denies tokens on that route). `--wait` polls `/api/task_status` anonymously (the server does not require auth there) and falls back to the PAT on 401/403 only when the PAT's base URL has the webhook's origin; SUCCESS whose result is not `status: success` (`quota_exceeded`, idempotency guard) is a failure. The webhook token is never printed (`Webhook.String` redacts; errors pass through `Webhook.Redact`)
+8. Exit codes mirror bench: 0 ok, 1 failure/blocked/timeout, 2 usage or validation (`exitError` in cmd/manage.go, mapped in `Execute`). These commands skip the banner, never dump usage on runtime errors, print errors to stderr, and refuse destructive actions without `--yes` when stdin is not a terminal
 
 ### Tool call flow
 1. CLI sends `tools` array in request
