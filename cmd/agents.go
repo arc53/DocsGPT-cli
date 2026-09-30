@@ -1,15 +1,19 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"strings"
 	"text/tabwriter"
+	"time"
 
+	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/manage"
 
@@ -27,6 +31,13 @@ var (
 	agentsPlanFiles  []string
 	agentsPlanJSON   bool
 	agentsPlanResolv []string
+
+	agentsTriggerWebhook string
+	agentsTriggerFile    string
+	agentsTriggerKey     string
+	agentsTriggerWait    bool
+	agentsTriggerTO      time.Duration
+	agentsTriggerJSON    bool
 )
 
 const resolveHelp = `Unresolved references are settled with --resolve <kind>:<selector>=<value>
@@ -55,8 +66,10 @@ var agentsCmd = &cobra.Command{
   docsgpt-cli agents plan -f agents/
   docsgpt-cli agents apply -f agents/ --resolve "source:Handbook=<source-id>"
   docsgpt-cli agents delete <id> --yes
+  docsgpt-cli agents trigger --webhook-url "$DOCSGPT_WEBHOOK_URL" -f payload.json
 
-Scopes: agents:read (list, export) and agents:write (plan, apply, delete).`,
+Scopes: agents:read (list, export), agents:write (plan, apply, delete) and
+agents:keys (trigger <id>; trigger --webhook-url needs no token).`,
 }
 
 var agentsListCmd = &cobra.Command{
@@ -149,6 +162,69 @@ var agentsDeleteCmd = &cobra.Command{
 	},
 }
 
+var agentsTriggerCmd = &cobra.Command{
+	Use:   "trigger [<agent-id>] -f <file|->",
+	Short: "Run an agent through its incoming webhook with a JSON payload",
+	Long: `Post a JSON payload to an agent's incoming webhook. The whole payload becomes
+the agent's input; the agent runs asynchronously and the task id is printed.
+--wait polls the run until it finishes and prints the agent's answer.
+
+Address the agent in exactly one way:
+
+  --webhook-url <url>   the webhook URL itself, or ` + config.EnvWebhookURL + ` when
+                        neither the flag nor an agent id is given. No personal
+                        access token is needed: the URL is the secret.
+  <agent-id>            look the webhook up with a personal access token (scope
+                        agents:keys). The server creates the webhook if the
+                        agent has none yet.
+
+  docsgpt-cli agents trigger --webhook-url "$TRIAGE_WEBHOOK_URL" -f payload.json
+  echo '{"event":"deploy"}' | docsgpt-cli agents trigger <agent-id> -f - --wait
+  docsgpt-cli agents trigger <agent-id> -f payload.json --wait --json | jq -r .answer
+
+The webhook URL is never printed: output and errors show it as
+<base>/api/webhooks/agents/...
+
+--idempotency-key makes retries safe: a repeat with the same key within about
+24 hours returns the original task instead of running the agent again.
+
+--wait reads /api/task_status without credentials. If the server requires
+them, the personal access token is used (it needs chat:run, sources:read or
+sources:write), and only when it is configured for the webhook's host.
+
+Exit codes: 0 ok, 1 the webhook call or the agent run failed or timed out,
+2 usage error.`,
+	Args: usageArgs(cobra.MaximumNArgs(1)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		opts := triggerOptions{
+			WebhookURL: agentsTriggerWebhook,
+			File:       agentsTriggerFile,
+			Key:        agentsTriggerKey,
+			Wait:       agentsTriggerWait,
+			Timeout:    agentsTriggerTO,
+			JSON:       agentsTriggerJSON,
+			UserAgent:  userAgent(),
+		}
+		if len(args) == 1 {
+			opts.AgentID = args[0]
+		}
+		if !cmd.Flags().Changed("webhook-url") && opts.AgentID == "" {
+			opts.WebhookURL = strings.TrimSpace(os.Getenv(config.EnvWebhookURL))
+		}
+		// Load falls back to the defaults on error; only the agent-id path
+		// cannot do without the config.
+		cfg, err := config.Load()
+		if err != nil && opts.AgentID != "" {
+			return usageErrf("load config: %w", err)
+		}
+		opts.BaseURL = cfg.ResolveURL(globalURL)
+		opts.Token, _ = cfg.ResolveToken(globalToken)
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		return runAgentsTrigger(ctx, opts, os.Stdin, os.Stdout, os.Stderr)
+	},
+}
+
 func init() {
 	agentsListCmd.Flags().BoolVar(&agentsListJSON, "json", false, "Print the server's agent list as JSON")
 	agentsExportCmd.Flags().StringVarP(&agentsExportOut, "output", "o", "", "Write the YAML to this file instead of stdout")
@@ -166,7 +242,15 @@ func init() {
 
 	agentsDeleteCmd.Flags().BoolVarP(&agentsDeleteYes, "yes", "y", false, "Do not ask for confirmation")
 
-	agentsCmd.AddCommand(agentsListCmd, agentsExportCmd, agentsPlanCmd, agentsApplyCmd, agentsDeleteCmd)
+	tf := agentsTriggerCmd.Flags()
+	tf.StringVar(&agentsTriggerWebhook, "webhook-url", "", "The agent's incoming webhook URL (default $"+config.EnvWebhookURL+"); never printed")
+	tf.StringVarP(&agentsTriggerFile, "file", "f", "", "JSON payload: a file, or - for stdin (required)")
+	tf.StringVar(&agentsTriggerKey, "idempotency-key", "", "Idempotency-Key header: a repeat within ~24h returns the original task")
+	tf.BoolVar(&agentsTriggerWait, "wait", false, "Wait for the run to finish and print the answer; exit non-zero if it fails")
+	tf.DurationVar(&agentsTriggerTO, "timeout", 10*time.Minute, "How long --wait polls before giving up (e.g. 90s, 15m)")
+	tf.BoolVar(&agentsTriggerJSON, "json", false, "Print the result as JSON on stdout")
+
+	agentsCmd.AddCommand(agentsListCmd, agentsExportCmd, agentsPlanCmd, agentsApplyCmd, agentsDeleteCmd, agentsTriggerCmd)
 	markManagement(agentsCmd)
 }
 
@@ -435,3 +519,235 @@ func detail(parts ...string) string {
 	}
 	return strings.Join(out, "; ")
 }
+
+// triggerOptions are the inputs of `agents trigger`.
+type triggerOptions struct {
+	AgentID    string
+	WebhookURL string // --webhook-url, else DOCSGPT_WEBHOOK_URL when no agent id is given
+	File       string
+	Key        string
+	Wait       bool
+	Timeout    time.Duration
+	JSON       bool
+
+	BaseURL   string // --url > DOCSGPT_URL > config
+	Token     string // --token > DOCSGPT_TOKEN > config; "" when none
+	UserAgent string
+
+	// Poll tunes the --wait backoff; zero values use triggerPoll.
+	Poll manage.WaitOptions
+}
+
+// triggerPoll is the --wait cadence: agent runs finish in seconds to minutes,
+// so the backoff tops out sooner than an ingest's.
+var triggerPoll = manage.WaitOptions{Initial: time.Second, Max: 5 * time.Second}
+
+// triggerReport is the --json document of `agents trigger`.
+type triggerReport struct {
+	TaskID         string          `json:"task_id"`
+	IdempotencyKey string          `json:"idempotency_key,omitempty"`
+	Deduplicated   bool            `json:"deduplicated,omitempty"`
+	Waited         bool            `json:"waited"`
+	Status         string          `json:"status,omitempty"`
+	Answer         string          `json:"answer,omitempty"`
+	Result         json.RawMessage `json:"result,omitempty"` // the task's result, verbatim
+	Error          string          `json:"error,omitempty"`
+}
+
+// runAgentsTrigger posts the payload to the agent's webhook and, with Wait,
+// polls the run. Progress goes to stderr; stdout carries the task id, the
+// answer, or the JSON report. The webhook URL never reaches either stream.
+func runAgentsTrigger(ctx context.Context, opts triggerOptions, stdin io.Reader, stdout, stderr io.Writer) (err error) {
+	switch {
+	case opts.AgentID != "" && opts.WebhookURL != "":
+		return usageErrf("pass either an agent id or --webhook-url, not both")
+	case opts.AgentID == "" && opts.WebhookURL == "":
+		return usageErrf("no agent: pass an agent id or --webhook-url (or set %s)", config.EnvWebhookURL)
+	case opts.File == "":
+		return usageErrf("no payload: pass -f <file>, or -f - to read it from stdin")
+	case opts.Wait && opts.Timeout <= 0:
+		return usageErrf("--timeout must be positive")
+	case len(opts.Key) > manage.IdempotencyKeyMaxLen:
+		return usageErrf("--idempotency-key exceeds %d characters", manage.IdempotencyKeyMaxLen)
+	}
+	payload, err := readTriggerPayload(opts.File, stdin)
+	if err != nil {
+		return usageErr(err)
+	}
+
+	var authed *manage.Client
+	if opts.Token != "" {
+		authed = manage.New(opts.BaseURL, opts.Token, opts.UserAgent)
+	}
+	var hook *manage.Webhook
+	if opts.WebhookURL != "" {
+		if hook, err = manage.ParseWebhookURL(opts.WebhookURL); err != nil {
+			return usageErrf("--webhook-url / %s: %w", config.EnvWebhookURL, err)
+		}
+	} else {
+		if authed == nil {
+			return usageErrf("no personal access token configured: an agent id is looked up with a token "+
+				"(scope agents:keys): run 'docsgpt-cli login', set %s or pass --token — or pass --webhook-url", config.EnvToken)
+		}
+		if hook, err = authed.AgentWebhook(ctx, opts.AgentID); err != nil {
+			return fmt.Errorf("look up the webhook of agent %s: %w", opts.AgentID, err)
+		}
+	}
+	// Belt and braces: whatever a server or transport error echoes, the
+	// token in the webhook URL does not leave this function.
+	defer func() {
+		if err != nil {
+			err = &redactedError{err: err, hook: hook}
+		}
+	}()
+
+	// The webhook and task_status are called without credentials.
+	anon := manage.New(hook.BaseURL(), "", opts.UserAgent)
+	fmt.Fprintf(stderr, "triggering %s (%d-byte payload)...\n", hook, len(payload))
+	res, err := anon.TriggerWebhook(ctx, hook, payload, opts.Key)
+	if err != nil {
+		return err
+	}
+	report := triggerReport{TaskID: res.TaskID, IdempotencyKey: opts.Key}
+
+	finish := func(runErr error) error {
+		if runErr != nil {
+			report.Error = hook.Redact(runErr.Error())
+		}
+		if opts.JSON {
+			if err := writeJSON(stdout, report); err != nil && runErr == nil {
+				return err
+			}
+			return runErr
+		}
+		if runErr == nil {
+			switch {
+			case report.Deduplicated:
+			case report.Waited:
+				answer := strings.TrimRight(report.Answer, "\n")
+				if answer != "" {
+					fmt.Fprintln(stdout, answer)
+				}
+			default:
+				fmt.Fprintln(stdout, report.TaskID)
+			}
+		}
+		return runErr
+	}
+
+	if res.TaskID == manage.DeduplicatedTaskID {
+		// The key matched an earlier request whose task record is gone: that
+		// run already happened and there is nothing to poll.
+		report.TaskID = ""
+		report.Deduplicated = true
+		fmt.Fprintln(stderr, "the server deduplicated this request (same Idempotency-Key as an earlier one); the agent did not run again")
+		return finish(nil)
+	}
+	if !opts.Wait {
+		fmt.Fprintf(stderr, "agent run queued as task %s; pass --wait to wait for the answer\n", res.TaskID)
+		return finish(nil)
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
+	poll := opts.Poll
+	if poll.Initial == 0 && poll.Max == 0 {
+		poll.Initial, poll.Max = triggerPoll.Initial, triggerPoll.Max
+	}
+	started := time.Now()
+	lastLine := ""
+	poll.OnUpdate = func(status string, _ *manage.TaskStatus) {
+		if status == lastLine {
+			return
+		}
+		lastLine = status
+		fmt.Fprintf(stderr, "  [%4.0fs] %s\n", time.Since(started).Seconds(), status)
+	}
+	report.Waited = true
+	st, err := waitForRun(waitCtx, anon, authed, hook, res.TaskID, poll, stderr)
+	if st != nil {
+		report.Status = st.Status
+		report.Result = st.Result
+	}
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			err = fmt.Errorf("timed out after %s waiting for the agent run (task %s is still running server-side): %w", opts.Timeout, res.TaskID, err)
+		}
+		return finish(err)
+	}
+	run, err := manage.AgentRunResult(res.TaskID, st)
+	if err != nil {
+		return finish(err)
+	}
+	report.Answer = run.Answer
+	summary := fmt.Sprintf("done in %.0fs", time.Since(started).Seconds())
+	if run.ToolCalls > 0 {
+		summary += fmt.Sprintf(", %d tool call(s)", run.ToolCalls)
+	}
+	fmt.Fprintln(stderr, display.Success("ok"), summary)
+	return finish(nil)
+}
+
+// waitForRun polls the run's task without credentials, as DocsGPT serves
+// /api/task_status. If the server requires them anyway, it polls again with
+// the personal access token, which is only ever sent to the configured base
+// URL: never to a webhook host the token was not configured for.
+func waitForRun(ctx context.Context, anon, authed *manage.Client, hook *manage.Webhook, taskID string, poll manage.WaitOptions, stderr io.Writer) (*manage.TaskStatus, error) {
+	st, err := anon.WaitTask(ctx, taskID, poll)
+	var ae *manage.APIError
+	if err == nil || !errors.As(err, &ae) || (ae.Status != 401 && ae.Status != 403) {
+		return st, err
+	}
+	statusURL := hook.BaseURL() + "/api/task_status"
+	switch {
+	case authed == nil:
+		return nil, usageErrf("the agent run was queued as task %s, but %s requires authentication to report on it: "+
+			"pass --token, set %s or run 'docsgpt-cli login' (the token needs chat:run, sources:read or sources:write)",
+			taskID, statusURL, config.EnvToken)
+	case !hook.SameOrigin(authed.BaseURL):
+		return nil, usageErrf("the agent run was queued as task %s, but %s requires authentication to report on it, "+
+			"and the personal access token is only sent to %s: pass --url %s",
+			taskID, statusURL, authed.BaseURL, hook.BaseURL())
+	}
+	fmt.Fprintln(stderr, "task status requires authentication; polling with the personal access token")
+	return authed.WaitTask(ctx, taskID, poll)
+}
+
+// readTriggerPayload reads the payload from a file or stdin ("-") and checks
+// it is JSON the webhook accepts: the server refuses a missing body and null.
+func readTriggerPayload(file string, stdin io.Reader) ([]byte, error) {
+	label := file
+	var data []byte
+	var err error
+	if file == "-" {
+		label = "stdin"
+		data, err = io.ReadAll(stdin)
+	} else {
+		data, err = os.ReadFile(file)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read payload: %w", err)
+	}
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return nil, fmt.Errorf("payload from %s is empty: the webhook needs a JSON value", label)
+	}
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return nil, fmt.Errorf("payload from %s is not valid JSON: %v", label, err)
+	}
+	if v == nil {
+		return nil, fmt.Errorf("payload from %s is JSON null: the webhook needs a value (usually an object)", label)
+	}
+	return data, nil
+}
+
+// redactedError keeps the webhook token out of an error message while
+// preserving the chain the exit code is read from.
+type redactedError struct {
+	err  error
+	hook *manage.Webhook
+}
+
+func (e *redactedError) Error() string { return e.hook.Redact(e.err.Error()) }
+func (e *redactedError) Unwrap() error { return e.err }
