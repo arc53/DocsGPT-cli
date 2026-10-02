@@ -99,6 +99,15 @@ type Delta struct {
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 }
 
+// Model is an entry of GET /v1/models. On DocsGPT it describes the agent the
+// API key belongs to: ID is the agent id and Name its display name.
+type Model struct {
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	OwnedBy     string `json:"owned_by,omitempty"`
+}
+
 type Tool struct {
 	Type     string       `json:"type"`
 	Function ToolFunction `json:"function"`

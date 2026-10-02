@@ -300,6 +300,33 @@ func (c *Client) RunWithTools(ctx context.Context, messages []Message, opts RunO
 	}
 }
 
+// Models lists the models the API key can use (GET /v1/models). DocsGPT
+// answers with the key's agent, or 401 for an unknown key, without running
+// the agent, which makes this a cheap way to check a key.
+func (c *Client) Models(ctx context.Context) ([]Model, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+	var list struct {
+		Data []Model `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return nil, fmt.Errorf("decode models: %w", err)
+	}
+	return list.Data, nil
+}
+
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
