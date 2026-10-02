@@ -21,8 +21,9 @@ import (
 )
 
 var chatCmd = &cobra.Command{
-	Use:   "chat",
-	Short: "Start an interactive chat session",
+	Use:    "chat [message]",
+	Short:  "Start an interactive chat session",
+	Hidden: true,
 	Long: `Start an interactive multi-turn chat session with DocsGPT.
 
 Special commands:
@@ -40,7 +41,7 @@ live autocomplete.`,
 			return err
 		}
 
-		keyName, apiKey, err := cfg.ResolveKey(globalKey)
+		keyName, apiKey, err := chatKey(&cfg)
 		if err != nil {
 			return err
 		}
@@ -67,7 +68,7 @@ live autocomplete.`,
 			}
 		}
 
-		return runChatLoop(client, history)
+		return runChatLoop(client, history, strings.Join(args, " "))
 	},
 }
 
@@ -201,7 +202,7 @@ func (s *chatSession) completer(d prompt.Document) ([]prompt.Suggest, pstrings.R
 	return prompt.FilterHasPrefix(suggestions, text, true), start, end
 }
 
-func runChatLoop(client *docsgpt.Client, history []docsgpt.Message) error {
+func runChatLoop(client *docsgpt.Client, history []docsgpt.Message, first string) error {
 	var toolDefs []docsgpt.Tool
 	if !globalNoContext {
 		toolDefs = tools.ToolDefinitions()
@@ -212,6 +213,11 @@ func runChatLoop(client *docsgpt.Client, history []docsgpt.Message) error {
 		history:  history,
 		toolDefs: toolDefs,
 		tools:    &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second},
+	}
+
+	if first = strings.TrimSpace(first); first != "" {
+		fmt.Println(display.Accent("❯ ") + first)
+		session.executor(first)
 	}
 
 	opts := append(promptColors(),

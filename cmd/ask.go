@@ -21,8 +21,9 @@ import (
 )
 
 var askCmd = &cobra.Command{
-	Use:   "ask [question]",
-	Short: "Ask a question to DocsGPT",
+	Use:    "ask [question]",
+	Hidden: true,
+	Short:  "Ask a question to DocsGPT",
 	Long: `Ask a question to DocsGPT, and instantly find answers about anything.
 
 Anything piped into the command is sent along with the question (or is the
@@ -57,7 +58,7 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 			return err
 		}
 
-		keyName, apiKey, err := cfg.ResolveKey(globalKey)
+		keyName, apiKey, err := chatKey(&cfg)
 		if err != nil {
 			return err
 		}

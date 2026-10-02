@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Exit codes shared by the account-level commands; they mirror `bench`:
+// Exit codes of every command; they mirror `bench`:
 // 0 ok, 1 the operation failed, 2 usage / configuration / validation error.
 const (
 	exitFailure = 1
@@ -67,38 +67,6 @@ func usageArgs(v cobra.PositionalArgs) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		return usageErr(v(cmd, args))
 	}
-}
-
-// markManagement applies the conventions shared by the account-level command
-// trees: flag errors exit with 2, usage is not dumped on runtime failures,
-// and the startup banner is skipped (their stdout is data: tables, JSON, YAML).
-// Call it after the subcommands are attached: SilenceUsage is per command.
-func markManagement(c *cobra.Command) {
-	c.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageErr(err) })
-	silenceUsage(c)
-	if c.Annotations == nil {
-		c.Annotations = map[string]string{}
-	}
-	c.Annotations[noBannerAnnotation] = "true"
-}
-
-func silenceUsage(c *cobra.Command) {
-	c.SilenceUsage = true
-	for _, sub := range c.Commands() {
-		silenceUsage(sub)
-	}
-}
-
-const noBannerAnnotation = "docsgpt/no-banner"
-
-// hasNoBanner reports whether cmd or one of its parents opted out of the banner.
-func hasNoBanner(cmd *cobra.Command) bool {
-	for c := cmd; c != nil; c = c.Parent() {
-		if c.Annotations[noBannerAnnotation] == "true" {
-			return true
-		}
-	}
-	return false
 }
 
 // userAgent is the User-Agent of account-level requests.

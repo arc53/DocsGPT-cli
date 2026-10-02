@@ -154,9 +154,7 @@ func init() {
 	sourcesCmd.AddCommand(sourcesListCmd, sourcesUploadCmd, sourcesDeleteCmd)
 	promptsCmd.AddCommand(promptsListCmd)
 	toolsCmd.AddCommand(toolsListCmd)
-	markManagement(sourcesCmd)
-	markManagement(promptsCmd)
-	markManagement(toolsCmd)
+	groupCommand(sourcesCmd)
 }
 
 func runSourcesList(ctx context.Context, c *manage.Client, asJSON bool, out io.Writer) error {

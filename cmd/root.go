@@ -58,46 +58,120 @@ func versionFromBuildInfo(info *debug.BuildInfo) string {
 	return info.Main.Version
 }
 
+// Global flags (every command).
 var (
-	globalURL         string
-	globalKey         string
-	globalToken       string
+	globalURL   string
+	globalKey   string
+	globalToken string
+	globalTheme string // hidden; the theme setting is the documented way
+)
+
+// Flags of the chat commands (the root, ask and chat).
+var (
 	globalNoStream    bool
 	globalNoContext   bool
 	globalAutoApprove bool
-	globalTimeout     int
-	globalTheme       string
-	globalNoMotion    bool
+	globalTimeout     int // seconds a tool command may run
+)
+
+// startupConfig is the config as it was when the process started, for the
+// update gate and the theme; commands load their own copy to change it.
+var (
+	startupConfig    = config.DefaultConfig()
+	startupConfigErr error
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "docsgpt-cli",
+	Use:     "docsgpt-cli [question]",
 	Version: Version,
-	Short:   "A CLI for interacting with DocsGPT",
-	Long:    "Docsgpt-cli is a command-line interface (CLI) tool that allows you to interact with DocsGPT.",
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		if err := config.MigrateIfNeeded(); err != nil {
-			return err
-		}
+	Short:   "Chat with your DocsGPT agents from the terminal",
+	Long: `Chat with your DocsGPT agents from the terminal. With no arguments it opens an
+interactive chat; with a question it answers once and exits. Anything piped in
+is sent along with the question.`,
+	Example: `  docsgpt-cli                                # chat
+  docsgpt-cli "how do I rotate the API key?" # ask once
+  git diff | docsgpt-cli "review this"       # send piped input along
+  docsgpt-cli login                          # add an agent API key`,
+	Args: cobra.ArbitraryArgs,
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Theme: flag > config > auto (which asks the terminal).
 		theme := globalTheme
-		if cfg, err := config.Load(); theme == "" && err == nil {
-			theme = cfg.Settings.Theme
+		if theme == "" {
+			theme = startupConfig.Settings.Theme
 		}
 		display.InitTheme(theme)
-		return nil
 	},
-	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) == 0 {
-			cmd.Help()
-			return
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 && stdinIsTerminal() && isatty.IsTerminal(os.Stdout.Fd()) {
+			return chatCmd.RunE(chatCmd, nil)
 		}
+		if err := commandTypo(cmd, args); err != nil {
+			return err
+		}
+		return askCmd.RunE(askCmd, args)
 	},
 	SilenceErrors: true,
+	SilenceUsage:  true,
+}
+
+// commandTypo keeps a mistyped command from being sent as a question: a lone
+// word close to a command name, or such a word followed by one of that
+// command's subcommands ("agnets list"). A quoted question, or anything after
+// --, is never taken for a command.
+func commandTypo(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 || cmd.ArgsLenAtDash() == 0 || strings.ContainsAny(args[0], " \t\n") {
+		return nil
+	}
+	for _, name := range suggestions(cmd, args[0]) {
+		sub, _, err := cmd.Find([]string{name})
+		if err != nil {
+			continue
+		}
+		if len(args) == 1 || len(suggestions(sub, args[1])) > 0 {
+			return usageErrf("unknown command %q, did you mean %q?\nTo send it as a question, run: %s -- %s",
+				args[0], name, cmd.Name(), strings.Join(args, " "))
+		}
+	}
+	return nil
+}
+
+// subcommandArgs rejects arguments on a command that only groups others,
+// suggesting the closest subcommand.
+func subcommandArgs(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	msg := fmt.Sprintf("unknown command %q for %q", args[0], cmd.CommandPath())
+	if s := suggestions(cmd, args[0]); len(s) > 0 {
+		msg += fmt.Sprintf(", did you mean %q?", s[0])
+	}
+	return usageErrf("%s\nRun '%s --help' for usage.", msg, cmd.CommandPath())
+}
+
+// suggestions lists the subcommands of cmd that typed is a prefix or a
+// near miss (2 edits) of, like cobra's own "did you mean" hints.
+func suggestions(cmd *cobra.Command, typed string) []string {
+	if cmd.SuggestionsMinimumDistance <= 0 {
+		cmd.SuggestionsMinimumDistance = 2
+	}
+	return cmd.SuggestionsFor(typed)
+}
+
+// groupCommand makes c, which only holds subcommands, print its help when run
+// bare and reject unknown subcommands (exit 2) instead of ignoring them.
+func groupCommand(c *cobra.Command) {
+	c.Args = subcommandArgs
+	c.RunE = func(cmd *cobra.Command, args []string) error { return cmd.Help() }
 }
 
 func Execute() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
+
+	if err := config.MigrateIfNeeded(); err != nil {
+		display.ErrorMsg(err.Error())
+		os.Exit(exitFailure)
+	}
+	startupConfig, startupConfigErr = config.Load()
 
 	mode, exePath := updateGate()
 	if mode == update.ModeOn {
@@ -142,11 +216,10 @@ func updateGate() (mode string, exePath string) {
 	if !update.IsReleaseVersion(Version) {
 		return "", ""
 	}
-	cfg, err := config.Load()
-	if err != nil {
+	if startupConfigErr != nil {
 		return "", ""
 	}
-	mode = cfg.Settings.AutoUpdateMode()
+	mode = startupConfig.Settings.AutoUpdateMode()
 	if mode == update.ModeOff {
 		return "", ""
 	}
@@ -175,37 +248,74 @@ func init() {
 	}
 	rootCmd.Version = Version
 
-	rootCmd.PersistentFlags().StringVar(&globalURL, "url", "", "Override API base URL")
-	rootCmd.PersistentFlags().StringVar(&globalKey, "key", "", "Use a specific API key by name")
-	rootCmd.PersistentFlags().StringVar(&globalToken, "token", "", "Personal access token (dgpt_pat_…); overrides DOCSGPT_TOKEN and the stored token")
-	rootCmd.PersistentFlags().BoolVar(&globalNoStream, "no-stream", false, "Disable streaming")
-	rootCmd.PersistentFlags().BoolVar(&globalNoContext, "no-context", false, "Disable context enrichment")
-	rootCmd.PersistentFlags().BoolVar(&globalAutoApprove, "auto-approve", false, "Auto-approve tool calls")
-	rootCmd.PersistentFlags().IntVar(&globalTimeout, "timeout", 30, "Command execution timeout in seconds")
-	rootCmd.PersistentFlags().StringVar(&globalTheme, "theme", "", "Color theme: auto, dark, light")
-	rootCmd.PersistentFlags().BoolVar(&globalNoMotion, "no-motion", false, "Disable banner animation")
+	pf := rootCmd.PersistentFlags()
+	pf.StringVar(&globalURL, "url", "", "DocsGPT server URL (default: config, else "+config.DefaultBaseURL+")")
+	pf.StringVar(&globalKey, "key", "", "Chat with the stored API key of this name")
+	pf.StringVar(&globalToken, "token", "", "Personal access token (dgpt_pat_…) for account commands")
+	pf.StringVar(&globalTheme, "theme", "", "Color theme: auto, dark, light")
+	pf.MarkHidden("theme")
 
-	// Runtime errors of the chat commands print no usage; flag errors exit 2
-	// with a pointer to --help.
-	for _, c := range []*cobra.Command{askCmd, chatCmd, keysCmd} {
-		c.SilenceUsage = true
-		c.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
-			return usageErrf("%w\nRun '%s --help' for usage.", err, c.CommandPath())
-		})
+	for _, c := range []*cobra.Command{rootCmd, askCmd, chatCmd} {
+		f := c.Flags()
+		f.BoolVar(&globalNoStream, "no-stream", false, "Print the answer once it is complete")
+		f.BoolVar(&globalNoContext, "no-context", false, "Don't send the working directory, its files or shell history")
+		f.BoolVar(&globalAutoApprove, "auto-approve", false, "Run the agent's tool calls without asking")
+		f.IntVar(&globalTimeout, "tool-timeout", 30, "Seconds a command run by the agent may take")
+		f.Bool("no-motion", false, "")
+		f.MarkDeprecated("no-motion", "the banner no longer animates")
+	}
+	for _, c := range []*cobra.Command{askCmd, chatCmd} {
+		c.Flags().IntVar(&globalTimeout, "timeout", 30, "")
+		c.Flags().MarkDeprecated("timeout", "use --tool-timeout")
 	}
 
-	rootCmd.AddCommand(askCmd)
-	rootCmd.AddCommand(keysCmd)
-	rootCmd.AddCommand(installCmd)
-	rootCmd.AddCommand(configCmd)
-	rootCmd.AddCommand(chatCmd)
-	rootCmd.AddCommand(updateCmd)
-	rootCmd.AddCommand(benchCmd)
-	rootCmd.AddCommand(loginCmd)
-	rootCmd.AddCommand(logoutCmd)
-	rootCmd.AddCommand(whoamiCmd)
-	rootCmd.AddCommand(agentsCmd)
-	rootCmd.AddCommand(sourcesCmd)
-	rootCmd.AddCommand(promptsCmd)
-	rootCmd.AddCommand(toolsCmd)
+	// No usage dump on runtime errors; flag errors exit 2 with a pointer to
+	// --help.
+	rootCmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return usageErrf("%w\nRun '%s --help' for usage.", err, c.CommandPath())
+	})
+	rootCmd.SetUsageTemplate(usageTemplate)
+	cobra.EnableCommandSorting = false
+
+	rootCmd.AddGroup(
+		&cobra.Group{ID: "account", Title: "Account & agents:"},
+		&cobra.Group{ID: "tools", Title: "Tools:"},
+		&cobra.Group{ID: "host", Title: "Host mode:"},
+	)
+	for _, c := range []*cobra.Command{loginCmd, logoutCmd, whoamiCmd, agentsCmd, sourcesCmd} {
+		c.GroupID = "account"
+	}
+	for _, c := range []*cobra.Command{benchCmd, configCmd, updateCmd} {
+		c.GroupID = "tools"
+	}
+	hostCmd.GroupID = "host"
+	rootCmd.AddCommand(askCmd, chatCmd, loginCmd, logoutCmd, whoamiCmd, keysCmd, agentsCmd, sourcesCmd,
+		promptsCmd, toolsCmd, benchCmd, configCmd, updateCmd, installCmd, hostCmd)
 }
+
+// usageTemplate is cobra's, minus the help command and the "Additional
+// Commands" section that hidden aliases would otherwise bring back.
+const usageTemplate = `Usage:{{if .Runnable}}
+  {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
+  {{.CommandPath}} <command>{{end}}{{if gt (len .Aliases) 0}}
+
+Aliases:
+  {{.NameAndAliases}}{{end}}{{if .HasExample}}
+
+Examples:
+{{.Example}}{{end}}{{if .HasAvailableSubCommands}}{{$cmds := .Commands}}{{if eq (len .Groups) 0}}
+
+Commands:{{range $cmds}}{{if .IsAvailableCommand}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{else}}{{range $group := .Groups}}
+
+{{.Title}}{{range $cmds}}{{if (and (eq .GroupID $group.ID) .IsAvailableCommand)}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
+
+Flags:
+{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableInheritedFlags}}
+
+Global Flags:
+{{.InheritedFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableSubCommands}}
+
+Run '{{.CommandPath}} <command> --help' for more about a command.{{end}}
+`

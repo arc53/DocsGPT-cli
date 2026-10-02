@@ -392,6 +392,4 @@ func init() {
 
 	hostCmd.AddCommand(hostPairCmd, hostStatusCmd, hostRevokeCmd, hostResetCmd,
 		hostInstallServiceCmd, hostUninstallServiceCmd, hostRotateMachineKeyCmd)
-
-	rootCmd.AddCommand(hostCmd)
 }

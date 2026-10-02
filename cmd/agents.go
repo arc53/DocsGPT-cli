@@ -249,7 +249,7 @@ func init() {
 	tf.BoolVar(&agentsTriggerJSON, "json", false, "Print the result as JSON on stdout")
 
 	agentsCmd.AddCommand(agentsListCmd, agentsExportCmd, agentsPlanCmd, agentsApplyCmd, agentsDeleteCmd, agentsTriggerCmd)
-	markManagement(agentsCmd)
+	groupCommand(agentsCmd)
 }
 
 // withClient builds the account-level client and runs fn under an

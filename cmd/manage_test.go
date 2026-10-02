@@ -40,6 +40,7 @@ func isolateConfig(t *testing.T) string {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv(config.EnvToken, "")
 	t.Setenv(config.EnvURL, "")
+	t.Setenv(config.EnvAPIKey, "")
 	oldToken, oldURL := globalToken, globalURL
 	globalToken, globalURL = "", ""
 	t.Cleanup(func() { globalToken, globalURL = oldToken, oldURL })
@@ -84,18 +85,54 @@ func TestExitCodeFor(t *testing.T) {
 	}
 }
 
-func TestManagementCommandsSkipBanner(t *testing.T) {
-	for _, c := range []*cobra.Command{loginCmd, logoutCmd, whoamiCmd, agentsApplyCmd, sourcesUploadCmd, promptsListCmd, toolsListCmd} {
-		if !hasNoBanner(c) {
-			t.Errorf("%s should skip the banner", c.CommandPath())
-		}
-		if !c.SilenceUsage {
-			t.Errorf("%s should not dump usage on runtime errors", c.CommandPath())
+// runRoot executes the root command with args, as the binary would.
+func runRoot(t *testing.T, args ...string) error {
+	t.Helper()
+	rootCmd.SetArgs(args)
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	t.Cleanup(func() { rootCmd.SetArgs(nil); rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
+	return rootCmd.Execute()
+}
+
+func TestRootUsageErrors(t *testing.T) {
+	isolateConfig(t)
+	if !rootCmd.SilenceUsage {
+		t.Error("runtime errors should not dump usage")
+	}
+	for _, args := range [][]string{
+		{"agents", "list", "--bogus"},
+		{"--bogus", "question"},
+		{"agnets"},
+		{"agnets", "list"},
+		{"agents", "lst"},
+	} {
+		if err := runRoot(t, args...); exitCodeFor(err) != exitUsage {
+			t.Errorf("%q: err = %v, want a usage error", args, err)
 		}
 	}
-	for _, c := range []*cobra.Command{askCmd, chatCmd, benchCmd} {
-		if hasNoBanner(c) {
-			t.Errorf("%s should keep the banner", c.CommandPath())
+	// A typo hint names the command and how to ask anyway.
+	err := runRoot(t, "agnets")
+	if err == nil || !strings.Contains(err.Error(), `"agents"`) || !strings.Contains(err.Error(), "-- agnets") {
+		t.Errorf("typo hint = %v", err)
+	}
+}
+
+func TestCommandTypo(t *testing.T) {
+	for _, tt := range []struct {
+		args []string
+		typo bool
+	}{
+		{[]string{"agnets"}, true},
+		{[]string{"Agents"}, true},
+		{[]string{"agent", "list"}, true},
+		{[]string{"how", "do", "I", "list", "files?"}, false},
+		{[]string{"how do I rotate the key?"}, false},
+		{[]string{"kubernetes"}, false},
+		{[]string{"list", "agents"}, false},
+	} {
+		if got := commandTypo(rootCmd, tt.args) != nil; got != tt.typo {
+			t.Errorf("commandTypo(%q) = %v, want %v", tt.args, got, tt.typo)
 		}
 	}
 }
@@ -191,8 +228,15 @@ func TestLoginWhoamiLogout(t *testing.T) {
 	}
 	globalToken = ""
 
+	// Without a terminal, logout needs --yes.
+	logoutToken = true
+	t.Cleanup(func() { logoutToken, logoutYes = false, false })
+	if err := runLogout(nil, &out); exitCodeFor(err) != exitUsage {
+		t.Fatalf("logout without --yes: %v", err)
+	}
+	logoutYes = true
 	out.Reset()
-	if err := runLogout(&out); err != nil {
+	if err := runLogout(nil, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "still set") {
@@ -211,31 +255,104 @@ func TestLoginWhoamiLogout(t *testing.T) {
 	}
 }
 
-func TestReadLoginTokenFromPipe(t *testing.T) {
+func TestLoginAgentKey(t *testing.T) {
+	isolateConfig(t)
+	const goodKey = "0123abcd-0000-1111-2222-333344445555"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer "+goodKey {
+			jsonReply(w, 401, `{"error":{"message":"Invalid API key","type":"auth_error"}}`)
+			return
+		}
+		jsonReply(w, 200, `{"object":"list","data":[{"id":"a-1","name":"Support Bot","object":"model"}]}`)
+	}))
+	defer srv.Close()
+	globalURL = srv.URL
+	ctx := context.Background()
+	var out bytes.Buffer
+
+	if err := loginKey(ctx, "wrong-key-wrong-key", "", &out); err == nil || !strings.Contains(err.Error(), "rejected") {
+		t.Fatalf("bad key: %v", err)
+	}
+	// Named after the agent, and the default.
+	if err := loginKey(ctx, goodKey, "", &out); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := config.Load()
+	if cfg.Keys["support-bot"] != goodKey || cfg.DefaultKey != "support-bot" || cfg.BaseURL != srv.URL {
+		t.Fatalf("stored config = %+v", cfg)
+	}
+	// The same key again keeps its name; another name for it is explicit.
+	if err := loginKey(ctx, goodKey, "", &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := loginKey(ctx, goodKey, "ci", &out); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = config.Load()
+	if len(cfg.Keys) != 2 || cfg.DefaultKey != "ci" {
+		t.Fatalf("keys = %v, default %q", cfg.Keys, cfg.DefaultKey)
+	}
+	if strings.Contains(out.String(), goodKey) {
+		t.Errorf("output leaks the key:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := runWhoami(ctx, false, &out); err != nil {
+		t.Fatalf("whoami: %v", err)
+	}
+	for _, want := range []string{"ci (default)", "0123…5555", "Support Bot", "Personal access token: none"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("whoami lacks %q:\n%s", want, out.String())
+		}
+	}
+
+	// Removing the default promotes the next key.
+	logoutYes = true
+	t.Cleanup(func() { logoutYes = false })
+	if err := runLogout([]string{"ci"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = config.Load()
+	if len(cfg.Keys) != 1 || cfg.DefaultKey != "support-bot" {
+		t.Fatalf("after logout: keys = %v, default %q", cfg.Keys, cfg.DefaultKey)
+	}
+	if err := runLogout([]string{"nope"}, &out); exitCodeFor(err) != exitUsage {
+		t.Errorf("unknown key: %v", err)
+	}
+}
+
+func TestChatKeyWithoutKeyOffTerminal(t *testing.T) {
+	isolateConfig(t)
+	cfg := config.DefaultConfig()
+	_, _, err := chatKey(&cfg)
+	if err == nil || !strings.Contains(err.Error(), "docsgpt-cli login") || !strings.Contains(err.Error(), config.EnvAPIKey) || exitCodeFor(err) != exitFailure {
+		t.Fatalf("chatKey() = %v", err)
+	}
+	t.Setenv(config.EnvAPIKey, "k-env")
+	if name, key, err := chatKey(&cfg); err != nil || key != "k-env" || name != config.EnvAPIKey {
+		t.Errorf("chatKey() with %s = %q %q %v", config.EnvAPIKey, name, key, err)
+	}
+}
+
+func TestReadPipedSecret(t *testing.T) {
 	tests := []struct {
 		name    string
-		flag    string
 		piped   string
 		want    string
 		wantErr bool
 	}{
-		{"flag wins", " dgpt_pat_flag ", "dgpt_pat_pipe\n", "dgpt_pat_flag", false},
-		{"piped, first line only", "", "dgpt_pat_pipe\nextra\n", "dgpt_pat_pipe", false},
-		{"piped without newline", "", "dgpt_pat_pipe", "dgpt_pat_pipe", false},
-		{"empty pipe", "", "\n", "", true},
+		{"first line only", "dgpt_pat_pipe\nextra\n", "dgpt_pat_pipe", false},
+		{"without newline", " key-1 ", "key-1", false},
+		{"empty pipe", "\n", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, w, err := os.Pipe()
-			if err != nil {
-				t.Fatal(err)
-			}
-			io.WriteString(w, tt.piped)
-			w.Close()
-			defer r.Close()
-			got, err := readLoginToken(tt.flag, r, io.Discard)
+			got, err := readPipedSecret(strings.NewReader(tt.piped))
 			if (err != nil) != tt.wantErr || got != tt.want {
-				t.Errorf("readLoginToken() = %q, %v; want %q, err %v", got, err, tt.want, tt.wantErr)
+				t.Errorf("readPipedSecret() = %q, %v; want %q, err %v", got, err, tt.want, tt.wantErr)
 			}
 			if tt.wantErr && exitCodeFor(err) != exitUsage {
 				t.Errorf("exit code = %d, want 2", exitCodeFor(err))
@@ -1171,10 +1288,7 @@ func TestAgentsTriggerWebhookURLFromEnv(t *testing.T) {
 	}
 }
 
-func TestAgentsTriggerIsAManagementCommand(t *testing.T) {
-	if !hasNoBanner(agentsTriggerCmd) || !agentsTriggerCmd.SilenceUsage {
-		t.Error("agents trigger should skip the banner and not dump usage on runtime errors")
-	}
+func TestAgentsTriggerArgs(t *testing.T) {
 	if err := agentsTriggerCmd.Args(agentsTriggerCmd, []string{"a", "b"}); exitCodeFor(err) != exitUsage {
 		t.Errorf("two agent ids: %v", err)
 	}
