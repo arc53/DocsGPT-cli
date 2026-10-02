@@ -33,12 +33,13 @@ func (r ToolResult) String() string {
 	return r.Output
 }
 
-// Execute runs a tool by name with the given arguments JSON and timeout.
+// Execute runs a tool by name with the given arguments JSON. A command gets
+// at most timeout, and is killed when ctx is cancelled (Ctrl+C).
 // Tool names are normalized to strip server-appended suffixes (e.g., "_ct0").
-func Execute(name string, rawArgs string, timeout time.Duration) ToolResult {
+func Execute(ctx context.Context, name string, rawArgs string, timeout time.Duration) ToolResult {
 	switch NormalizeName(name) {
 	case "run_command":
-		return executeRunCommand(rawArgs, timeout)
+		return executeRunCommand(ctx, rawArgs, timeout)
 	case "read_file":
 		return executeReadFile(rawArgs)
 	case "write_file":
@@ -48,7 +49,7 @@ func Execute(name string, rawArgs string, timeout time.Duration) ToolResult {
 	}
 }
 
-func executeRunCommand(rawArgs string, timeout time.Duration) ToolResult {
+func executeRunCommand(ctx context.Context, rawArgs string, timeout time.Duration) ToolResult {
 	var args struct {
 		Command          string `json:"command"`
 		WorkingDirectory string `json:"working_directory"`
@@ -63,7 +64,7 @@ func executeRunCommand(rawArgs string, timeout time.Duration) ToolResult {
 		return ToolResult{Error: fmt.Sprintf("command blocked: %s", reason)}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	var cmd *exec.Cmd
@@ -72,6 +73,9 @@ func executeRunCommand(rawArgs string, timeout time.Duration) ToolResult {
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", args.Command)
 	}
+	killProcessGroup(cmd)
+	// Don't wait forever for output from a process that escaped the kill.
+	cmd.WaitDelay = time.Second
 
 	if args.WorkingDirectory != "" {
 		cmd.Dir = args.WorkingDirectory
@@ -86,8 +90,11 @@ func executeRunCommand(rawArgs string, timeout time.Duration) ToolResult {
 	}
 
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		switch ctx.Err() {
+		case context.DeadlineExceeded:
 			return ToolResult{Output: outStr, Error: "command timed out"}
+		case context.Canceled:
+			return ToolResult{Output: outStr, Error: "command interrupted by the user"}
 		}
 		return ToolResult{Output: outStr, Error: err.Error()}
 	}

@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -76,7 +78,8 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 			fmt.Println(display.RenderHeader(keyName, baseURL, cwd))
 		}
 
-		ctx := context.Background()
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
 		// Tool calls need a person on stdin to approve them.
 		var toolDefs []docsgpt.Tool
 		if !globalNoContext && (globalAutoApprove || stdinIsTerminal()) {
@@ -100,6 +103,9 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 		})
 		renderer.Flush()
 		if err != nil {
+			if ctx.Err() != nil {
+				return &exitError{code: 130, err: errors.New("interrupted")}
+			}
 			return err
 		}
 		if !tty {

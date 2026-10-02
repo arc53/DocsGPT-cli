@@ -262,6 +262,6 @@ func handleToolCall(ctx context.Context, tc docsgpt.ToolCall, timeout time.Durat
 	}
 
 	// Execute
-	toolResult := tools.Execute(tc.Function.Name, args, timeout)
+	toolResult := tools.Execute(ctx, tc.Function.Name, args, timeout)
 	return toolResult.String()
 }

@@ -65,7 +65,8 @@ internal/
     banner.go        → dino banner, interactive chat only, default "once"
   tools/
     definitions.go   → Tool schemas: run_command, read_file, write_file
-    executor.go      → Local tool execution with timeout
+    executor.go      → Local tool execution under the caller's ctx (Ctrl+C) + timeout;
+                       run_command gets its own process group, killed as a whole
     approval.go      → User approval prompt: [A]pprove [D]eny [E]dit
     safety.go        → Command blocklist, output truncation (10KB)
   update/
