@@ -106,6 +106,7 @@ func TestRootUsageErrors(t *testing.T) {
 		{"agnets"},
 		{"agnets", "list"},
 		{"agents", "lst"},
+		{"config", "sett"},
 	} {
 		if err := runRoot(t, args...); exitCodeFor(err) != exitUsage {
 			t.Errorf("%q: err = %v, want a usage error", args, err)
