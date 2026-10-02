@@ -4,7 +4,7 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,19 +18,15 @@ import (
 // child of its own: both must die, and Execute must return promptly.
 func TestRunCommandCancelKillsChildren(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
-	args, _ := json.Marshal(map[string]string{
-		"command": "sleep 30 & echo $! > " + pidFile + "; wait",
-	})
-
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(300*time.Millisecond, cancel)
 	start := time.Now()
-	res := Execute(ctx, "run_command", string(args), time.Minute)
+	err := runCommand(ctx, "sleep 30 & echo $! > "+pidFile+"; wait", "", time.Minute, io.Discard)
 	if took := time.Since(start); took > 5*time.Second {
-		t.Fatalf("Execute returned after %v, want right after the cancel", took)
+		t.Fatalf("runCommand returned after %v, want right after the cancel", took)
 	}
-	if res.Error != "command interrupted by the user" {
-		t.Errorf("Error = %q, want the interruption", res.Error)
+	if err != context.Canceled {
+		t.Errorf("err = %v, want the cancellation", err)
 	}
 
 	b, err := os.ReadFile(pidFile)
@@ -46,13 +42,12 @@ func TestRunCommandCancelKillsChildren(t *testing.T) {
 }
 
 func TestRunCommandTimeout(t *testing.T) {
-	args, _ := json.Marshal(map[string]string{"command": "sleep 30; echo late"})
 	start := time.Now()
-	res := Execute(context.Background(), "run_command", string(args), 300*time.Millisecond)
+	err := runCommand(context.Background(), "sleep 30; echo late", "", 300*time.Millisecond, io.Discard)
 	if took := time.Since(start); took > 5*time.Second {
-		t.Fatalf("Execute returned after %v, want right after the timeout", took)
+		t.Fatalf("runCommand returned after %v, want right after the timeout", took)
 	}
-	if res.Error != "command timed out" {
-		t.Errorf("Error = %q, want the timeout", res.Error)
+	if err != errTimeout {
+		t.Errorf("err = %v, want the timeout", err)
 	}
 }

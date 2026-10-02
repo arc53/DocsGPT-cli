@@ -14,6 +14,7 @@ type Input struct {
 	Placeholder string
 	Value       string // initial text
 	Mask        bool   // render every character as • (keys, tokens)
+	Stderr      bool   // draw on stderr, leaving stdout to the answer
 	// Validate runs on Enter behind a spinner; an error is shown under the
 	// field and the prompt stays open. ctx is cancelled if the user quits.
 	Validate func(ctx context.Context, value string) error
@@ -24,7 +25,7 @@ type Input struct {
 
 // Run shows the prompt and returns the submitted text.
 func (in Input) Run() (string, error) {
-	m, err := run(newInputModel(in))
+	m, err := run(newInputModel(in), in.Stderr)
 	if err != nil {
 		return "", err
 	}

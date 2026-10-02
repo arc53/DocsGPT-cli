@@ -61,21 +61,26 @@ func Interactive() bool {
 // the real terminal width (the first WindowSizeMsg arrives after it).
 type sizer interface{ setSize(w, h int) }
 
-// run drives one prompt inline on stdout and returns its final model.
+// run drives one prompt inline on stdout, or on stderr when toStderr is
+// set, and returns its final model.
 func run(m interface {
 	tea.Model
 	sizer
-}) (tea.Model, error) {
-	if !Interactive() {
+}, toStderr bool) (tea.Model, error) {
+	out := os.Stdout
+	if toStderr {
+		out = os.Stderr
+	}
+	if !term.IsTerminal(os.Stdin.Fd()) || !term.IsTerminal(out.Fd()) {
 		return nil, ErrNotInteractive
 	}
 	// Resolve the adaptive colours now: the first Render would otherwise
 	// query the terminal background while the program owns stdin.
 	lipgloss.HasDarkBackground()
-	if w, h, err := term.GetSize(os.Stdout.Fd()); err == nil {
+	if w, h, err := term.GetSize(out.Fd()); err == nil {
 		m.setSize(w, h)
 	}
-	final, err := tea.NewProgram(m).Run()
+	final, err := tea.NewProgram(m, tea.WithOutput(out)).Run()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, tea.ErrProgramKilled) {
 		return nil, ErrCancelled
 	}

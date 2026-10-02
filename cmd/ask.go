@@ -80,12 +80,14 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
 		// Tool calls need a person on stdin to approve them.
 		var toolDefs []docsgpt.Tool
 		if !globalNoContext && (globalAutoApprove || stdinIsTerminal()) {
 			toolDefs = tools.ToolDefinitions()
 		}
-		timeout := time.Duration(globalTimeout) * time.Second
+		toolSession := &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second}
 
 		renderer := display.NewStreamRenderer()
 
@@ -96,7 +98,7 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 		onToolCall := func(tc docsgpt.ToolCall) string {
 			renderer.Flush()
 			defer renderer.Wait()
-			return handleToolCall(ctx, tc, timeout)
+			return toolSession.Handle(ctx, cancel, tc)
 		}
 
 		renderer.Wait()

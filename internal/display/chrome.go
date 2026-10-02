@@ -59,6 +59,17 @@ func abbreviateHome(path string) string {
 	return path
 }
 
+// ShortPath shows path relative to the working directory when it lies
+// inside it, else with the home directory as ~.
+func ShortPath(path string) string {
+	if cwd, err := os.Getwd(); err == nil && filepath.IsAbs(path) {
+		if rel, err := filepath.Rel(cwd, path); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	return abbreviateHome(path)
+}
+
 // shortenPath drops leading directories of path until it fits in width
 // columns, marking the cut with "…"; the last element is kept whole.
 func shortenPath(path string, width int) string {

@@ -131,6 +131,7 @@ func (r *StreamRenderer) Flush() {
 		io.WriteString(r.out, "\n")
 		r.midLine = false
 	}
+	r.started = true // what follows (a tool block) came after something
 }
 
 // Content returns the raw accumulated content.

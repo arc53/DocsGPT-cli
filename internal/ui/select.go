@@ -42,6 +42,7 @@ type Select struct {
 	Filter  bool // type to filter; printable item keys are then ignored
 	Inline  bool // one row, ←/→ to move (falls back to a list when too wide)
 	Height  int  // visible rows of a list (default 8)
+	Stderr  bool // draw on stderr, leaving stdout to the answer
 	// Summary is the line left once an item is chosen; it defaults to
 	// "Title: Label" and an empty result leaves nothing.
 	Summary func(Item) string
@@ -52,7 +53,7 @@ func (s Select) Run() (string, error) {
 	if len(s.Items) == 0 {
 		return "", errors.New("ui: select has no items")
 	}
-	m, err := run(newSelectModel(s))
+	m, err := run(newSelectModel(s), s.Stderr)
 	if err != nil {
 		return "", err
 	}

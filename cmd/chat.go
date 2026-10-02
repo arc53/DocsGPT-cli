@@ -78,7 +78,7 @@ type chatSession struct {
 	lastAnswer    string
 	showReasoning bool
 	toolDefs      []docsgpt.Tool
-	timeout       time.Duration
+	tools         *tools.Session
 	// conversationID continues the server-side conversation, which then
 	// supplies the history (the messages are still sent, for servers that
 	// ignore the id).
@@ -134,6 +134,8 @@ func (s *chatSession) executor(input string) {
 	// the in-flight request instead of letting it kill the whole session.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	renderer := display.NewStreamRenderer()
 	renderer.ShowReasoning = s.showReasoning
@@ -145,7 +147,7 @@ func (s *chatSession) executor(input string) {
 	onToolCall := func(tc docsgpt.ToolCall) string {
 		renderer.Flush()
 		defer renderer.Wait()
-		return handleToolCall(ctx, tc, s.timeout)
+		return s.tools.Handle(ctx, cancel, tc)
 	}
 
 	renderer.Wait()
@@ -210,7 +212,7 @@ func runChatLoop(client *docsgpt.Client, history []docsgpt.Message) error {
 		client:   client,
 		history:  history,
 		toolDefs: toolDefs,
-		timeout:  time.Duration(globalTimeout) * time.Second,
+		tools:    &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second},
 	}
 
 	p := prompt.New(
@@ -232,46 +234,4 @@ func runChatLoop(client *docsgpt.Client, history []docsgpt.Message) error {
 	)
 	p.Run()
 	return nil
-}
-
-// handleToolCall gates a model-requested tool call behind the safety check
-// and the user's approval, then executes it. A cancelled ctx (Ctrl-C) skips
-// the call: before the approval prompt, and again after it, so a Ctrl-C
-// pressed while the prompt was waiting never runs the command.
-func handleToolCall(ctx context.Context, tc docsgpt.ToolCall, timeout time.Duration) string {
-	if ctx.Err() != nil {
-		return "User interrupted before this tool call ran."
-	}
-	normalizedName := tools.NormalizeName(tc.Function.Name)
-
-	// Check safety for run_command
-	if normalizedName == "run_command" {
-		safe, reason := tools.IsSafe(tc.Function.Arguments)
-		if !safe {
-			fmt.Fprintf(os.Stderr, "\n%s Command blocked: %s\n", display.Danger("✗"), reason)
-			return fmt.Sprintf("Command was blocked for safety: %s", reason)
-		}
-	}
-
-	// Auto-approve or ask user
-	args := tc.Function.Arguments
-	if !globalAutoApprove {
-		result, editedArgs, err := tools.RequestApproval(normalizedName, args)
-		if err != nil {
-			return "Error during approval: " + err.Error()
-		}
-		switch result {
-		case tools.Denied:
-			return "User denied this tool call."
-		case tools.Edited:
-			args = editedArgs
-		}
-		if ctx.Err() != nil {
-			return "User interrupted before this tool call ran."
-		}
-	}
-
-	// Execute
-	toolResult := tools.Execute(ctx, tc.Function.Name, args, timeout)
-	return toolResult.String()
 }

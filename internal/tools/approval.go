@@ -1,156 +1,225 @@
 package tools
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
+	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 )
 
-type ApprovalResult int
+// Session runs the model's tool calls for one chat session or ask run.
+// Approval is the only gate: every command and write is shown and asked
+// about, unless AutoApprove is set or the user chose "Always allow" for it
+// earlier in the session. Reads never ask.
+type Session struct {
+	AutoApprove bool
+	Timeout     time.Duration // per command
 
-const (
-	Approved ApprovalResult = iota
-	Denied
-	Edited
-)
-
-// RequestApproval displays a tool call approval card and asks the user to approve, deny, or edit.
-// Returns the result and potentially edited arguments.
-func RequestApproval(toolName string, rawArgs string) (ApprovalResult, string, error) {
-	detail, preview := extractToolDetail(toolName, rawArgs)
-	risk := display.ToolRisk(toolName)
-
-	// The prompt goes to stderr: stdout may be carrying the answer to a file.
-	card := display.RenderApprovalCard(toolName, detail, preview, risk)
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, card)
-	fmt.Fprint(os.Stderr, "  > ")
-
-	input, err := readLine(bufio.NewReader(os.Stdin))
-	if err != nil {
-		return Denied, rawArgs, err
-	}
-	input = strings.TrimSpace(strings.ToLower(input))
-
-	switch input {
-	case "1", "a", "approve", "y", "yes", "":
-		return Approved, rawArgs, nil
-	case "2", "d", "deny", "n", "no":
-		return Denied, rawArgs, nil
-	case "3", "e", "edit":
-		return editArgs(toolName, rawArgs)
-	default:
-		fmt.Fprintln(os.Stderr, display.Muted("  Invalid choice, denying."))
-		return Denied, rawArgs, nil
-	}
+	allowWrites bool
+	allowed     map[string]bool // first words of always-allowed commands
 }
 
-// extractToolDetail returns a detail string and optional preview lines for the tool.
-func extractToolDetail(toolName string, rawArgs string) (string, []string) {
-	switch toolName {
+// Handle runs one tool call and returns the result for the model. A
+// Ctrl+C (or Esc) at the approval prompt calls cancel, which stops the run.
+func (s *Session) Handle(ctx context.Context, cancel context.CancelFunc, tc docsgpt.ToolCall) string {
+	if ctx.Err() != nil {
+		return "The user interrupted the run before this tool call ran."
+	}
+	var args struct {
+		Command          string `json:"command"`
+		WorkingDirectory string `json:"working_directory"`
+		Path             string `json:"path"`
+		Content          string `json:"content"`
+		Offset           int    `json:"offset"`
+		Limit            int    `json:"limit"`
+	}
+	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+		return "Error: invalid arguments: " + err.Error()
+	}
+	switch name := NormalizeName(tc.Function.Name); name {
 	case "run_command":
-		var args struct {
-			Command          string `json:"command"`
-			WorkingDirectory string `json:"working_directory"`
-		}
-		json.Unmarshal([]byte(rawArgs), &args)
-		detail := "$ " + args.Command
-		if args.WorkingDirectory != "" {
-			detail += "\nin: " + args.WorkingDirectory
-		}
-		return detail, nil
-
+		return s.runCommand(ctx, cancel, args.Command, args.WorkingDirectory)
 	case "read_file":
-		var args struct {
-			Path string `json:"path"`
-		}
-		json.Unmarshal([]byte(rawArgs), &args)
-		return "Read: " + args.Path, nil
-
+		return s.readFile(args.Path, args.Offset, args.Limit)
 	case "write_file":
-		var args struct {
-			Path    string `json:"path"`
-			Content string `json:"content"`
-		}
-		json.Unmarshal([]byte(rawArgs), &args)
-		lines := strings.Split(args.Content, "\n")
-		preview := lines
-		if len(preview) > 5 {
-			preview = preview[:5]
-			preview = append(preview, fmt.Sprintf("... (%d more lines)", len(lines)-5))
-		}
-		return "Write to: " + args.Path, preview
-
+		return s.writeFile(ctx, cancel, args.Path, args.Content)
 	default:
-		return "Arguments: " + rawArgs, nil
+		return "Error: unknown tool " + name
 	}
 }
 
-func editArgs(toolName string, rawArgs string) (ApprovalResult, string, error) {
-	reader := bufio.NewReader(os.Stdin)
-
-	if toolName == "run_command" {
-		var args struct {
-			Command          string `json:"command"`
-			WorkingDirectory string `json:"working_directory"`
-		}
-		json.Unmarshal([]byte(rawArgs), &args)
-
-		fmt.Fprintf(os.Stderr, "  Edit command (current: %s)\n", args.Command)
-		fmt.Fprint(os.Stderr, "  $ ")
-		newCmd, err := readLine(reader)
-		if err != nil {
-			return Denied, rawArgs, err
-		}
-		args.Command = strings.TrimSpace(newCmd)
-		edited, _ := json.Marshal(args)
-		return Edited, string(edited), nil
+func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, command, dir string) string {
+	var note string
+	if dir != "" {
+		note = "in " + dir
 	}
-
-	// For other tools, let user edit raw JSON
-	fmt.Fprintf(os.Stderr, "  Edit arguments JSON (current: %s)\n", rawArgs)
-	fmt.Fprint(os.Stderr, "  > ")
-	newArgs, err := readLine(reader)
-	if err != nil {
-		return Denied, rawArgs, err
-	}
-	newArgs = strings.TrimSpace(newArgs)
-	if newArgs == "" {
-		return Denied, rawArgs, nil
-	}
-	return Edited, newArgs, nil
-}
-
-// readLine reads one line of user input, terminated by LF or CR. Accepting a
-// bare CR keeps the prompt usable even if the terminal is left in raw mode
-// (where Enter arrives as '\r' and ReadString('\n') would block forever).
-// A trailing LF after a CR is consumed so CRLF counts as one line ending. An
-// EOF that follows some input still returns that input.
-func readLine(r *bufio.Reader) (string, error) {
-	var b strings.Builder
+	edited, titled := false, false
 	for {
-		c, err := r.ReadByte()
-		if err != nil {
-			if err == io.EOF && b.Len() > 0 {
-				return b.String(), nil
-			}
-			return b.String(), err
+		if !titled {
+			display.ToolTitle("$ "+command, note)
+			titled = true
 		}
-		switch c {
-		case '\n':
-			return b.String(), nil
-		case '\r':
-			if next, err := r.Peek(1); err == nil && next[0] == '\n' {
-				r.ReadByte()
+		if s.AutoApprove || s.allowed[alwaysKey(command)] {
+			break
+		}
+		items := []ui.Item{{Label: "Approve", Value: "approve", Keys: []string{"a", "y"}}}
+		if key := alwaysKey(command); key != "" {
+			items = append(items, ui.Item{Label: "Always allow " + key, Value: "always", Keys: []string{"l"}})
+		}
+		items = append(items,
+			ui.Item{Label: "Deny", Value: "deny", Keys: []string{"d", "n"}},
+			ui.Item{Label: "Edit", Value: "edit", Keys: []string{"e"}})
+		choice, refusal := s.ask(cancel, items)
+		if refusal != "" {
+			return refusal
+		}
+		if choice == "edit" {
+			v, err := ui.Input{Title: "Edit command", Value: command, Stderr: true, Summary: func(string) string { return "" }}.Run()
+			if v = strings.TrimSpace(v); err == nil && v != "" && v != command {
+				command, edited, titled = v, true, false
 			}
-			return b.String(), nil
-		default:
-			b.WriteByte(c)
+			continue // ask again, about the edited command
+		}
+		if choice == "always" {
+			if s.allowed == nil {
+				s.allowed = map[string]bool{}
+			}
+			s.allowed[alwaysKey(command)] = true
+		}
+		break
+	}
+
+	view := display.NewTailView()
+	var out tailBuffer
+	start := time.Now()
+	err := runCommand(ctx, command, dir, s.Timeout, io.MultiWriter(&out, view))
+	view.Close()
+	took := display.Duration(time.Since(start))
+
+	result := out.String()
+	if strings.TrimSpace(result) == "" {
+		result = "(no output)"
+	}
+	if edited {
+		result = fmt.Sprintf("[The user edited the command to: %s]\n%s", command, result)
+	}
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		display.ToolStatus(true, "exit 0 · "+took)
+		return result
+	case errors.Is(err, context.Canceled):
+		display.ToolStatus(false, "cancelled")
+		return result + "\n[The user interrupted the command.]"
+	case errors.Is(err, errTimeout):
+		display.ToolStatus(false, "timed out after "+display.Duration(s.Timeout))
+		return result + fmt.Sprintf("\n[The command timed out after %s.]", display.Duration(s.Timeout))
+	case errors.As(err, &exit):
+		display.ToolStatus(false, fmt.Sprintf("exit %d · %s", exit.ExitCode(), took))
+		return result + fmt.Sprintf("\n[The command exited with code %d.]", exit.ExitCode())
+	}
+	display.ToolStatus(false, err.Error())
+	return result + "\n[The command failed: " + err.Error() + "]"
+}
+
+func (s *Session) readFile(path string, offset, limit int) string {
+	title := "read " + display.ShortPath(path)
+	if offset > 1 || limit > 0 {
+		title += fmt.Sprintf(":%d", max(offset, 1))
+		if limit > 0 {
+			title += fmt.Sprintf("-%d", max(offset, 1)+limit-1)
 		}
 	}
+	display.ToolTitle(title, "")
+	text, shown, total, err := readFile(path, offset, limit)
+	if err != nil {
+		display.ToolStatus(false, err.Error())
+		return "Error: " + err.Error()
+	}
+	status := fmt.Sprintf("%d lines", shown)
+	if shown < total {
+		status += fmt.Sprintf(" of %d", total)
+	}
+	display.ToolStatus(true, status)
+	return text
+}
+
+func (s *Session) writeFile(ctx context.Context, cancel context.CancelFunc, path, content string) string {
+	before, err := os.ReadFile(path)
+	isNew := errors.Is(err, os.ErrNotExist)
+	preview, added, removed := display.DiffPreview(string(before), content, 10)
+	if isNew {
+		display.ToolTitle("write "+display.ShortPath(path), fmt.Sprintf("(new, %d lines)", added))
+	} else {
+		display.ToolTitle("write "+display.ShortPath(path), fmt.Sprintf("(+%d −%d)", added, removed))
+	}
+	display.ToolLines(preview)
+
+	if !s.AutoApprove && !s.allowWrites {
+		choice, refusal := s.ask(cancel, []ui.Item{
+			{Label: "Approve", Value: "approve", Keys: []string{"a", "y"}},
+			{Label: "Always allow writes", Value: "always", Keys: []string{"l"}},
+			{Label: "Deny", Value: "deny", Keys: []string{"d", "n"}},
+		})
+		if refusal != "" {
+			return refusal
+		}
+		s.allowWrites = choice == "always"
+	}
+	if ctx.Err() != nil {
+		return "The user interrupted the run before this tool call ran."
+	}
+	if err := writeFile(path, content); err != nil {
+		display.ToolStatus(false, err.Error())
+		return "Error: " + err.Error()
+	}
+	display.ToolStatus(true, fmt.Sprintf("wrote %d lines", len(splitLines(content))))
+	return fmt.Sprintf("Wrote %d bytes to %s.", len(content), path)
+}
+
+// ask shows the approval choices under the tool's title. It returns the
+// choice, or the result for the model when the call must not run: denied,
+// or cancelled (which also cancels the run).
+func (s *Session) ask(cancel context.CancelFunc, items []ui.Item) (choice, refusal string) {
+	choice, err := ui.Select{Items: items, Inline: true, Stderr: true, Summary: func(ui.Item) string { return "" }}.Run()
+	switch {
+	case errors.Is(err, ui.ErrCancelled):
+		cancel()
+		display.ToolStatus(false, "cancelled")
+		return "", "The user interrupted the run before this tool call ran."
+	case err != nil:
+		display.ToolStatus(false, "not run: "+err.Error())
+		return "", "The tool call could not be approved: " + err.Error()
+	case choice == "deny":
+		display.ToolStatus(false, "denied")
+		return "", "The user denied this tool call."
+	}
+	return choice, ""
+}
+
+// alwaysKey returns what "Always allow" covers for command: its first
+// word, for a simple command only. Shell operators, substitutions,
+// redirections or several lines always ask, and so do shells and wrappers
+// that run arbitrary commands themselves. "" when it cannot be allowed.
+func alwaysKey(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" || strings.ContainsAny(command, ";&|<>`$()\n\r\\") {
+		return ""
+	}
+	first := strings.Fields(command)[0]
+	switch first {
+	case "sh", "bash", "zsh", "fish", "dash", "ksh", "env", "sudo", "doas", "su", "xargs", "eval",
+		"exec", "nohup", "time", "timeout", "nice", "command", "builtin", "watch", "ssh", "find":
+		return ""
+	}
+	return first
 }
