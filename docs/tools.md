@@ -10,8 +10,10 @@ tools:
 | `write_file` | Writes a file, creating missing directories | Always, with a short diff first |
 
 Each call shows as a block: the command or path, the output's last lines while
-it runs, then `✓ exit 0 · 1.2s` or `✗ exit 1 · 0.3s`. The model gets the
-output's last 2000 lines or 50 KB, and the exit code.
+it runs, then `✓ exit 0 · 1.2s` or `✗ exit 1 · 0.3s`. In a terminal with
+colors the block sits on a subtle background: gray while it runs, tinted green
+once it succeeded, red when it failed or was denied or cancelled. The model
+gets the output's last 2000 lines or 50 KB, and the exit code.
 
 ## Approving
 

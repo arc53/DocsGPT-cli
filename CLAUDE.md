@@ -81,7 +81,8 @@ internal/
     session.go       → saved chats: ~/.docsgpt/sessions/<slug>-<hash>/<time>_<id>.jsonl (slug = last ≤48 chars of the cwd, non-[A-Za-z0-9_] runs as `-`; hash = 8 hex of sha256(cwd); 0600, dirs 0700); header + message/state lines, each Record one append; List keeps the files whose header cwd is this cwd; Load/Turns
   display/
     theme.go         → semantic palette (pi's OKHSL tones: hex + 256 + 16-color fallbacks,
-                       dark/light; plain under NO_COLOR); also sets ui.Colors. InitTheme
+                       dark/light; plain under NO_COLOR; tool block backgrounds a step
+                       fainter than pi's, no 16-color value); also sets ui.Colors. InitTheme
                        runs in the root PersistentPreRun (hidden --theme > config > auto)
     renderer.go      → StreamRenderer: streamed markdown on a TTY (finished blocks
                        rendered once into scrollback, the block in progress redrawn
@@ -97,7 +98,14 @@ internal/
                        welcome line, footer text, the user-message block, Ago
     style.go         → Accent/Muted/Dim/Success/Warn helpers, ErrorMsg (stderr)
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
-                       (live last-5-lines region), DiffPreview for writes
+                       (live last-5-lines region), DiffPreview for writes. With
+                       colors and stderr a 256/truecolor TTY a block is a toolBox:
+                       full-width rows on colToolBg (pi's Box(1,1): padding row
+                       above/below, one column each side; resets re-apply the bg),
+                       the live tail keeps the bottom padding, and ToolStatus
+                       redraws the on-screen part on colToolOkBg/colToolFailBg
+                       (skipped if the width changed). Titles wrap there (rows are
+                       cut to the width). Plain (indented, no bg) otherwise
     safe.go          → Safe: control chars as ␛ ␍ ␊, format runes as \uXXXX, so an
                        escape sequence cannot hide part of a command. Every model/server
                        string in tool blocks, sources, agents/sources lists, whoami, host
