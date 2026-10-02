@@ -61,20 +61,35 @@ internal/
   context/
     enricher.go      → Context building: cwd, dir contents, shell history
   display/
+    theme.go         → semantic palette (pi's OKHSL tones: hex + 256 + 16-color fallbacks,
+                       dark/light; plain under NO_COLOR); also sets ui.Colors. InitTheme
+                       runs in PersistentPreRunE (flag > config > auto)
     renderer.go      → StreamRenderer: streamed markdown on a TTY (finished blocks
                        rendered once into scrollback, the block in progress redrawn
-                       in place while it fits on screen); raw text when not a TTY
-    markdown.go      → glamour setup (theme style, no margin, padding trimmed)
-    theme.go         → palette; InitTheme runs in PersistentPreRunE (flag > config > auto)
+                       in place while it fits on screen); raw text when not a TTY.
+                       Wait() = "Thinking…" spinner (stderr) until the first visible
+                       token; visible reasoning is a dim italic block of its own
+    markdown.go      → glamour style built from the palette (no margins/fills); top-level
+                       code fences drawn by us (dim ``` lines, 2-space indent, chroma
+                       tokens colored from the palette)
+    chrome.go        → one dim header line (docsgpt · key · host · cwd), chat key hints
+    tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
+                       (live last-5-lines region), DiffPreview for writes
+    sources.go       → dim numbered "Sources" block, OSC 8 links, TTY only
     background*.go   → auto theme: COLORFGBG, else one OSC 11 query (stdout TTY only,
                        150ms max); the answer also feeds glamour and lipgloss
-    banner.go        → dino banner, interactive chat only, default "once"
+    banner.go        → dino banner, interactive chat only, default "once", no animation
+  ui/                → inline bubbletea prompts: Select (list / inline row, filter, key
+                       shortcuts), Confirm, Input (mask, validate), Spinner (stderr);
+                       Stderr option for prompts drawn while stdout carries an answer
   tools/
-    definitions.go   → Tool schemas: run_command, read_file, write_file
-    executor.go      → Local tool execution under the caller's ctx (Ctrl+C) + timeout;
-                       run_command gets its own process group, killed as a whole
-    approval.go      → User approval prompt: [A]pprove [D]eny [E]dit
-    safety.go        → Command blocklist, output truncation (10KB)
+    definitions.go   → Tool schemas: run_command, read_file (offset/limit), write_file
+    approval.go      → Session: per chat session / ask run; title, approval, execution,
+                       status per call. Inline Approve / Always allow / Deny / Edit
+    executor.go      → runCommand (caller's ctx + timeout, own process group killed as
+                       a whole), readFile (line ranges), writeFile (creates parents)
+    truncate.go      → model-bound output: last 2000 lines / 50KB, line/rune safe, with
+                       a note about the dropped head; tailBuffer bounds the capture
   update/
     update.go        → GitHub latest-release lookup, semver comparison, mode constants
     apply.go         → Asset download, sha256 verify, binary swap + backup, Rollback, host CheckAndApply
@@ -92,8 +107,8 @@ internal/
 2. Loads config from `~/.docsgpt/config.json`, resolves API key (Bearer auth) and base URL
 3. Optionally enriches question with context (cwd, dir listing, shell history)
 4. Sends to `POST {base_url}/v1/chat/completions` with streaming
-5. Handles tool calls (run_command, read_file, write_file) with user approval loop; tools are only offered when stdin is a TTY or `--auto-approve` is set. Tool UI (approval card, command output) goes to stderr
-6. stdout not a TTY: stdout carries only the raw answer (no header, sources, clipboard). On a TTY: header, rendered answer, dim `Sources:` line, first bash/sh block copied to the clipboard (with a dim note)
+5. Handles tool calls (run_command, read_file, write_file) with user approval loop; tools are only offered when stdin is a TTY or `--auto-approve` is set. Tool UI (titles, approval prompt, command output, status) goes to stderr
+6. stdout not a TTY: stdout carries only the raw answer (no header, sources, clipboard). On a TTY: header, rendered answer, dim `Sources` block, first bash/sh block copied to the clipboard (with a dim note)
 
 Errors (every command) go to stderr. `ask`/`chat`/`keys` print no usage on runtime errors (exit 1); a missing question or a bad flag is a usage error (exit 2, flags with a `--help` pointer); Ctrl+C exits `ask` with 130.
 
@@ -108,7 +123,7 @@ from the local history.
 Special commands: `/quit`, `/clear`, `/copy`, `/think`. Ctrl+C cancels the in-flight
 request (signal.NotifyContext in the executor; the prompt library restores cooked mode
 around the executor so it is a real SIGINT) or clears the input line; Ctrl+D exits.
-Tool approval reads stdin with a CR/LF-tolerant reader (internal/tools/approval.go).
+The approval prompt is a bubbletea program on stderr; it reads keys in raw mode, so Ctrl+C there cancels the run at once.
 
 ### Auto-update flow
 Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set-auto-update`); env kill switch `DOCSGPT_NO_UPDATE_CHECK`.
@@ -144,9 +159,10 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set-a
 
 ### Tool call flow
 1. CLI sends `tools` array in request
-2. If model returns `finish_reason: "tool_calls"`, CLI shows approval prompt
-3. On approve: executes locally, sends result back as `role: "tool"` message
+2. If model returns `finish_reason: "tool_calls"`, CLI shows the call's title (`$ cmd`, `read path`, `write path (+N −M)` with a short diff) and asks: Approve (a), Always allow (l), Deny (d), Edit (e, commands only: prefilled input, then asked again). Ctrl+C/Esc at the prompt cancels the whole run
+3. On approve: executes locally (command output in a live 5-line tail, then `✓ exit 0 · 1.2s` / `✗ …`), sends result back as `role: "tool"` message
 4. Model continues with tool results — loop repeats until `finish_reason: "stop"`
+5. Security stance (like pi): approval is the only gate, there is no command blocklist. `read_file` never asks. "Always allow" lasts for the session: all writes, or later commands with the same first word, and only simple ones (no `; & | < > $ ( ) \` or newlines, not shells/wrappers such as `sh`, `sudo`, `env`, `xargs`). `--auto-approve` skips every prompt but still prints each title and status. Host mode (no person at the device) keeps its own denylist in `internal/host/invocation.go`
 
 ## Config
 

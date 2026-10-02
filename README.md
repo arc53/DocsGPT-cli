@@ -154,6 +154,20 @@ tail -n 50 app.log | docsgpt-cli ask "Why does this fail?"
 docsgpt-cli ask "Summarize the README" > summary.md
 ```
 
+### Local tools
+
+In `ask` and `chat` the agent can run commands, read files and write files on
+your machine. Reads run right away; every command and write is shown first
+(writes as a short diff) and waits for your answer: **Approve** (`a`),
+**Always allow** (`l`), **Deny** (`d`) or **Edit** the command (`e`). Ctrl+C
+at the prompt stops the answer.
+
+Always allow lasts until the session ends: for writes it covers every later
+write; for a command it covers later commands with the same first word (for
+example `git`), as long as they are simple ones: anything with `;`, `&`, `|`,
+redirections or substitutions always asks. Approval is the only safeguard,
+so read what you approve. `--auto-approve` skips the prompts entirely.
+
 ---
 
 ## Updating
