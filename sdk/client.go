@@ -200,7 +200,9 @@ type ToolCallHandler func(tc ToolCall) string
 
 // RunOptions configures RunWithTools.
 type RunOptions struct {
-	Tools  []Tool
+	Tools []Tool
+	// Stream selects SSE streaming; OnDelta then sees every chunk, and
+	// otherwise each whole response once.
 	Stream bool
 	// ConversationID continues a stored conversation (from an earlier
 	// RunResult); empty starts a new one.
@@ -247,8 +249,9 @@ func (c *Client) RunWithTools(ctx context.Context, messages []Message, opts RunO
 		var err error
 		if opts.Stream {
 			resp, err = c.SendStream(ctx, req, opts.OnDelta)
-		} else {
-			resp, err = c.Send(ctx, req)
+		} else if resp, err = c.Send(ctx, req); err == nil && opts.OnDelta != nil && len(resp.Choices) > 0 {
+			// Without streaming the handler sees each response whole.
+			opts.OnDelta(resp.Choices[0].Message, resp.Choices[0].FinishReason)
 		}
 		if err != nil {
 			return nil, err

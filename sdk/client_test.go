@@ -158,13 +158,21 @@ func TestRunWithToolsFeedsResultsBack(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	var seen []string
 	res, err := NewClient(srv.URL, "k").RunWithTools(
 		context.Background(),
 		[]Message{{Role: "user", Content: "go"}},
-		RunOptions{OnToolCall: func(tc ToolCall) string { return "42" }},
+		RunOptions{
+			OnDelta:    func(d Delta, finish string) { seen = append(seen, d.Content+"/"+finish) },
+			OnToolCall: func(tc ToolCall) string { return "42" },
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Without streaming, the handler still sees each response, whole.
+	if strings.Join(seen, ",") != "/tool_calls,done/" {
+		t.Errorf("OnDelta saw %q", seen)
 	}
 	history := res.Messages
 	if turns != 2 {
