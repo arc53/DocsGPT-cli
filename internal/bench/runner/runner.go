@@ -94,6 +94,7 @@ const (
 	EventRunDone   = "run_done"
 	EventCaseDone  = "case_done"
 	EventGolden    = "golden" // record mode: a golden.json was written (Msg = path)
+	EventModel     = "model"  // RunMatrix: a model's run starts (Msg = model, Run = 1-based index)
 )
 
 // Event is one live-progress notification. OnEvent is invoked serially even
@@ -297,6 +298,30 @@ func Run(ctx context.Context, opts Options) (*SuiteResult, error) {
 		sr.Model = opts.ModelOverride
 	}
 	return sr, nil
+}
+
+// RunMatrix runs the suite once per model (never recording goldens) and
+// returns one result per model that ran: a cancelled ctx stops before the
+// next model.
+func RunMatrix(ctx context.Context, opts Options, models []string) ([]*SuiteResult, error) {
+	var runs []*SuiteResult
+	for i, model := range models {
+		if ctx.Err() != nil {
+			break
+		}
+		if opts.OnEvent != nil {
+			opts.OnEvent(Event{Type: EventModel, Msg: model, Run: i + 1})
+		}
+		mopts := opts
+		mopts.ModelOverride = model
+		mopts.UpdateGolden = false
+		r, err := Run(ctx, mopts)
+		if err != nil {
+			return runs, err
+		}
+		runs = append(runs, r)
+	}
+	return runs, nil
 }
 
 // runContext carries the shared, concurrency-safe run state.
