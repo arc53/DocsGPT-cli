@@ -99,6 +99,37 @@ func TestStreamRendererRawWhenNotATerminal(t *testing.T) {
 	}
 }
 
+// TestStreamRendererStripsControls streams an answer full of control
+// sequences in small chunks, on a terminal and off one: none reaches the
+// output or Content, and the text around them does.
+func TestStreamRendererStripsControls(t *testing.T) {
+	answer := "Hi \x1b]52;c;cm0gLXJmIH4=\x07there\x1b[8m hidden\x1b[0m.\r\n\n\x1b]0;title\x1b\\Done \u009b2J."
+	for _, tty := range []bool{true, false} {
+		var out bytes.Buffer
+		r := &StreamRenderer{out: &out, tty: tty, width: 40, height: 40, md: newMarkdown(40)}
+		for i := 0; i < len(answer); i += 3 {
+			r.Delta(docsgpt.Delta{Content: answer[i:min(i+3, len(answer))]})
+			r.lastDraw = r.lastDraw.Add(-frameInterval)
+		}
+		r.Flush()
+		if want := "Hi there hidden.\n\nDone ."; r.Content() != want {
+			t.Errorf("tty %v: Content() = %q, want %q", tty, r.Content(), want)
+		}
+		got := out.String()
+		if tty {
+			got = emulate(t, got, 40, 40)
+		}
+		for _, bad := range []string{"\x1b]", "\x07", "\x1b[8m", "\u009b", "\r", "52;", "title"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("tty %v: output has %q: %q", tty, bad, got)
+			}
+		}
+		if !strings.Contains(got, "Hi there hidden.") || !strings.Contains(got, "Done .") {
+			t.Errorf("tty %v: text lost: %q", tty, got)
+		}
+	}
+}
+
 var escape = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
 
 // emulate replays out on a terminal of the given size and returns the text

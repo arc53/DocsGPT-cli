@@ -312,7 +312,7 @@ func (s *chatSession) pickSession() bool {
 	for i, sess := range list {
 		n := len(sess.Turns())
 		items[i] = ui.Item{
-			Label:       sess.Title(),
+			Label:       display.Safe(sess.Title()),
 			Value:       strconv.Itoa(i),
 			Description: fmt.Sprintf("%s · %d %s · %s", display.Ago(sess.Updated), n, plural(n, "message", "messages"), sess.Key),
 		}
@@ -362,7 +362,7 @@ func (s *chatSession) resume(sess *session.Session) {
 		display.PrintMarkdown(t.Answer)
 		display.PrintSources(t.Sources)
 		fmt.Println()
-		s.lastAnswer = t.Answer
+		s.lastAnswer = display.StripControls(t.Answer)
 	}
 	if note != "" {
 		fmt.Println(display.Warn("! ") + display.Dim(note) + "\n")
@@ -399,7 +399,7 @@ func (s *chatSession) copyAnswer(string) {
 			if b.lang != "" {
 				desc = b.lang + " · " + desc
 			}
-			items = append(items, ui.Item{Label: first, Value: strconv.Itoa(i), Description: desc})
+			items = append(items, ui.Item{Label: display.Safe(first), Value: strconv.Itoa(i), Description: desc})
 		}
 		v, err := ui.Select{Title: "Copy", Items: items, Summary: func(ui.Item) string { return "" }}.Run()
 		if err != nil {
@@ -456,7 +456,8 @@ func (s *chatSession) export(file string) {
 		}
 	}
 	os.MkdirAll(filepath.Dir(file), 0o755)
-	if err := os.WriteFile(file, []byte(b.String()), 0o644); err != nil {
+	// The answers are the model's: no control sequences for a later cat.
+	if err := os.WriteFile(file, []byte(display.StripControls(b.String())), 0o644); err != nil {
 		printError(err.Error())
 		fmt.Println()
 		return

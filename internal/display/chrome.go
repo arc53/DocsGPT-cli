@@ -71,7 +71,7 @@ func ChatFooter(cwd, keyName, baseURL string) string {
 // (a "❯" prefix without colors), followed by a blank line.
 func UserMessage(text string) {
 	width := termWidth()
-	text = strings.ReplaceAll(strings.TrimRight(text, "\n"), "\t", "    ")
+	text = strings.ReplaceAll(strings.TrimRight(StripControls(text), "\n"), "\t", "    ")
 	if Colorless() {
 		lines := strings.Split(ansi.Wrap(text, max(width-2, 10), ""), "\n")
 		for i, l := range lines {

@@ -83,3 +83,41 @@ func TestLinkable(t *testing.T) {
 		}
 	}
 }
+
+func TestStripControls(t *testing.T) {
+	for in, want := range map[string]string{
+		"plain\ttext\nline two ✓":                "plain\ttext\nline two ✓",
+		"red \x1b[31mtext\x1b[0m":                "red text",
+		"conceal \x1b[8msecret\x1b[28m":          "conceal secret",
+		"title \x1b]0;pwned\x07after":            "title after",
+		"clip \x1b]52;c;cm0gLXJmIH4=\x1b\\after": "clip after",
+		"palette \x1b]4;1;rgb:ff/00/00\x1b\\x":   "palette x",
+		"cursor \x1b[2A\x1b[2Kup":                "cursor up",
+		"dcs \x1bP1$r0m\x1b\\x":                  "dcs x",
+		"charset \x1b(Bx \x1bcreset":             "charset x reset",
+		"c1 \u009b31mred \u009d0;t\u009cx":       "c1 red x",
+		"crlf\r\nover\rwrite\b":                  "crlf\noverwrite",
+		"abort \x1b]0;t\x1b[1mbold":              "abort bold",
+		"bell\a del\x7f nul\x00":                 "bell del nul",
+		"csi \x1b[日本":                            "csi 日本",
+		"unterminated \x1b]8;;http://e":          "unterminated ",
+	} {
+		if got := StripControls(in); got != want {
+			t.Errorf("StripControls(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestControlFilterSplit feeds sequences one byte at a time: a sequence
+// split across stream chunks is removed whole.
+func TestControlFilterSplit(t *testing.T) {
+	in := "a\x1b]52;c;eA==\x1b\\b\x1b[1;31mc\u009b2Jd"
+	var f controlFilter
+	var got strings.Builder
+	for _, r := range in {
+		got.WriteString(f.clean(string(r)))
+	}
+	if got.String() != "abcd" {
+		t.Errorf("split: %q", got.String())
+	}
+}

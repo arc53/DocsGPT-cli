@@ -75,10 +75,11 @@ func markdownStyle(width int) ansi.StyleConfig {
 
 func ptr[T any](v T) *T { return &v }
 
-// PrintMarkdown renders md to stdout at the terminal's width.
+// PrintMarkdown renders md, stripped of control sequences, to stdout at the
+// terminal's width.
 func PrintMarkdown(md string) {
 	width := termWidth()
-	if out := renderMarkdown(newMarkdown(width), width, md); out != "" {
+	if out := renderMarkdown(newMarkdown(width), width, StripControls(md)); out != "" {
 		fmt.Println(out)
 	}
 }

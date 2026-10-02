@@ -42,5 +42,5 @@ func Info(s string) string {
 
 // ErrorMsg prints "✗ message" in the error color to stderr.
 func ErrorMsg(message string) {
-	fmt.Fprintln(os.Stderr, T.Error.Render("✗ "+message))
+	fmt.Fprintln(os.Stderr, T.Error.Render("✗ "+StripControls(message)))
 }

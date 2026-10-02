@@ -182,3 +182,13 @@ func TestEditorWrapsAndScrolls(t *testing.T) {
 		t.Fatalf("scrolled view:\n%s", v)
 	}
 }
+
+// TestEditorSetTextPrintable checks text the editor did not see typed (a
+// history entry, the $EDITOR result) loses its control characters.
+func TestEditorSetTextPrintable(t *testing.T) {
+	m := testEditor()
+	m.setText("red \x1b[31mtext\r\n\ttab\x07")
+	if got := m.text(); got != "red [31mtext\n    tab" {
+		t.Fatalf("setText kept controls: %q", got)
+	}
+}

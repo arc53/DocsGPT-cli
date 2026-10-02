@@ -25,6 +25,12 @@ const frameInterval = 33 * time.Millisecond
 // place, but only while it fits on screen: lines that scrolled away cannot be
 // erased, so a taller block waits until it is complete. Anywhere else the raw
 // text is written as it arrives, and nothing more.
+//
+// Either way the text loses its terminal control sequences first (see
+// StripControls): the model must not be able to hide text, retitle or
+// recolour the terminal, write the clipboard (OSC 52) or move the cursor
+// under the redraws. Off a terminal too, since piped output often ends up
+// on one (a pager, a file that is cat-ed); newlines and tabs stay.
 type StreamRenderer struct {
 	ShowReasoning bool
 
@@ -36,16 +42,18 @@ type StreamRenderer struct {
 	width  int
 	height int
 
-	mu       sync.Mutex
-	content  strings.Builder // the whole answer
-	pending  string          // streamed text not committed yet
-	started  bool            // something is on screen: blocks get a blank line before them
-	liveRows int             // terminal rows the live block occupies
-	tooTall  bool            // the live block outgrew the screen: wait for it to finish
-	midLine  bool            // the cursor is mid-line (reasoning, or raw text off a terminal)
-	thinking bool            // a reasoning block is being written
-	lastDraw time.Time
-	timer    *time.Timer
+	mu        sync.Mutex
+	answer    controlFilter
+	reasoning controlFilter
+	content   strings.Builder // the whole answer
+	pending   string          // streamed text not committed yet
+	started   bool            // something is on screen: blocks get a blank line before them
+	liveRows  int             // terminal rows the live block occupies
+	tooTall   bool            // the live block outgrew the screen: wait for it to finish
+	midLine   bool            // the cursor is mid-line (reasoning, or raw text off a terminal)
+	thinking  bool            // a reasoning block is being written
+	lastDraw  time.Time
+	timer     *time.Timer
 }
 
 // NewStreamRenderer creates a StreamRenderer writing to stdout.
@@ -69,7 +77,7 @@ func (r *StreamRenderer) Delta(delta docsgpt.Delta) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if delta.ReasoningContent != "" && r.ShowReasoning && r.tty {
+	if text := r.reasoning.clean(delta.ReasoningContent); text != "" && r.ShowReasoning && r.tty {
 		r.spin.Stop()
 		if !r.thinking {
 			if r.pending != "" {
@@ -80,22 +88,22 @@ func (r *StreamRenderer) Delta(delta docsgpt.Delta) {
 			}
 			r.thinking, r.started = true, true
 		}
-		io.WriteString(r.out, paint(T.Thinking, delta.ReasoningContent))
-		r.midLine = !strings.HasSuffix(delta.ReasoningContent, "\n")
+		io.WriteString(r.out, paint(T.Thinking, text))
+		r.midLine = !strings.HasSuffix(text, "\n")
 	}
-	if delta.Content == "" {
+	text := r.answer.clean(delta.Content) // CRs go too: CRLF becomes LF
+	if text == "" {
 		return
 	}
 	r.spin.Stop()
 	r.thinking = false
-	r.content.WriteString(delta.Content)
+	r.content.WriteString(text)
 	if !r.tty {
-		io.WriteString(r.out, delta.Content)
-		r.midLine = !strings.HasSuffix(delta.Content, "\n")
+		io.WriteString(r.out, text)
+		r.midLine = !strings.HasSuffix(text, "\n")
 		return
 	}
-	// CRLF line ends would keep fences and blank lines from being seen.
-	r.pending = strings.ReplaceAll(r.pending+delta.Content, "\r\n", "\n")
+	r.pending += text
 	if wait := frameInterval - time.Since(r.lastDraw); wait > 0 {
 		if r.timer == nil {
 			var t *time.Timer
@@ -135,7 +143,7 @@ func (r *StreamRenderer) Flush() {
 	r.started = true // what follows (a tool block) came after something
 }
 
-// Content returns the raw accumulated content.
+// Content returns the answer so far, without control sequences.
 func (r *StreamRenderer) Content() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

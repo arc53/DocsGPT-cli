@@ -119,6 +119,7 @@ func (m *editorModel) empty() bool { return len(m.lines) == 1 && len(m.lines[0])
 
 // setText replaces the text, the cursor at its end.
 func (m *editorModel) setText(s string) {
+	s = printable(s) // history and $EDITOR text are not typed
 	m.lines = nil
 	for _, l := range strings.Split(s, "\n") {
 		m.lines = append(m.lines, []rune(l))
@@ -337,16 +338,22 @@ func (m *editorModel) insert(s string) {
 	m.col = len(last)
 }
 
-// paste inserts pasted text; more than 10 lines or 1000 characters become
-// a marker, expanded again when the message is sent (as pi does).
-func (m *editorModel) paste(s string) {
+// printable keeps the printable runes and line breaks of s, tabs as spaces:
+// an escape sequence would be drawn raw by the editor.
+func printable(s string) string {
 	s = strings.NewReplacer("\r\n", "\n", "\r", "\n", "\t", "    ").Replace(s)
-	s = strings.Map(func(r rune) rune {
+	return strings.Map(func(r rune) rune {
 		if r == '\n' || unicode.IsPrint(r) {
 			return r
 		}
 		return -1
 	}, s)
+}
+
+// paste inserts pasted text; more than 10 lines or 1000 characters become
+// a marker, expanded again when the message is sent (as pi does).
+func (m *editorModel) paste(s string) {
+	s = printable(s)
 	n := strings.Count(s, "\n") + 1
 	if n <= 10 && utf8.RuneCountInString(s) <= 1000 {
 		m.insert(s)

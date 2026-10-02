@@ -74,7 +74,9 @@ internal/
     renderer.go      → StreamRenderer: streamed markdown on a TTY (finished blocks
                        rendered once into scrollback, the block in progress redrawn
                        in place while it fits on screen); raw text when not a TTY.
-                       Wait() = "Thinking…" spinner (stderr) until the first visible
+                       Both strip control sequences first (StripControls, stateful
+                       across chunks; non-TTY too, as piped output often lands on a
+                       terminal). Wait() = "Thinking…" spinner (stderr) until the first visible
                        token; visible reasoning is a dim italic block of its own
     markdown.go      → glamour style built from the palette (no margins/fills); top-level
                        code fences drawn by us (dim ``` lines, 2-space indent, chroma
@@ -85,7 +87,10 @@ internal/
                        (live last-5-lines region), DiffPreview for writes
     safe.go          → Safe: every model/server string in tool blocks and sources is
                        printed through it (control chars as ␛ ␍ ␊, format runes as
-                       \uXXXX), so an escape sequence cannot hide part of a command
+                       \uXXXX), so an escape sequence cannot hide part of a command.
+                       StripControls: removes ESC/OSC/DCS/C1 sequences whole and other
+                       controls but \n \t, for text read as text (answers, resumed
+                       chats, the user-message block, /export, error messages)
     sources.go       → dim numbered "Sources" block, OSC 8 links (printable-ASCII
                        http(s) URLs only), TTY only
     background*.go   → auto theme: COLORFGBG, else one OSC 11 query (stdout TTY only,

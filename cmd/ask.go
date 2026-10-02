@@ -32,7 +32,8 @@ Anything piped into the command is sent along with the question (or is the
 question, when none is given), up to 1 MB. With a question, a pipe is read
 only if its data starts within a second, and a redirected file only from its
 start, so an idle stdin (ssh, CI) or a "while read" loop is left alone. When
-stdout is not a terminal, only the answer is written to it, as plain text.
+stdout is not a terminal, only the answer is written to it, as plain text
+(terminal control sequences removed, as on a terminal).
 
 Example usage:
     docsgpt-cli ask "How do I open a file in Python?"
