@@ -135,7 +135,7 @@ func TestSelectFilter(t *testing.T) {
 		{Label: "gpt-4o", Description: "openai"},
 		{Label: "gemini-2.5-pro", Description: "google"},
 		{Label: "gemini-2.5-flash", Description: "google"},
-		{Label: "claude", Description: "anthropic", Keys: []string{"c"}},
+		{Label: "command-r", Description: "cohere", Keys: []string{"c"}},
 	}
 	m := newSelectModel(Select{Title: "Model", Items: items, Filter: true})
 	m.setSize(80, 24)
@@ -148,7 +148,7 @@ func TestSelectFilter(t *testing.T) {
 		t.Fatalf("filter gem:\n%s", v)
 	}
 	send(m, key(tea.KeyBackspace), key(tea.KeyBackspace), key(tea.KeyBackspace), runes("c"))
-	if m.done || !strings.Contains(plain(m), "→ claude") {
+	if m.done || !strings.Contains(plain(m), "→ command-r") {
 		t.Fatalf("a printable key bound to an item must filter, not choose:\n%s", plain(m))
 	}
 	send(m, runes("zz"))
