@@ -252,4 +252,7 @@ func TestNotInteractive(t *testing.T) {
 	if _, err := Confirm("ok?", true); err != ErrNotInteractive {
 		t.Fatalf("Confirm err = %v", err)
 	}
+	if _, err := (Input{Title: "Name"}).Run(); err != ErrNotInteractive {
+		t.Fatalf("Input err = %v", err)
+	}
 }
