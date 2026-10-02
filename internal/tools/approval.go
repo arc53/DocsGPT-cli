@@ -197,7 +197,7 @@ func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path 
 		display.ToolStatus(false, err.Error())
 		return "Error: " + err.Error()
 	}
-	status := fmt.Sprintf("%d lines", shown)
+	status := lines(shown)
 	if shown < total {
 		status += fmt.Sprintf(" of %d", total)
 	}
@@ -287,10 +287,10 @@ func (s *Session) writeFile(ctx context.Context, cancel context.CancelFunc, path
 	preview, added, removed := display.DiffPreview(string(before), content, 10)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		display.ToolTitle(title, fmt.Sprintf("(new, %d lines)", added))
+		display.ToolTitle(title, "(new, "+lines(added)+")")
 	case err == nil && fi.Size() > maxPreviewBytes:
 		preview = nil
-		display.ToolTitle(title, fmt.Sprintf("(replaces %d bytes with %d lines)", fi.Size(), added))
+		display.ToolTitle(title, fmt.Sprintf("(replaces %d bytes with %s)", fi.Size(), lines(added)))
 	default:
 		display.ToolTitle(title, fmt.Sprintf("(+%d −%d)", added, removed))
 	}
@@ -312,7 +312,7 @@ func (s *Session) writeFile(ctx context.Context, cancel context.CancelFunc, path
 		display.ToolStatus(false, err.Error())
 		return "Error: " + err.Error()
 	}
-	display.ToolStatus(true, fmt.Sprintf("wrote %d lines", len(splitLines(content))))
+	display.ToolStatus(true, "wrote "+lines(len(splitLines(content))))
 	return fmt.Sprintf("Wrote %d bytes to %s.", len(content), path)
 }
 
@@ -351,4 +351,12 @@ func (s *Session) ask(cancel context.CancelFunc, once string, always *ui.Item, e
 		return "approve", ""
 	}
 	return choice, ""
+}
+
+// lines counts lines for a status: "1 line", "3 lines".
+func lines(n int) string {
+	if n == 1 {
+		return "1 line"
+	}
+	return fmt.Sprintf("%d lines", n)
 }
