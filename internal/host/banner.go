@@ -34,7 +34,7 @@ func liveApprovalMode(cfg HostConfig) string {
 	return d.ApprovalMode + " (managed in the DocsGPT UI)"
 }
 
-// LogStamp returns the ``[hh:mm:ss]`` prefix used for daemon log lines.
+// LogStamp returns the `[hh:mm:ss]` prefix used for daemon log lines.
 func LogStamp(t time.Time) string {
 	return t.Format("[15:04:05]")
 }

@@ -33,8 +33,8 @@ func xmlEscape(s string) string {
 }
 
 // RenderWindowsTaskXML returns the Task Scheduler task definition for the
-// host daemon: run at logon as ``runUser``, restart on failure, no run-time
-// limit. The action invokes ``exec host --service`` so the daemon drops its
+// host daemon: run at logon as `runUser`, restart on failure, no run-time
+// limit. The action invokes `exec host --service` so the daemon drops its
 // console window and appends to the host log file instead of a terminal.
 //
 // Two settings depart from Task Scheduler defaults on purpose:
@@ -92,7 +92,7 @@ func RenderWindowsTaskXML(execPath, runUser string) string {
 	return b.String()
 }
 
-// WriteWindowsTaskXML writes the task definition at ``path``, creating the
+// WriteWindowsTaskXML writes the task definition at `path`, creating the
 // parent directory (0700 — it is ~/.docsgpt) when missing.
 func WriteWindowsTaskXML(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -117,7 +117,7 @@ func runSchtasks(args ...string) error {
 }
 
 // RegisterWindowsTask creates (or replaces) the scheduled task from the
-// XML definition at ``xmlPath``.
+// XML definition at `xmlPath`.
 func RegisterWindowsTask(xmlPath string) error {
 	return runSchtasks("/Create", "/TN", WindowsTaskName, "/XML", xmlPath, "/F")
 }

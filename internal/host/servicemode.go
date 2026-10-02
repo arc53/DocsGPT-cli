@@ -10,7 +10,7 @@ import (
 
 // EnterServiceMode reroutes the daemon's output for running under a service
 // manager with no terminal attached (the Windows scheduled task): stdout and
-// stderr append to ``logFile``, styling is disabled so the log stays free of
+// stderr append to `logFile`, styling is disabled so the log stays free of
 // ANSI escapes, and any attached console window is dropped. Callers must
 // invoke it before printing anything.
 func EnterServiceMode(logFile string) error {

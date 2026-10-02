@@ -26,7 +26,7 @@ func keyPath() string {
 
 // LoadOrCreateKey returns the persisted key, generating + persisting one on
 // first use. The private key is stored alongside the public key, base64-
-// encoded, one per line: ``priv\npub\n``. File mode is 0600.
+// encoded, one per line: `priv\npub\n`. File mode is 0600.
 func LoadOrCreateKey() (*HostKey, error) {
 	data, err := os.ReadFile(keyPath())
 	if err == nil {
@@ -103,15 +103,15 @@ func (k *HostKey) Fingerprint() string {
 // (GET) this is the SHA-256 of the empty string.
 //
 // KEEP IN SYNC with the backend verifier
-// (application/api/devices/auth.py ``_canonical_payload``). The hex encoding
+// (application/api/devices/auth.py `_canonical_payload`). The hex encoding
 // and single-space separators must match byte-for-byte.
 func CanonicalPayload(method, path, ts string, body []byte) string {
 	sum := sha256.Sum256(body)
 	return fmt.Sprintf("%s %s %s %s", method, path, ts, hex.EncodeToString(sum[:]))
 }
 
-// SignRequest signs the canonical payload (including a hash of ``body``) and
-// returns (base64-signature, unix timestamp string). Pass nil/empty ``body``
+// SignRequest signs the canonical payload (including a hash of `body`) and
+// returns (base64-signature, unix timestamp string). Pass nil/empty `body`
 // for requests without one (e.g. GET).
 func (k *HostKey) SignRequest(method, path string, body []byte) (string, string) {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)

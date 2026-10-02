@@ -44,7 +44,7 @@ var ErrUnsupportedOS = errors.New(
 // non-root to user mode (the daemon then runs as the invoking user).
 //
 // In system mode with no explicit --user, it prefers $SUDO_USER (the human
-// who sudo'd in) and falls back to root. ``note`` is a one-line, possibly
+// who sudo'd in) and falls back to root. `note` is a one-line, possibly
 // empty, message for the user explaining an automatic choice.
 func ResolveServiceMode(isRoot, systemFlag bool, userFlag, sudoUser string) (mode ServiceMode, runUser, note string) {
 	switch {
@@ -94,8 +94,8 @@ func ServiceUnitPath(mode ServiceMode) (string, error) {
 
 // RenderServiceUnit returns the systemd unit file content for the given mode.
 //
-// ``exec`` is the absolute path to the docsgpt-cli binary. For
-// ServiceModeSystem, ``systemUser`` is the OS user the service should run
+// `exec` is the absolute path to the docsgpt-cli binary. For
+// ServiceModeSystem, `systemUser` is the OS user the service should run
 // as and must be non-empty; for ServiceModeUser it is ignored.
 func RenderServiceUnit(mode ServiceMode, exec, systemUser string) string {
 	var b strings.Builder
@@ -171,7 +171,7 @@ func JournalArgs(mode ServiceMode) []string {
 	return []string{"--user", "-u", ServiceUnitName}
 }
 
-// runSystemctl shells out to ``systemctl`` with the right scope. Returns
+// runSystemctl shells out to `systemctl` with the right scope. Returns
 // stderr on failure so the caller can pass it through to the user.
 func runSystemctl(mode ServiceMode, args ...string) error {
 	full := append(SystemctlArgs(mode), args...)
@@ -184,7 +184,7 @@ func runSystemctl(mode ServiceMode, args ...string) error {
 }
 
 // CurrentSystemUser returns the OS user the CLI is running as. Used as a
-// sensible default for ``--system --user``.
+// sensible default for `--system --user`.
 func CurrentSystemUser() (string, error) {
 	u, err := user.Current()
 	if err != nil {
@@ -193,7 +193,7 @@ func CurrentSystemUser() (string, error) {
 	return u.Username, nil
 }
 
-// WriteUnitFile writes the unit file at ``path`` with 0644 permissions,
+// WriteUnitFile writes the unit file at `path` with 0644 permissions,
 // creating any missing parent directories with mode 0755 (system) or
 // 0700 (user, under ~).
 func WriteUnitFile(path, content string, mode ServiceMode) error {
@@ -210,21 +210,21 @@ func WriteUnitFile(path, content string, mode ServiceMode) error {
 	return nil
 }
 
-// DaemonReload runs ``systemctl [--user] daemon-reload``.
+// DaemonReload runs `systemctl [--user] daemon-reload`.
 func DaemonReload(mode ServiceMode) error { return runSystemctl(mode, "daemon-reload") }
 
-// EnableNow runs ``systemctl [--user] enable --now <unit>``.
+// EnableNow runs `systemctl [--user] enable --now <unit>`.
 func EnableNow(mode ServiceMode) error {
 	return runSystemctl(mode, "enable", "--now", ServiceUnitName)
 }
 
-// DisableNow runs ``systemctl [--user] disable --now <unit>``.
+// DisableNow runs `systemctl [--user] disable --now <unit>`.
 func DisableNow(mode ServiceMode) error {
 	return runSystemctl(mode, "disable", "--now", ServiceUnitName)
 }
 
 // DetectInstalledMode looks for an existing unit file and reports whether
-// it lives in the user-scope or system-scope path. Returns ``found=false``
+// it lives in the user-scope or system-scope path. Returns `found=false`
 // when neither file exists.
 func DetectInstalledMode() (mode ServiceMode, found bool) {
 	if path, err := ServiceUnitPath(ServiceModeUser); err == nil {

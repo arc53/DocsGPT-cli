@@ -65,7 +65,7 @@ func TestBatonStateString(t *testing.T) {
 	}
 }
 
-// newTestTransport builds a Transport pointed at ``baseURL`` with a 5s
+// newTestTransport builds a Transport pointed at `baseURL` with a 5s
 // poll interval (so the test never waits the full default).
 func newTestTransport(baseURL string) *Transport {
 	cfg := HostConfig{
@@ -114,7 +114,7 @@ func TestRunPollingSuccessThenUnauthorizedReturnsRevoked(t *testing.T) {
 		SessionToken: "tok_test",
 		// 5s is the floor enforced by PollIntervalDuration; the next-poll
 		// sleep is bypassed by the backoff path for non-OK responses, but
-		// the first OK response will still wait ``interval``. Set a short
+		// the first OK response will still wait `interval`. Set a short
 		// fastUntil so the post-success poll uses fastInterval (5s floor).
 		PollInterval: "5s",
 	}
@@ -126,7 +126,7 @@ func TestRunPollingSuccessThenUnauthorizedReturnsRevoked(t *testing.T) {
 	if !errors.Is(err, ErrRevoked) {
 		t.Fatalf("expected ErrRevoked after revoke burst, got %v", err)
 	}
-	// Sanity: at least one OK (call 1) and ``authRejectThreshold`` 401s
+	// Sanity: at least one OK (call 1) and `authRejectThreshold` 401s
 	// after the OK before the loop gives up.
 	if calls.Load() < int32(1+authRejectThreshold) {
 		t.Fatalf("expected >= %d server calls, got %d",
@@ -198,7 +198,7 @@ func TestRunSSEUnauthorizedReturnsRevoked(t *testing.T) {
 	}
 }
 
-// TestRunSSERevokeEventReturnsRevoked verifies that an ``event: revoke``
+// TestRunSSERevokeEventReturnsRevoked verifies that an `event: revoke`
 // frame on the SSE stream triggers an ErrRevoked return.
 func TestRunSSERevokeEventReturnsRevoked(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

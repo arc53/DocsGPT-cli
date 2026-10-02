@@ -11,12 +11,12 @@ import (
 
 // HostConfig is the persistent state at ~/.docsgpt/host.yml.
 type HostConfig struct {
-	DeviceID      string `yaml:"device_id"`
-	SessionToken  string `yaml:"session_token"`
-	BaseURL       string `yaml:"base_url"`
-	PollInterval  string `yaml:"poll_interval"`
-	ApprovalMode  string `yaml:"approval_mode"`
-	LogFile       string `yaml:"log_file"`
+	DeviceID     string `yaml:"device_id"`
+	SessionToken string `yaml:"session_token"`
+	BaseURL      string `yaml:"base_url"`
+	PollInterval string `yaml:"poll_interval"`
+	ApprovalMode string `yaml:"approval_mode"`
+	LogFile      string `yaml:"log_file"`
 }
 
 const (
@@ -110,12 +110,12 @@ func (c *HostConfig) Save() error {
 		return fmt.Errorf("mkdir host config: %w", err)
 	}
 	body := serializeSimpleYAML(map[string]string{
-		"device_id":      c.DeviceID,
-		"session_token":  c.SessionToken,
-		"base_url":       c.BaseURL,
-		"poll_interval":  c.PollInterval,
-		"approval_mode":  c.ApprovalMode,
-		"log_file":       c.LogFile,
+		"device_id":     c.DeviceID,
+		"session_token": c.SessionToken,
+		"base_url":      c.BaseURL,
+		"poll_interval": c.PollInterval,
+		"approval_mode": c.ApprovalMode,
+		"log_file":      c.LogFile,
 	})
 	if err := os.WriteFile(HostConfigPath(), []byte(body), 0600); err != nil {
 		return fmt.Errorf("write host.yml: %w", err)
@@ -138,7 +138,7 @@ func (c *HostConfig) PollIntervalDuration() time.Duration {
 	return d
 }
 
-// parseSimpleYAML reads a flat ``key: value`` document. We avoid pulling in
+// parseSimpleYAML reads a flat `key: value` document. We avoid pulling in
 // gopkg.in/yaml.v3 to keep dependencies minimal — host.yml is a flat map.
 func parseSimpleYAML(s string) (map[string]string, error) {
 	out := map[string]string{}
