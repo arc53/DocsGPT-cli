@@ -261,8 +261,9 @@ func addCredential(ctx context.Context, cfg *config.Config, keysOnly bool, out i
 			case strings.HasPrefix(v, config.TokenPrefix) && keysOnly:
 				return errors.New("that is a personal access token; chatting needs an agent API key")
 			case strings.HasPrefix(v, config.TokenPrefix):
-				if id, err = manage.New(baseURL, v, userAgent()).Me(vctx); err != nil {
-					return fmt.Errorf("%s did not accept this token: %w", hostOf(baseURL), err)
+				id, err = manage.New(baseURL, v, userAgent()).Me(vctx)
+				if manage.IsUnauthorized(err) {
+					return fmt.Errorf("%s rejected this token", hostOf(baseURL))
 				}
 			default:
 				agent, verified, err = checkAgentKey(vctx, baseURL, v)
