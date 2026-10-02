@@ -28,6 +28,7 @@ const cmdTestToken = "dgpt_pat_AbCdEfSECRETSECRETSECRETSECRET"
 
 func TestMain(m *testing.M) {
 	display.InitTheme("auto")
+	questionArgs()
 	os.Exit(m.Run())
 }
 
@@ -114,8 +115,27 @@ func TestRootUsageErrors(t *testing.T) {
 	}
 	// A typo hint names the command and how to ask anyway.
 	err := runRoot(t, "agnets")
-	if err == nil || !strings.Contains(err.Error(), `"agents"`) || !strings.Contains(err.Error(), "-- agnets") {
+	if err == nil || !strings.Contains(err.Error(), `"agents"`) || !strings.Contains(err.Error(), `docsgpt-cli -- "agnets"`) {
 		t.Errorf("typo hint = %v", err)
+	}
+}
+
+// TestQuestionArgs: words after a command that takes none are a usage
+// error pointing at how to ask them instead, and nothing runs.
+func TestQuestionArgs(t *testing.T) {
+	isolateConfig(t)
+	for _, args := range [][]string{
+		{"update", "my", "nginx", "config"},
+		{"install", "my", "thing"},
+		{"host", "my", "files"},
+		{"bench", "press", "form", "tips"},
+		{"login", "to", "my", "server"},
+		{"config", "my", "nginx"},
+	} {
+		err := runRoot(t, args...)
+		if hint := `docsgpt-cli -- "` + strings.Join(args, " ") + `"`; exitCodeFor(err) != exitUsage || !strings.Contains(err.Error(), hint) {
+			t.Errorf("%q: err = %v, want a usage error with %s", args, err, hint)
+		}
 	}
 }
 

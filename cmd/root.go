@@ -131,11 +131,34 @@ func commandTypo(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		if len(args) == 1 || len(suggestions(sub, args[1])) > 0 {
-			return usageErrf("unknown command %q, did you mean %q?\nTo send it as a question, run: %s -- %s",
-				args[0], name, cmd.Name(), strings.Join(args, " "))
+			return usageErrf("unknown command %q, did you mean %q?\n%s", args[0], name, questionHint(args))
 		}
 	}
 	return nil
+}
+
+func questionHint(words []string) string {
+	return fmt.Sprintf("To ask it as a question: docsgpt-cli -- %q", strings.Join(words, " "))
+}
+
+// questionArgs makes extra words after a top-level command ("update my
+// nginx config") a usage error that says how to ask them as a question.
+func questionArgs() {
+	for _, c := range rootCmd.Commands() {
+		v := c.Args
+		if v == nil && c.HasSubCommands() {
+			v = subcommandArgs
+		}
+		if v == nil {
+			continue
+		}
+		c.Args = func(cmd *cobra.Command, args []string) error {
+			if err := v(cmd, args); err != nil {
+				return usageErrf("%w\n%s", err, questionHint(append([]string{cmd.CalledAs()}, args...)))
+			}
+			return nil
+		}
+	}
 }
 
 // subcommandArgs rejects arguments on a command that only groups others,
@@ -172,6 +195,7 @@ const groupAnnotation = "docsgpt/group"
 
 func Execute() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	questionArgs()
 
 	if err := config.MigrateIfNeeded(); err != nil {
 		display.ErrorMsg(err.Error())
