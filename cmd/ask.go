@@ -116,9 +116,7 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 			return nil
 		}
 
-		if line := sourcesLine(res.Sources); line != "" {
-			fmt.Println(display.Muted(line))
-		}
+		display.PrintSources(res.Sources)
 		if command := extractCommand(renderer.Content()); command != "" {
 			copyToClipboard(command)
 		}

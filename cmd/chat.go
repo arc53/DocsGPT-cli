@@ -171,9 +171,7 @@ func (s *chatSession) executor(input string) {
 		return
 	}
 
-	if line := sourcesLine(res.Sources); line != "" {
-		fmt.Println(display.Muted(line))
-	}
+	display.PrintSources(res.Sources)
 	s.history = res.Messages
 	s.conversationID = res.ConversationID
 	s.lastAnswer = renderer.Content()
