@@ -20,23 +20,23 @@ sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, pa
                        path element); go.work points local builds at ./sdk, and
                        release builds set GOWORK=off to use the pinned version
 cmd/
-  root.go            → Cobra root command, global flags (--url, --key, --token, --no-stream, --no-context, --auto-approve, --timeout)
-  ask.go             → Single-shot Q&A with streaming + tool support
-  chat.go            → Interactive multi-turn chat REPL with tool support
-  config.go          → Config management (set-url, show)
-  keys.go            → API key management (add/delete/set default)
-  install.go         → Cross-platform install to system PATH
+  root.go            → Root command = the entry point (chat on a TTY, else one-shot ask), typo guard, global flags (--url, --key, --token), chat flags, help groups + usage template, Execute (startup config, update gate)
+  ask.go             → Single-shot Q&A with streaming + tool support (hidden alias; the root runs it)
+  chat.go            → Interactive multi-turn chat REPL with tool support (hidden alias; optional first message)
+  config.go          → config get / set / show / path + the settings menu; one `settings` table drives all of them
+  install.go         → Hidden `install` (run by the install scripts), wiring over internal/install
   update.go          → Self-update to latest GitHub release (--check, --yes, --rollback, hidden --worker)
   host.go            → host daemon commands (pair + post-pair menu, status, revoke, reset, install-/uninstall-service); wiring over internal/host
   bench.go           → Benchmark suites vs agents (bench / bench record / bench init; --model, --matrix, --run-tag, --agent-id)
-  manage.go          → Shared plumbing of the account-level (PAT) commands: client construction, exit codes (0/1/2), banner/usage suppression, confirmations
-  login.go           → login / logout / whoami (personal access token in config.json)
+  manage.go          → Exit codes (0/1/2, exitError/usageErr), PAT client construction, confirmations
+  login.go           → login / logout / whoami / hidden keys: agent API keys + the PAT, the key picker, first-run key prompt (chatKey)
   agents.go          → agents list / export / plan / apply / delete (agents as code), agents trigger (incoming webhook); flags + output only, the flows live in internal/manage
-  sources.go         → sources list / upload / delete, prompts list, tools list
+  sources.go         → sources list / upload / delete, agents prompts / agents tools (old `prompts list` / `tools list` hidden)
   utils.go           → printError, extractCommand, copyToClipboard
 internal/
   config/
-    config.go        → Unified config load/save/migrate from ~/.docsgpt/config.json; token/URL resolution (flag > env > config), token redaction
+    config.go        → Unified config load/save/migrate from ~/.docsgpt/config.json; key/token/URL resolution (flag > env > config, ErrNoKey), key and token redaction
+  install/           → PATH install of the running binary (profiles, Windows user PATH), IsWritable
   bench/
     spec/            → Suite/case YAML format (bench.yaml + case.yaml), loading, validation, golden files; model/stream/attachments_mode/turns/expect.error/expect.stream
     assert/          → Assertion engine: answer/json (gjson paths)/sources/tools/limits (incl. TTFT)/stream integrity/error (negative cases)/golden matchers
@@ -63,7 +63,7 @@ internal/
   display/
     theme.go         → semantic palette (pi's OKHSL tones: hex + 256 + 16-color fallbacks,
                        dark/light; plain under NO_COLOR); also sets ui.Colors. InitTheme
-                       runs in PersistentPreRunE (flag > config > auto)
+                       runs in the root PersistentPreRun (hidden --theme > config > auto)
     renderer.go      → StreamRenderer: streamed markdown on a TTY (finished blocks
                        rendered once into scrollback, the block in progress redrawn
                        in place while it fits on screen); raw text when not a TTY.
@@ -102,15 +102,44 @@ internal/
 
 ## How it works
 
+### Entry point
+`docsgpt-cli` with no args, stdin and stdout TTYs → chat; anything else (args, piped
+stdin, stdout redirected) → ask. Subcommands win over questions. `commandTypo`
+rejects (exit 2, with a `-- <words>` hint) a lone bare word that is a prefix or a
+2-edit near miss of a command, or such a word followed by one of that command's
+subcommands ("agnets list"); a quoted multi-word question or anything after `--` is
+never checked. Group commands (`agents`, `sources`, `config`, `host`) reject unknown
+subcommands the same way (`subcommandArgs`). Only `--url/--key/--token` are global;
+`--no-stream/--no-context/--auto-approve/--tool-timeout` live on the root, ask and
+chat (`--timeout` is a deprecated alias on ask/chat; `--theme`/`--no-motion` hidden).
+Root `SilenceUsage` + flag error func: usage errors exit 2 everywhere, runtime errors
+print no usage; `ui.ErrCancelled` exits 1 without a message.
+
+### Credentials (login / logout / whoami)
+Agent key: `--key <name>` > `DOCSGPT_API_KEY` > `default_key`. `login` on a TTY: a
+filterable picker of stored keys (choose = make default) + "Add a key or token…" →
+masked `ui.Input` validated behind a spinner: `dgpt_pat_…` → `GET /api/user/me`
+(PAT flow below), else `GET /v1/models` with the key (no tokens spent; 401/403 =
+rejected, 404 = old server, stored unverified) → name prompt (default: slug of the
+agent name, next free) → "Make it the default?" unless it is the first key. Piped
+stdin (no TTY): key or token on the first line, `--name`, a new key becomes the
+default. A key login also stores the base URL, unless a PAT is stored for another
+server (warning instead). With no key, ask/chat on a TTY run the same prompt inline
+(`chatKey`, keys only) and continue; off a TTY: "No API key…" exit 1. `logout
+[name] | --token | --all` (picker on a TTY; `ui.Confirm`, or `--yes` off a TTY);
+removing the default promotes the first remaining key. `whoami`: active key
+(name, redacted, server, agent via /v1/models) + PAT identity; `--json` = PAT doc only.
+`keys` is a hidden alias of the TTY picker (the old add/set/delete flags are gone).
+
 ### ask command
 1. Reads piped/redirected stdin (pipes and files only, never a TTY or /dev/null): alone it is the question, with args it is appended as `<stdin>…</stdin>`
-2. Loads config from `~/.docsgpt/config.json`, resolves API key (Bearer auth) and base URL
+2. Loads config from `~/.docsgpt/config.json`, resolves API key (Bearer auth, first-run prompt via `chatKey`) and base URL
 3. Optionally enriches question with context (cwd, dir listing, shell history)
 4. Sends to `POST {base_url}/v1/chat/completions` with streaming
 5. Handles tool calls (run_command, read_file, write_file) with user approval loop; tools are only offered when stdin is a TTY or `--auto-approve` is set. Tool UI (titles, approval prompt, command output, status) goes to stderr
 6. stdout not a TTY: stdout carries only the raw answer (no header, sources, clipboard). On a TTY: header, rendered answer, dim `Sources` block, first bash/sh block copied to the clipboard (with a dim note)
 
-Errors (every command) go to stderr. `ask`/`chat`/`keys` print no usage on runtime errors (exit 1); a missing question or a bad flag is a usage error (exit 2, flags with a `--help` pointer); Ctrl+C exits `ask` with 130.
+Errors (every command) go to stderr; a missing question or a bad flag is a usage error (exit 2, flags with a `--help` pointer); Ctrl+C exits `ask` with 130.
 
 ### chat command
 Interactive REPL with multi-turn conversation history. Same API + tool support.
@@ -126,7 +155,7 @@ around the executor so it is a real SIGINT) or clears the input line; Ctrl+D exi
 The approval prompt is a bubbletea program on stderr; it reads keys in raw mode, so Ctrl+C there cancels the run at once.
 
 ### Auto-update flow
-Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set-auto-update`); env kill switch `DOCSGPT_NO_UPDATE_CHECK`.
+Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set auto_update`); env kill switch `DOCSGPT_NO_UPDATE_CHECK`.
 1. On TTY launches, `updateGate` in root.go decides the mode (skips dev builds, the update/host commands; Homebrew or unwritable installs downgrade on → notify)
 2. A detached worker (`update --worker`) refreshes the release cache daily and, in "on" mode, downloads + sha256-verifies the new binary into ~/.docsgpt/staging
 3. The next launch validates the staged manifest and swaps it in near-instantly; the old binary is kept in ~/.docsgpt/backup for `update --rollback`
@@ -149,13 +178,13 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set-a
 
 ### Personal access tokens (account-level commands)
 1. A PAT (`dgpt_pat_…`) is created in the web app; the CLI only consumes one (`/api/user/tokens` is closed to tokens). Resolution: `--token` > `DOCSGPT_TOKEN` > `config.json` `token`; base URL: `--url` > `DOCSGPT_URL` > config. Tokens are only ever printed redacted (`config.RedactToken`, first 15 chars + `…`)
-2. `login` reads the token from `--token`, piped stdin, or a hidden prompt, validates it with `GET /api/user/me` and stores it together with the base URL that validated it, whether that came from `--url`, `DOCSGPT_URL` or the config (config stays 0600). `whoami` prints user, token name, scopes and resource restrictions; `logout` removes the stored token
+2. `login` takes the token from `--token`, piped stdin, or the TTY prompt (see Credentials above), validates it with `GET /api/user/me` and stores it together with the base URL that validated it, whether that came from `--url`, `DOCSGPT_URL` or the config (config stays 0600). `whoami` prints user, token name, scopes and resource restrictions; `logout --token` removes the stored token
 3. `internal/manage` sends `Authorization: Bearer <PAT>`; server failures become `*manage.APIError` — `{success:false,message}`, 401 `invalid_token`, 403 `insufficient_scope` (+ `required_scope`), `resource_not_allowed`, `not_available_to_tokens`
 4. `agents plan|apply -f`: files, directories (`*.yaml`/`*.yml`, sorted, not recursive) and `-`; multi-document files are split textually (the server gets each document verbatim); non-`Agent` kinds are rejected before any request. ALL documents are planned first (`POST /api/import_agent/plan {"yaml"}`, scope `agents:write`); if any reference is `missing`/`unavailable` and not covered by `--resolve`, nothing is applied and the exit code is 1. Then `POST /api/import_agent {"yaml","resolution"}` per document, stopping at the first failure. `plan` = `apply --dry-run`
 5. `--resolve <kind>:<selector>=<value>` → server `resolution`: `source:<name>=<id>` → `sources[name]`; `tool:<sel>=reuse:<id>|create|skip` and `tool:<sel>.secret.<field>=<v>` → `tools["tool-N"] = {decision, tool_id, secrets}`; `model:<display_name>=<api_key>` → `models[name] = {api_key}`. `source:…=skip` / `model:…=skip` are CLI-side acknowledgements (the server has no such decision; it just leaves the reference off) and are never sent. `<sel>` = `tool-N` or an unambiguous tool name/type; positional keys are refused across several documents; an entry matching nothing is a usage error
 6. `sources upload`: multipart `user` (legacy, required by the server), `name`, repeated `file`, with an explicit Content-Length and streamed file bodies. Default `Idempotency-Key` = `docsgpt-cli-upload-` + sha256(name + sorted (basename, file sha256)), so CI retries dedupe; `--wait` polls `/api/task_status` (1s → 10s backoff, 503 = transient, progress on stderr) until SUCCESS / FAILURE / `--timeout`; the `deduplicated` task id sentinel is not polled. `--replace` (needs `--wait`) then deletes the caller's older same-named sources (never the new one, never team-shared, never without a reported `source_id`, and never unless that id is in the current listing: a content revert repeats the Idempotency-Key, and the deduplicated reply then names the earlier, already deleted source; the command fails with exit 1 instead of deleting the only live one): the server resolves an agent's source name to the OLDEST match, so without it agents stay pinned to the first upload; `agents apply` must run after
 7. `agents trigger`: payload from `-f <file|->`, validated as JSON (not null) before any request. Target = `--webhook-url` (else `DOCSGPT_WEBHOOK_URL` when no agent id is given; no PAT needed) XOR `<agent-id>` (PAT, scope `agents:keys`, `GET /api/agent_webhook?id=`; the returned token is re-rooted on the configured base URL, since the server builds the URL from its `API_URL`). The webhook POST never carries the PAT (the server denies tokens on that route). `--wait` polls `/api/task_status` anonymously (the server does not require auth there) and falls back to the PAT on 401/403 only when the PAT's base URL has the webhook's origin; SUCCESS whose result is not `status: success` (`quota_exceeded`, idempotency guard) is a failure. The webhook token is never printed (`Webhook.String` redacts; errors pass through `Webhook.Redact`)
-8. Exit codes mirror bench: 0 ok, 1 failure/blocked/timeout, 2 usage or validation (`exitError` in cmd/manage.go, mapped in `Execute`). These commands skip the banner, never dump usage on runtime errors, print errors to stderr, and refuse destructive actions without `--yes` when stdin is not a terminal
+8. Exit codes mirror bench: 0 ok, 1 failure/blocked/timeout, 2 usage or validation (`exitError` in cmd/manage.go, mapped in `Execute`). These commands print errors to stderr and refuse destructive actions without `--yes` when stdin is not a terminal
 
 ### Tool call flow
 1. CLI sends `tools` array in request
@@ -184,7 +213,7 @@ Single file: `~/.docsgpt/config.json`
 }
 ```
 
-`token` is optional (written by `login`, removed by `logout`, omitted when empty); the file is always written as a 0600 temp file and renamed into place (atomic, never readable by others, tightens an older permissive file). Environment overrides: `DOCSGPT_TOKEN`, `DOCSGPT_URL`.
+`token` is optional (written by `login`, removed by `logout`, omitted when empty); the file is always written as a 0600 temp file and renamed into place (atomic, never readable by others, tightens an older permissive file). Environment overrides: `DOCSGPT_API_KEY`, `DOCSGPT_TOKEN`, `DOCSGPT_URL`. `config get|set <key>` use the setting names `url` (= `base_url`), `default_key` and the `settings` fields; `config show` redacts keys (`config.RedactKey`, first/last 4) and the token.
 
 Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on first run.
 

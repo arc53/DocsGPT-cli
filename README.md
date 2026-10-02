@@ -1,6 +1,6 @@
 # DocsGPT-CLI
 
-DocsGPT-cli is a command-line interface (CLI) tool that allows you to interact with [DocsGPT](https://github.com/arc53/DocsGPT). It enables you to ask questions, configure settings, and manage DocsGPT API keys directly from your terminal.
+DocsGPT-cli is a command-line interface (CLI) tool that allows you to interact with [DocsGPT](https://github.com/arc53/DocsGPT). Chat with your agents, ask one-off questions in pipelines, and manage agents and sources as code, from your terminal.
 
 ---
 
@@ -115,48 +115,70 @@ may still change.
 
 ## Usage
 
-Once installed, you can start using `docsgpt-cli` by running the following commands:
-
 ```bash
-docsgpt-cli [flags]
-docsgpt-cli [command]
+docsgpt-cli                                 # interactive chat
+docsgpt-cli "how do I rotate the API key?"  # ask once and exit
+git diff | docsgpt-cli "review this"        # send piped input along
+docsgpt-cli login                           # add an agent API key
 ```
 
-### Available Commands:
-
-- `agents` — List, export, plan, apply, delete and trigger agents (personal access token; `trigger --webhook-url` needs none)
-- `ask` — Ask a question to DocsGPT
-- `bench` — Run benchmark suites against your agents (see below)
-- `chat` — Start an interactive chat session
-- `config` — Manage CLI configuration (base URL, theme, banner, update check)
-- `help` — Help about any command
-- `install` — Install docsgpt-cli to your system's `PATH`
-- `keys` — Manage DocsGPT API keys (add, set default, delete)
-- `login` / `logout` / `whoami` — Store, remove and inspect a personal access token
-- `prompts` / `tools` — List prompts and configured tools (personal access token)
-- `sources` — List, upload and delete sources (personal access token)
-- `update` — Update docsgpt-cli to the latest release
-
-### Flags:
-
-- `-h, --help` — Help for docsgpt-cli
-- `-v, --version` — Version for docsgpt-cli
-- `--url` — Override the API base URL (else `DOCSGPT_URL`, else the config file)
-- `--token` — Personal access token (else `DOCSGPT_TOKEN`, else the stored token)
-
-You can use `docsgpt-cli [command] --help` to get more information about each command.
-
-`ask` works in pipelines: piped input is sent along with the question, and
-when stdout is not a terminal it receives only the answer, as plain text:
+With no arguments on a terminal, `docsgpt-cli` opens a chat (`chat "first
+message"` starts one with a message). With a question, or anything piped in, it
+answers once and exits; when stdout is not a terminal it writes only the answer,
+as plain text, so it fits in pipelines:
 
 ```bash
-tail -n 50 app.log | docsgpt-cli ask "Why does this fail?"
-docsgpt-cli ask "Summarize the README" > summary.md
+tail -n 50 app.log | docsgpt-cli "Why does this fail?"
+docsgpt-cli "Summarize the README" > summary.md
 ```
+
+A single word that looks like a mistyped command (`docsgpt-cli agnets`) is
+rejected with a hint instead of being sent; `docsgpt-cli -- <words>` always sends
+them as a question. `ask` and `chat` still work as before.
+
+Chat flags: `--no-stream`, `--no-context` (don't send the working directory, its
+files or shell history), `--auto-approve` (run the agent's tool calls without
+asking) and `--tool-timeout <seconds>` (formerly `--timeout`). Every command
+takes `--url`, `--key <name>` and `--token`; run `docsgpt-cli <command> --help`
+for the rest.
+
+### Signing in
+
+Copy an agent's API key from DocsGPT (**Agent settings → API key**). The first
+time you chat, the CLI asks for it, checks it with the server and saves it; or
+add it any time with `docsgpt-cli login`, which also takes a personal access
+token (see below). On a terminal, `login` lists the stored keys to switch the
+default one, `logout` lists them to remove one, and `whoami` shows the active
+key and its agent. Without a terminal:
+
+```bash
+echo "$AGENT_KEY" | docsgpt-cli login --name support   # stored as the default
+docsgpt-cli logout support --yes
+```
+
+Credentials are picked in this order: `--key <name>` > `DOCSGPT_API_KEY` > the
+default key for chatting, `--token` > `DOCSGPT_TOKEN` > the stored token for the
+account commands, and `--url` > `DOCSGPT_URL` > the config file for the server.
+CI jobs can set the variables instead of logging in.
+
+### Settings
+
+`docsgpt-cli config` opens a settings menu on a terminal. In scripts:
+
+```bash
+docsgpt-cli config show                       # settings, keys and token, redacted
+docsgpt-cli config set url http://localhost:7091
+docsgpt-cli config get auto_update
+docsgpt-cli config path                       # ~/.docsgpt/config.json
+```
+
+Keys: `url`, `default_key`, `auto_update` (on/notify/off), `banner`
+(always/once/never), `theme` (auto/dark/light), `send_current_directory`,
+`send_directory_contents`, `send_last_commands`, `number_of_last_commands`.
 
 ### Local tools
 
-In `ask` and `chat` the agent can run commands, read files and write files on
+In chats and one-shot answers the agent can run commands, read files and write files on
 your machine. Reads run right away; every command and write is shown first
 (writes as a short diff) and waits for your answer: **Approve** (`a`),
 **Always allow** (`l`), **Deny** (`d`) or **Edit** the command (`e`). Ctrl+C
@@ -175,9 +197,9 @@ so read what you approve. `--auto-approve` skips the prompts entirely.
 `docsgpt-cli` keeps itself up to date. It checks GitHub for a new [release](https://github.com/arc53/DocsGPT-cli/releases) in the background at most once a day, downloads and verifies it, and installs it the next time you run a command. Control this behavior with:
 
 ```bash
-docsgpt-cli config set-auto-update on      # download and install automatically (default)
-docsgpt-cli config set-auto-update notify  # only print a notice when a release is available
-docsgpt-cli config set-auto-update off     # never check
+docsgpt-cli config set auto_update on      # download and install automatically (default)
+docsgpt-cli config set auto_update notify  # only print a notice when a release is available
+docsgpt-cli config set auto_update off     # never check
 ```
 
 Manual controls:
@@ -195,7 +217,7 @@ Setting the `DOCSGPT_NO_UPDATE_CHECK` environment variable disables everything u
 
 ## Personal access tokens / CI usage
 
-Agent API keys (`docsgpt-cli keys`) talk to **one agent**. A **personal access
+Agent API keys talk to **one agent**. A **personal access
 token** (PAT, `dgpt_pat_…`) acts as **you**, limited to the scopes — and
 optionally the specific agents/sources — you granted it. It is what the
 account-level commands use, which makes agents and sources deployable from a
@@ -204,9 +226,9 @@ terminal or a pipeline. Create one in the DocsGPT web app under
 revoke them.
 
 ```bash
-docsgpt-cli login                 # hidden prompt; or: echo "$TOKEN" | docsgpt-cli login
-docsgpt-cli whoami                # user, token name, scopes, resource restrictions
-docsgpt-cli logout                # forget the stored token
+docsgpt-cli login                 # paste the token; or: echo "$TOKEN" | docsgpt-cli login
+docsgpt-cli whoami                # active key, plus user, token name, scopes, restrictions
+docsgpt-cli logout --token        # forget the stored token (--yes without a terminal)
 ```
 
 The token is resolved as `--token` flag > `DOCSGPT_TOKEN` > `~/.docsgpt/config.json`
@@ -221,7 +243,7 @@ first characters (`dgpt_pat_AbCdEf…`).
 | `agents trigger <id> -f …` (`agents trigger --webhook-url …` needs no token) | `agents:keys` |
 | `sources list` | `sources:read` |
 | `sources upload <file…> --name N [--wait]`, `sources delete <id> [--yes]` | `sources:write` |
-| `prompts list`, `tools list` | `prompts:read`, `tools:read` |
+| `agents prompts`, `agents tools` | `prompts:read`, `tools:read` |
 | `bench` with `agent_id:` / `--agent-id` | `chat:run` |
 
 A `write` scope includes the matching `read` scope. A token that lacks a scope gets a clear error naming it
