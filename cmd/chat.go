@@ -166,13 +166,14 @@ func (s *chatSession) footer() (left, right string) {
 }
 
 // handle acts on one submitted input: a command, a shell command or a
-// message for the agent.
+// message for the agent. What the user saw decides, so a collapsed paste
+// starting with ! or / is a message.
 func (s *chatSession) handle(text, shown string) {
-	line := strings.TrimSpace(text)
+	line, seen := strings.TrimSpace(text), strings.TrimSpace(shown)
 	switch {
-	case strings.HasPrefix(line, "!"):
+	case strings.HasPrefix(seen, "!"):
 		s.shell(line)
-	case strings.HasPrefix(line, "/") && s.command(line):
+	case strings.HasPrefix(seen, "/") && s.command(line):
 	default:
 		s.send(text, shown)
 	}
