@@ -21,8 +21,9 @@ type Theme struct {
 	Reasoning lipgloss.Style
 }
 
-// T is the active theme instance. Call InitTheme before using.
-var T *Theme
+// T is the active theme. It starts dark without asking the terminal, so
+// display helpers work before InitTheme runs.
+var T = newTheme(true)
 
 // darkBackground records the background InitTheme settled on, for the
 // markdown style.
@@ -32,9 +33,11 @@ var darkBackground = true
 func InitTheme(mode string) {
 	dark := mode != "light"
 	if mode == "" || mode == "auto" {
-		dark = lipgloss.HasDarkBackground()
+		dark = detectDarkBackground()
 	}
 	darkBackground = dark
+	// Adaptive colors elsewhere must not query the terminal a second time.
+	lipgloss.SetHasDarkBackground(dark)
 	T = newTheme(dark)
 }
 

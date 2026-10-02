@@ -59,6 +59,10 @@ internal/
                        rendered once into scrollback, the block in progress redrawn
                        in place while it fits on screen); raw text when not a TTY
     markdown.go      → glamour setup (theme style, no margin, padding trimmed)
+    theme.go         → palette; InitTheme runs in PersistentPreRunE (flag > config > auto)
+    background*.go   → auto theme: COLORFGBG, else one OSC 11 query (stdout TTY only,
+                       150ms max); the answer also feeds glamour and lipgloss
+    banner.go        → dino banner, interactive chat only, default "once"
   tools/
     definitions.go   → Tool schemas: run_command, read_file, write_file
     executor.go      → Local tool execution with timeout

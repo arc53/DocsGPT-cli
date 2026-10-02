@@ -46,11 +46,11 @@ var wordmark = []string{
 
 var tagline = `              ━━━━━━━  Terminal AI Assistant  ━━━━━━━`
 
-// ShowBanner displays the animated startup banner.
+// ShowBanner displays the animated startup banner of an interactive chat.
 // setting: "always", "once", "never" (empty defaults to "once").
 func ShowBanner(setting string, noMotion bool) {
 	if setting == "" {
-		setting = "always"
+		setting = "once"
 	}
 	if setting == "never" {
 		return

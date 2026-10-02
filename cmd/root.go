@@ -78,29 +78,12 @@ var rootCmd = &cobra.Command{
 		if err := config.MigrateIfNeeded(); err != nil {
 			return err
 		}
-
-		// Determine theme: flag > config > auto
+		// Theme: flag > config > auto (which asks the terminal).
 		theme := globalTheme
-		if theme == "" {
-			cfg, err := config.Load()
-			if err == nil && cfg.Settings.Theme != "" {
-				theme = cfg.Settings.Theme
-			}
+		if cfg, err := config.Load(); theme == "" && err == nil {
+			theme = cfg.Settings.Theme
 		}
 		display.InitTheme(theme)
-
-		// Show startup banner (suppressed for `bench --json` so stdout stays
-		// a clean, parseable JSON document, and for the account-level
-		// commands, whose stdout is data).
-		if !suppressBannerForJSON(cmd) && !hasNoBanner(cmd) {
-			cfg, loadErr := config.Load()
-			bannerSetting := "always"
-			if loadErr == nil && cfg.Settings.Banner != "" {
-				bannerSetting = cfg.Settings.Banner
-			}
-			display.ShowBanner(bannerSetting, globalNoMotion)
-		}
-
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -114,10 +97,6 @@ var rootCmd = &cobra.Command{
 
 func Execute() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
-
-	// Initialize a default theme eagerly so display functions are safe to call
-	// even when cobra's arg validation fails before PersistentPreRunE runs.
-	display.InitTheme("auto")
 
 	mode, exePath := updateGate()
 	if mode == update.ModeOn {
@@ -225,22 +204,4 @@ func init() {
 	rootCmd.AddCommand(sourcesCmd)
 	rootCmd.AddCommand(promptsCmd)
 	rootCmd.AddCommand(toolsCmd)
-}
-
-// suppressBannerForJSON reports whether the stdout banner must be skipped: it is
-// a bench command invoked with --json, whose stdout must carry only the JSON
-// result document.
-func suppressBannerForJSON(cmd *cobra.Command) bool {
-	isBench := false
-	for c := cmd; c != nil; c = c.Parent() {
-		if c.Name() == "bench" {
-			isBench = true
-			break
-		}
-	}
-	if !isBench {
-		return false
-	}
-	f := cmd.Flags().Lookup("json")
-	return f != nil && f.Changed
 }
