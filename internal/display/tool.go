@@ -72,7 +72,11 @@ func ToolStatus(ok bool, msg string) {
 	if !ok {
 		glyph = T.Error.Render("✗")
 	}
-	fmt.Fprintf(os.Stderr, "  %s %s\n", glyph, T.Dim.Render(msg))
+	clear := "" // the terminal may have echoed ^C on this line
+	if term.IsTerminal(os.Stderr.Fd()) {
+		clear = "\r\x1b[2K"
+	}
+	fmt.Fprintf(os.Stderr, "%s  %s %s\n", clear, glyph, T.Dim.Render(msg))
 }
 
 // Duration formats d like "0.3s", "1m 5s".
