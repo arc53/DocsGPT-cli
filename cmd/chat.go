@@ -144,9 +144,11 @@ func (s *chatSession) executor(input string) {
 
 	onToolCall := func(tc docsgpt.ToolCall) string {
 		renderer.Flush()
+		defer renderer.Wait()
 		return handleToolCall(ctx, tc, s.timeout)
 	}
 
+	renderer.Wait()
 	res, err := s.client.RunWithTools(ctx, s.history, docsgpt.RunOptions{
 		Tools: s.toolDefs, Stream: !globalNoStream, ConversationID: s.conversationID,
 		OnDelta: onDelta, OnToolCall: onToolCall,

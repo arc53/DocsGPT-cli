@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/arc53/DocsGPT-cli/internal/ui"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 
 	"github.com/charmbracelet/glamour"
@@ -27,6 +28,8 @@ const frameInterval = 33 * time.Millisecond
 type StreamRenderer struct {
 	ShowReasoning bool
 
+	spin ui.Spinner
+
 	out    io.Writer
 	tty    bool
 	md     *glamour.TermRenderer
@@ -40,6 +43,7 @@ type StreamRenderer struct {
 	liveRows int             // terminal rows the live block occupies
 	tooTall  bool            // the live block outgrew the screen: wait for it to finish
 	midLine  bool            // the cursor is mid-line (reasoning, or raw text off a terminal)
+	thinking bool            // a reasoning block is being written
 	lastDraw time.Time
 	timer    *time.Timer
 }
@@ -54,23 +58,36 @@ func NewStreamRenderer() *StreamRenderer {
 	return r
 }
 
+// Wait shows a "Thinking…" spinner on stderr until the next visible output
+// or Flush.
+func (r *StreamRenderer) Wait() { r.spin.Start("Thinking…") }
+
 // Delta processes one streamed delta. Reasoning is shown only on a terminal
-// with ShowReasoning set, and never inside a rendered block.
+// with ShowReasoning set, as a dim block of its own: the answer streamed so
+// far is committed before it, and the answer resumes after a blank line.
 func (r *StreamRenderer) Delta(delta docsgpt.Delta) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if delta.ReasoningContent != "" && r.ShowReasoning && r.tty {
-		var b strings.Builder
-		r.erase(&b)
-		b.WriteString(T.Thinking.Render(delta.ReasoningContent))
-		io.WriteString(r.out, b.String())
+		r.spin.Stop()
+		if !r.thinking {
+			if r.pending != "" {
+				r.draw(true)
+			}
+			if r.started {
+				io.WriteString(r.out, "\n")
+			}
+			r.thinking, r.started = true, true
+		}
+		io.WriteString(r.out, paint(T.Thinking, delta.ReasoningContent))
 		r.midLine = !strings.HasSuffix(delta.ReasoningContent, "\n")
-		r.started = true
 	}
 	if delta.Content == "" {
 		return
 	}
+	r.spin.Stop()
+	r.thinking = false
 	r.content.WriteString(delta.Content)
 	if !r.tty {
 		io.WriteString(r.out, delta.Content)
@@ -99,8 +116,10 @@ func (r *StreamRenderer) Delta(delta docsgpt.Delta) {
 // Flush commits everything streamed so far, finished or not. Call it before
 // anything else is printed (a tool call, an error) and at the end.
 func (r *StreamRenderer) Flush() {
+	r.spin.Stop()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.thinking = false
 	if r.timer != nil {
 		r.timer.Stop()
 		r.timer = nil

@@ -161,42 +161,45 @@ func highlight(lang, code string) string {
 	}
 	var b strings.Builder
 	for tok := it(); tok != chroma.EOF; tok = it() {
-		style, styled := syntaxStyle(tok.Type)
-		for i, piece := range strings.Split(strings.ReplaceAll(tok.Value, "\t", "    "), "\n") {
-			if i > 0 {
-				b.WriteString("\n")
-			}
-			if styled && piece != "" {
-				piece = style.Render(piece)
-			}
-			b.WriteString(piece)
-		}
+		b.WriteString(paint(syntaxStyle(tok.Type), strings.ReplaceAll(tok.Value, "\t", "    ")))
 	}
 	return b.String()
 }
 
+// paint styles every line of s on its own: lipgloss would pad the lines of
+// a multi-line string to one width.
+func paint(style lipgloss.Style, s string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = style.Render(line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // syntaxStyle maps a token type to its tone (pi's syntax colors).
-func syntaxStyle(t chroma.TokenType) (lipgloss.Style, bool) {
+func syntaxStyle(t chroma.TokenType) lipgloss.Style {
 	fg := func(c lipgloss.TerminalColor) lipgloss.Style { return lipgloss.NewStyle().Foreground(c) }
 	switch {
 	case t.InCategory(chroma.Comment):
-		return fg(colMuted).Italic(true), true
+		return fg(colMuted).Italic(true)
 	case t == chroma.KeywordType || t == chroma.NameClass:
-		return fg(colAccent), true
+		return fg(colAccent)
 	case t.InCategory(chroma.Keyword):
-		return fg(colLink), true
+		return fg(colLink)
 	case t.InSubCategory(chroma.LiteralString):
-		return fg(colString), true
+		return fg(colString)
 	case t.InSubCategory(chroma.LiteralNumber):
-		return fg(colSuccess), true
+		return fg(colSuccess)
 	case t == chroma.NameFunction || t == chroma.NameBuiltin || t == chroma.NameDecorator:
-		return fg(colWarning), true
+		return fg(colWarning)
 	case t == chroma.NameVariable || t == chroma.NameAttribute || t == chroma.NameTag:
-		return fg(colVariable), true
+		return fg(colVariable)
 	case t.InCategory(chroma.Operator) || t == chroma.Punctuation:
-		return fg(colMuted), true
+		return fg(colMuted)
 	}
-	return lipgloss.Style{}, false
+	return lipgloss.NewStyle()
 }
 
 var trailingPadding = regexp.MustCompile(`(?:\x1b\[[0-9;]*m| )+$`)

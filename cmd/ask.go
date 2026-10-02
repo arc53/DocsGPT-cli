@@ -95,9 +95,11 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 
 		onToolCall := func(tc docsgpt.ToolCall) string {
 			renderer.Flush()
+			defer renderer.Wait()
 			return handleToolCall(ctx, tc, timeout)
 		}
 
+		renderer.Wait()
 		res, err := client.RunWithTools(ctx, messages, docsgpt.RunOptions{
 			Tools: toolDefs, Stream: !globalNoStream, OnDelta: onDelta, OnToolCall: onToolCall,
 		})
