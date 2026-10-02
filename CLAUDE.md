@@ -167,7 +167,9 @@ stdin (no TTY): key or token on the first line, `--name`, a new key becomes the
 default. A key login also stores the base URL, unless a PAT is stored for another
 server (warning instead). With no key, ask/chat on a TTY run the same prompt inline
 (`chatKey`, keys only) and continue; off a TTY: "No API key…" exit 1. `logout
-[name] | --token | --all` (picker on a TTY; `ui.Confirm`, or `--yes` off a TTY);
+[name] | --token | --all` (picker on a TTY; `ui.Confirm`, or `--yes` off a TTY;
+`--token` shadows the global one, so a `dgpt_pat_…` given to it, `=` or as the
+argument, names the stored token and must match it — `tokenSwitch`);
 removing the default promotes the first remaining key. `whoami`: active key
 (name, redacted, server, agent via /v1/models) + PAT identity; `--json` = PAT doc only.
 `keys` is a hidden alias of the TTY picker (the old add/set/delete flags are gone).

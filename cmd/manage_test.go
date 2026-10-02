@@ -250,8 +250,8 @@ func TestLoginWhoamiLogout(t *testing.T) {
 	globalToken = ""
 
 	// Without a terminal, logout needs --yes.
-	logoutToken = true
-	t.Cleanup(func() { logoutToken, logoutYes = false, false })
+	logoutToken = tokenSwitch{on: true}
+	t.Cleanup(func() { logoutToken, logoutYes = tokenSwitch{}, false })
 	if err := runLogout(nil, &out); exitCodeFor(err) != exitUsage {
 		t.Fatalf("logout without --yes: %v", err)
 	}
@@ -373,6 +373,42 @@ func TestLoginAgentKey(t *testing.T) {
 	}
 	if err := runLogout([]string{"nope"}, &out); exitCodeFor(err) != exitUsage {
 		t.Errorf("unknown key: %v", err)
+	}
+}
+
+// logout --token shadows the global --token <pat>: a token given to it, or
+// alone, names the stored token and is never looked up as a key name.
+func TestLogoutByToken(t *testing.T) {
+	isolateConfig(t)
+	cfg := config.DefaultConfig()
+	cfg.Keys["support"] = "k-1"
+	cfg.Token = cmdTestToken
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	logoutYes = true
+	t.Cleanup(func() { logoutToken, logoutYes = tokenSwitch{}, false })
+
+	var out bytes.Buffer
+	other := "dgpt_pat_OtherOtherOTHERSECRET"
+	err := runLogout([]string{other}, &out)
+	if exitCodeFor(err) != exitUsage || strings.Contains(err.Error(), "OTHERSECRET") || !strings.Contains(err.Error(), "not the stored access token") {
+		t.Fatalf("other token: %v", err)
+	}
+
+	var sw tokenSwitch
+	if err := sw.Set(cmdTestToken); err != nil || !sw.on || sw.value != cmdTestToken {
+		t.Fatalf("--token=<pat>: %+v %v", sw, err)
+	}
+	if err := sw.Set("maybe"); err == nil {
+		t.Error("--token=maybe should not parse")
+	}
+	logoutToken = tokenSwitch{on: true}
+	if err := runLogout([]string{cmdTestToken}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ = config.Load(); cfg.Token != "" || cfg.Keys["support"] != "k-1" {
+		t.Errorf("after logout --token <pat>: token %q, keys %v", cfg.Token, cfg.Keys)
 	}
 }
 

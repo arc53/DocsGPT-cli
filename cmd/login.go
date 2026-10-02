@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +28,7 @@ import (
 var (
 	whoamiJSON  bool
 	loginName   string
-	logoutToken bool
+	logoutToken tokenSwitch
 	logoutAll   bool
 	logoutYes   bool
 )
@@ -118,11 +119,31 @@ var whoamiCmd = &cobra.Command{
 
 func init() {
 	loginCmd.Flags().StringVar(&loginName, "name", "", "Name for a piped agent key (default: the agent's name)")
-	// --token shadows the global flag of the same name, which takes a value.
-	logoutCmd.Flags().BoolVar(&logoutToken, "token", false, "Remove the stored personal access token")
+	logoutCmd.Flags().Var(&logoutToken, "token", "Remove the stored personal access token")
+	logoutCmd.Flags().Lookup("token").NoOptDefVal = "true"
 	logoutCmd.Flags().BoolVar(&logoutAll, "all", false, "Remove every stored key and the token")
 	logoutCmd.Flags().BoolVarP(&logoutYes, "yes", "y", false, "Do not ask for confirmation")
 	whoamiCmd.Flags().BoolVar(&whoamiJSON, "json", false, "Print the access token's /api/user/me document as JSON")
+}
+
+// tokenSwitch is logout's --token. It shadows the global --token <pat>, so
+// it also takes a token as its value (--token=dgpt_pat_…), to be removed if
+// it is the stored one.
+type tokenSwitch struct {
+	on    bool
+	value string
+}
+
+func (t *tokenSwitch) String() string   { return strconv.FormatBool(t.on) }
+func (t *tokenSwitch) Type() string     { return "bool" }
+func (t *tokenSwitch) IsBoolFlag() bool { return true }
+func (t *tokenSwitch) Set(s string) (err error) {
+	if strings.HasPrefix(s, config.TokenPrefix) {
+		t.on, t.value = true, s
+		return nil
+	}
+	t.on, err = strconv.ParseBool(s)
+	return err
 }
 
 // readPipedSecret reads the first line of stdin.
@@ -455,23 +476,36 @@ func runLogout(args []string, out io.Writer) error {
 	if err != nil {
 		return usageErrf("load config: %w", err)
 	}
+	// A token, given alone or after --token (which then takes no value),
+	// names the stored token: key names never look like one.
+	byToken := logoutToken
+	if len(args) == 1 && strings.HasPrefix(args[0], config.TokenPrefix) {
+		byToken, args = tokenSwitch{on: true, value: args[0]}, nil
+	}
+	if byToken.value != "" && byToken.value != cfg.Token {
+		stored := "none is stored"
+		if cfg.Token != "" {
+			stored = "the stored one is " + config.RedactToken(cfg.Token)
+		}
+		return usageErrf("%s is not the stored access token (%s)", config.RedactToken(byToken.value), stored)
+	}
 	var keys []string
 	token := false
 	switch {
 	case logoutAll:
-		if len(args) > 0 || logoutToken {
+		if len(args) > 0 || byToken.on {
 			return usageErrf("--all removes everything; drop the other arguments")
 		}
 		keys, token = sortedNames(cfg.Keys), cfg.Token != ""
-	case len(args) == 1 || logoutToken:
+	case len(args) == 1 || byToken.on:
 		if len(args) == 1 {
 			if _, ok := cfg.Keys[args[0]]; !ok {
 				return usageErrf("no stored key named %q (stored: %s)", args[0], textOrDash(strings.Join(sortedNames(cfg.Keys), ", ")))
 			}
 			keys = args
 		}
-		token = logoutToken && cfg.Token != ""
-		if logoutToken && cfg.Token == "" {
+		token = byToken.on && cfg.Token != ""
+		if byToken.on && cfg.Token == "" {
 			fmt.Fprintln(out, "No stored token.")
 		}
 	case ui.Interactive():
