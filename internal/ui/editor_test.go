@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,6 +159,26 @@ func TestEditorHistory(t *testing.T) {
 	press(m, key(tea.KeyDown), key(tea.KeyDown), key(tea.KeyDown))
 	if m.text() != "dra" {
 		t.Fatalf("down back to the draft: %q", m.text())
+	}
+}
+
+// TestHistoryRewrite: trimming the history replaces the file whole, private,
+// with no temporary file left.
+func TestHistoryRewrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history")
+	h := LoadHistory(path)
+	for i := 0; i <= historyMax+historyMax/2; i++ {
+		h.Add(fmt.Sprintf("entry %d", i))
+	}
+	if got := LoadHistory(path).entries; len(got) != historyMax || got[len(got)-1] != fmt.Sprintf("entry %d", historyMax+historyMax/2) {
+		t.Fatalf("%d entries, last %q", len(got), got[len(got)-1])
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("history file mode: %v %v", fi, err)
+	}
+	if files, _ := os.ReadDir(dir); len(files) != 1 {
+		t.Fatalf("files left: %v", files)
 	}
 }
 

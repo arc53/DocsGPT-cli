@@ -1,9 +1,11 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,6 +54,37 @@ func TestRecordAndLoad(t *testing.T) {
 	}
 	if got.Title() != "hello" || len(got.Messages) != 3 || got.Messages[0].Message.Content != user.Content {
 		t.Errorf("title %q, %d messages", got.Title(), len(got.Messages))
+	}
+}
+
+// TestConcurrentRecords: two chats on one session file (two -c) keep each
+// record's lines whole and together.
+func TestConcurrentRecords(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	first := New("/w", "https://example.com", "k")
+	q := docsgpt.Message{Role: "user", Content: "hi"}
+	first.Record("https://example.com", "k", "c", Entry{Message: &q})
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, _ := Load(first.Path)
+			for i := range 20 {
+				m := docsgpt.Message{Role: "user", Content: fmt.Sprintf("%d-%d %s", g, i, strings.Repeat("x", 3000))}
+				s.Record("https://example.com", "k", "c", Entry{Message: &m}, Entry{Message: &m})
+			}
+		}()
+	}
+	wg.Wait()
+	s, err := Load(first.Path)
+	if err != nil || len(s.Messages) != 1+8*20*2 {
+		t.Fatalf("%d messages after concurrent records, %v", len(s.Messages), err)
+	}
+	for i := 1; i < len(s.Messages); i += 2 {
+		if a, b := s.Messages[i].Message.Content, s.Messages[i+1].Message.Content; a != b {
+			t.Fatalf("records interleaved at %d: %.6s / %.6s", i, a, b)
+		}
 	}
 }
 

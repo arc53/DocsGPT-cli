@@ -68,35 +68,41 @@ func (h *History) Add(s string) {
 		h.rewrite()
 		return
 	}
-	if f := h.open(os.O_APPEND); f != nil {
+	if os.MkdirAll(filepath.Dir(h.path), 0o700) != nil {
+		return
+	}
+	if f, err := os.OpenFile(h.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 		line, _ := json.Marshal(s)
 		f.Write(append(line, '\n'))
 		f.Close()
 	}
 }
 
-// rewrite replaces the file with the current entries.
+// rewrite replaces the file with the current entries, through a new file
+// renamed over it: another chat reading or appending meanwhile sees the
+// old file or the new one, never half of it.
 func (h *History) rewrite() {
-	f := h.open(os.O_TRUNC)
-	if f == nil {
+	dir := filepath.Dir(h.path)
+	if os.MkdirAll(dir, 0o700) != nil {
 		return
 	}
-	defer f.Close()
+	f, err := os.CreateTemp(dir, ".history-*") // 0600
+	if err != nil {
+		return
+	}
 	w := bufio.NewWriter(f)
 	for _, s := range h.entries {
 		line, _ := json.Marshal(s)
 		w.Write(append(line, '\n'))
 	}
-	w.Flush()
-}
-
-func (h *History) open(flag int) *os.File {
-	if err := os.MkdirAll(filepath.Dir(h.path), 0o700); err != nil {
-		return nil
+	err = w.Flush()
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	f, err := os.OpenFile(h.path, flag|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err == nil {
+		err = os.Rename(f.Name(), h.path)
+	}
 	if err != nil {
-		return nil
+		os.Remove(f.Name())
 	}
-	return f
 }

@@ -5,6 +5,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -99,11 +100,16 @@ func (s *Session) Record(server, key, conversationID string, msgs ...Entry) erro
 		return err
 	}
 	defer f.Close()
-	enc := json.NewEncoder(f)
+	// One write, so chats recording to the same file do not interleave.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	for _, l := range lines {
 		if err := enc.Encode(l); err != nil {
 			return err
 		}
+	}
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		return err
 	}
 	s.Server, s.Key, s.ConversationID, s.Updated = server, key, conversationID, now
 	s.Messages = append(s.Messages, lines[len(lines)-len(msgs):]...)
