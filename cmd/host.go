@@ -2,17 +2,21 @@ package cmd
 
 import (
 	"bufio"
+	"cmp"
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/host"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
 	"github.com/arc53/DocsGPT-cli/internal/update"
 
 	"github.com/spf13/cobra"
@@ -62,32 +66,57 @@ func runHostDaemon() error {
 }
 
 var hostPairCmd = &cobra.Command{
-	Use:   "pair",
+	Use:   "pair [code]",
 	Short: "Pair this machine to a DocsGPT account",
+	Long: `Pair this machine with a code from DocsGPT → Settings → Devices → Pair a
+device. Without a code argument it asks for one on a terminal, else reads it
+from stdin. On a terminal it then offers to start the daemon or install it as
+a service.`,
+	Example: `  docsgpt-cli host pair
+  docsgpt-cli host pair ABCD-1234 --url https://docsgpt.example.com
+  echo "$PAIRING_CODE" | docsgpt-cli host pair`,
+	Args: usageArgs(cobra.MaximumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
 		cfg, _ := host.LoadHostConfig()
-		fmt.Print("Pairing code (XXXX-XXXX): ")
-		var code string
-		fmt.Scanln(&code)
-		code = strings.TrimSpace(code)
-		if code == "" {
-			return fmt.Errorf("no pairing code entered")
+		baseURL := cmp.Or(globalURL, cfg.BaseURL)
+		var pr *host.PairResponse
+		pair := func(ctx context.Context, code string) (err error) {
+			if code = strings.TrimSpace(code); code == "" {
+				return errors.New("enter the code shown in DocsGPT")
+			}
+			if pr, err = host.Pair(ctx, baseURL, code, Version); err != nil {
+				return errors.New(display.StripControls(err.Error())) // the server's reply
+			}
+			return nil
 		}
-		baseURL := cfg.BaseURL
-		if globalURL != "" {
-			baseURL = globalURL
+		switch {
+		case len(args) == 1:
+			if err := pair(ctx, args[0]); err != nil {
+				return err
+			}
+		case ui.Interactive():
+			if _, err := (ui.Input{Title: "Pairing code", Placeholder: "XXXX-XXXX", Validate: pair}).Run(); err != nil {
+				return err
+			}
+		default:
+			if stdinIsTerminal() {
+				fmt.Fprint(os.Stderr, "Pairing code: ")
+			}
+			line, _ := bufio.NewReader(io.LimitReader(os.Stdin, 4096)).ReadString('\n')
+			if strings.TrimSpace(line) == "" {
+				return usageErrf("no pairing code: pass it as an argument or on stdin")
+			}
+			if err := pair(ctx, line); err != nil {
+				return err
+			}
 		}
-		pr, err := host.Pair(baseURL, code, Version)
-		if err != nil {
-			return err
-		}
-		fmt.Println(display.Success("Paired as " + pr.Name + " ✓"))
-		fmt.Println(display.Muted("Device ID: " + pr.DeviceID))
+		fmt.Println(display.Success("✓ Paired as " + display.Safe(pr.Name)))
+		fmt.Println(display.Muted("Device ID: " + display.Safe(pr.DeviceID)))
 
-		// Non-TTY (piped stdin, e.g. `echo CODE | ... host pair`): print the
-		// hint and return. Scripts and SSH pipes depend on this not blocking
-		// on menu input.
-		if !stdinIsTerminal() {
+		// Scripts and SSH pipes depend on this not waiting for a choice.
+		if !ui.Interactive() {
 			fmt.Println(display.Muted("Run `docsgpt-cli host` to start the daemon."))
 			return nil
 		}
@@ -96,8 +125,8 @@ var hostPairCmd = &cobra.Command{
 }
 
 // pairMenuStart / pairMenuInstall are the literal action labels, also used
-// to map a chosen index back to behavior (the install option is absent on
-// unsupported platforms, so we compare by label rather than fixed index).
+// to map the choice back to behavior (the install option is absent on
+// unsupported platforms).
 const (
 	pairMenuStart   = "Start the host daemon now (foreground)"
 	pairMenuInstall = "Install as a service (starts automatically)"
@@ -116,63 +145,29 @@ func buildPairMenuActions(goos string) []string {
 	return append(actions, pairMenuNothing)
 }
 
-// parsePairMenuChoice maps raw menu input to a zero-based action index.
-// Empty input selects defaultIdx. Returns ok=false for non-numeric or
-// out-of-range input so the caller can re-prompt.
-func parsePairMenuChoice(input string, numOptions, defaultIdx int) (idx int, ok bool) {
-	s := strings.TrimSpace(input)
-	if s == "" {
-		return defaultIdx, true
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n < 1 || n > numOptions {
-		return 0, false
-	}
-	return n - 1, true
-}
-
-// runPairMenu renders the interactive post-pair menu and dispatches the
-// chosen action. Default (bare Enter) is the last option, "Nothing for
-// now". Invalid input re-prompts once, then falls back to the default.
+// runPairMenu asks what to do after pairing and does it. The default, and
+// Esc, is "Nothing for now".
 func runPairMenu() error {
 	actions := buildPairMenuActions(runtime.GOOS)
-	defaultIdx := len(actions) - 1 // "Nothing for now"
-
-	fmt.Println()
-	fmt.Println(display.Accent("What would you like to do?"))
+	items := make([]ui.Item, len(actions))
 	for i, a := range actions {
-		fmt.Printf("  %s %s\n", display.Accent(fmt.Sprintf("%d)", i+1)), a)
+		items[i] = ui.Item{Label: a}
 	}
-
-	reader := bufio.NewReader(os.Stdin)
-	choice := defaultIdx
-	for attempt := 0; ; attempt++ {
-		fmt.Printf("\nEnter choice [%d]: ", defaultIdx+1)
-		line, _ := reader.ReadString('\n')
-		idx, ok := parsePairMenuChoice(line, len(actions), defaultIdx)
-		if ok {
-			choice = idx
-			break
-		}
-		if attempt == 0 {
-			fmt.Println(display.Warn("Invalid choice, try again."))
-			continue
-		}
-		fmt.Println(display.Muted("No valid choice; doing nothing."))
-		break
+	fmt.Println()
+	choice, err := ui.Select{Title: "What next?", Items: items, Default: len(items) - 1}.Run()
+	if err != nil && !errors.Is(err, ui.ErrCancelled) {
+		return err
 	}
-
-	switch actions[choice] {
+	switch choice {
 	case pairMenuStart:
 		fmt.Println()
 		return runHostDaemon()
 	case pairMenuInstall:
 		fmt.Println()
 		return host.InstallService(false, "")
-	default: // pairMenuNothing
-		fmt.Println(display.Muted("Run `docsgpt-cli host` to start the daemon."))
-		return nil
 	}
+	fmt.Println(display.Muted("Run `docsgpt-cli host` to start the daemon."))
+	return nil
 }
 
 // parseServerTime parses a device timestamp (RFC3339, with or without
@@ -303,11 +298,8 @@ var hostResetCmd = &cobra.Command{
 				"it on both sides.",
 		))
 		if !hostResetYes {
-			fmt.Print("Continue? (y/N) ")
-			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-			if !strings.EqualFold(strings.TrimSpace(line), "y") {
-				fmt.Println("aborted")
-				return nil
+			if err := confirmDestructive("Clear the local pairing?"); err != nil {
+				return err
 			}
 		}
 		removed, err := host.ClearLocalState()
@@ -389,7 +381,7 @@ func init() {
 	hostInstallServiceCmd.Flags().BoolVar(&hostServiceSystem, "system", false, "Install as a system-wide service (requires sudo)")
 	hostInstallServiceCmd.Flags().StringVar(&hostServiceUser, "user", "", "Runtime user for system services (defaults to $SUDO_USER, else root)")
 
-	hostResetCmd.Flags().BoolVar(&hostResetYes, "yes", false, "Skip the interactive confirmation prompt")
+	hostResetCmd.Flags().BoolVarP(&hostResetYes, "yes", "y", false, "Do not ask for confirmation")
 
 	hostCmd.AddCommand(hostPairCmd, hostStatusCmd, hostRevokeCmd, hostResetCmd,
 		hostInstallServiceCmd, hostUninstallServiceCmd, hostRotateMachineKeyCmd)

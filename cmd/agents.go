@@ -131,7 +131,7 @@ var agentsDeleteCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withClient(func(ctx context.Context, c *manage.Client) error {
 			if !agentsDeleteYes {
-				if err := confirmDestructive(os.Stdin, os.Stderr, stdinIsTerminal(), "Delete agent "+args[0]+"?"); err != nil {
+				if err := confirmDestructive("Delete agent " + args[0] + "?"); err != nil {
 					return err
 				}
 			}

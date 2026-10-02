@@ -516,15 +516,8 @@ func runLogout(args []string, out io.Writer) error {
 	}
 	question := "Remove " + strings.Join(what, ", ") + "?"
 	if !logoutYes {
-		if !ui.Interactive() {
-			return usageErrf("%s refusing without confirmation: pass --yes", question)
-		}
-		ok, err := ui.Confirm(question, false)
-		if err != nil {
+		if err := confirmDestructive(question); err != nil {
 			return err
-		}
-		if !ok {
-			return &exitError{code: exitFailure, err: errors.New("aborted")}
 		}
 	}
 

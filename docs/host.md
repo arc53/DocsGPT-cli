@@ -12,12 +12,12 @@ work, runs the commands and streams their output back.
 2. On the machine:
 
    ```bash
-   docsgpt-cli host pair                                  # enter the XXXX-XXXX code
-   docsgpt-cli host pair --url https://docsgpt.example.com   # for your own server
+   docsgpt-cli host pair                                  # asks for the XXXX-XXXX code
+   docsgpt-cli host pair ABCD-1234 --url https://docsgpt.example.com   # your own server
    ```
 
    On a terminal it then offers to start the daemon now or install it as a
-   service. Piped (`echo CODE | docsgpt-cli host pair`), it just pairs.
+   service. Off a terminal (`echo CODE | docsgpt-cli host pair`), it just pairs.
 3. Start the daemon in the foreground:
 
    ```bash
@@ -64,6 +64,8 @@ docsgpt-cli host status   # device, host, online state, approval mode, server
 docsgpt-cli host revoke   # revoke on the server and clear local state
 docsgpt-cli host reset    # clear local state only (the device stays active on the server)
 ```
+
+`reset` asks first, and refuses without `--yes` when there is no terminal.
 
 Revoking a device from the web app stops the daemon; it exits `0`, so a service
 manager does not restart it. Pair again to reconnect.

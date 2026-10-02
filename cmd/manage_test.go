@@ -841,26 +841,10 @@ func TestAgentsExportToFile(t *testing.T) {
 	}
 }
 
+// Off a terminal (as under go test), a destructive action needs --yes.
 func TestConfirmDestructive(t *testing.T) {
-	tests := []struct {
-		name        string
-		input       string
-		interactive bool
-		wantExit    int
-	}{
-		{"yes", "y\n", true, 0},
-		{"full yes", "YES\n", true, 0},
-		{"default is no", "\n", true, 1},
-		{"no", "n\n", true, 1},
-		{"non-interactive refuses", "y\n", false, 2},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := confirmDestructive(strings.NewReader(tt.input), io.Discard, tt.interactive, "Delete?")
-			if got := exitCodeFor(err); got != tt.wantExit {
-				t.Errorf("exit = %d (%v), want %d", got, err, tt.wantExit)
-			}
-		})
+	if err := confirmDestructive("Delete?"); exitCodeFor(err) != exitUsage || !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("err = %v, want a usage error asking for --yes", err)
 	}
 }
 
