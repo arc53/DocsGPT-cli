@@ -276,6 +276,37 @@ func TestLoginWhoamiLogout(t *testing.T) {
 	}
 }
 
+// TestLoginTokenKeepsKeysOnTheirServer: logging in to another server off a
+// terminal must not silently move the stored agent keys there.
+func TestLoginTokenKeepsKeysOnTheirServer(t *testing.T) {
+	isolateConfig(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonReply(w, 200, meBody)
+	}))
+	defer srv.Close()
+	cfg := config.DefaultConfig()
+	cfg.BaseURL = "https://docs.example.com"
+	cfg.Keys["support"] = "0123abcd-0000-1111-2222-333344445555"
+	cfg.DefaultKey = "support"
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err := runLogin(context.Background(), cmdTestToken, srv.URL, &out)
+	if exitCodeFor(err) != exitUsage || !strings.Contains(err.Error(), "support") {
+		t.Fatalf("login to another server: err = %v, want a usage error naming the keys", err)
+	}
+	if cfg, _ := config.Load(); cfg.BaseURL != "https://docs.example.com" || cfg.Token != "" {
+		t.Errorf("config changed: base %q, token stored %v", cfg.BaseURL, cfg.Token != "")
+	}
+
+	cfg.BaseURL = srv.URL + "/" // the same server: fine
+	cfg.Save()
+	if err := runLogin(context.Background(), cmdTestToken, srv.URL, &out); err != nil {
+		t.Fatalf("login to the keys' server: %v", err)
+	}
+}
+
 func TestLoginAgentKey(t *testing.T) {
 	isolateConfig(t)
 	const goodKey = "0123abcd-0000-1111-2222-333344445555"

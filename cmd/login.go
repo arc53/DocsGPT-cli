@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -158,9 +159,25 @@ func runLogin(ctx context.Context, token, urlFlag string, out io.Writer) error {
 // storeToken saves a validated token together with the server that accepted
 // it, wherever that URL came from (--url, DOCSGPT_URL or the config).
 // Otherwise a later run without DOCSGPT_URL would send it to another server.
+// Moving the stored agent keys to another server along with it needs the
+// user's confirmation (saveKey has the reverse guard).
 func storeToken(cfg *config.Config, token, baseURL string, id *manage.Identity, out io.Writer) error {
+	baseURL = strings.TrimRight(baseURL, "/")
+	if old := strings.TrimRight(cmp.Or(cfg.BaseURL, config.DefaultBaseURL), "/"); len(cfg.Keys) > 0 && old != baseURL {
+		if !ui.Interactive() {
+			return usageErrf("the stored agent keys (%s) belong to %s, and logging in to %s would send them there; remove them first (docsgpt-cli logout <name>), or set %s and %s instead of logging in",
+				strings.Join(sortedNames(cfg.Keys), ", "), old, baseURL, config.EnvToken, config.EnvURL)
+		}
+		ok, err := ui.Confirm(fmt.Sprintf("Use %s from now on? Your agent keys would be sent there too.", hostOf(baseURL)), false)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return &exitError{code: exitFailure, err: errors.New("aborted")}
+		}
+	}
 	cfg.Token = token
-	cfg.BaseURL = strings.TrimRight(baseURL, "/")
+	cfg.BaseURL = baseURL
 	if err := cfg.Save(); err != nil {
 		return err
 	}
