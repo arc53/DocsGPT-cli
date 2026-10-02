@@ -142,9 +142,9 @@ func (s *chatSession) executor(input string) {
 		return handleToolCall(ctx, tc, s.timeout)
 	}
 
-	updatedHistory, err := s.client.RunWithTools(
-		ctx, s.history, s.toolDefs, !globalNoStream, onDelta, onToolCall,
-	)
+	res, err := s.client.RunWithTools(ctx, s.history, docsgpt.RunOptions{
+		Tools: s.toolDefs, Stream: !globalNoStream, OnDelta: onDelta, OnToolCall: onToolCall,
+	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			// Drop the user turn that never got an answer so the next
@@ -163,7 +163,7 @@ func (s *chatSession) executor(input string) {
 		fmt.Print(rendered)
 	}
 
-	s.history = updatedHistory
+	s.history = res.Messages
 	s.lastAnswer = renderer.Content()
 
 	fmt.Println()

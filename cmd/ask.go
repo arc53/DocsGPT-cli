@@ -72,9 +72,9 @@ This command will provide a contextual answer and, if applicable, copy a relevan
 			return handleToolCall(ctx, tc, timeout)
 		}
 
-		_, err = client.RunWithTools(
-			ctx, messages, toolDefs, !globalNoStream, onDelta, onToolCall,
-		)
+		_, err = client.RunWithTools(ctx, messages, docsgpt.RunOptions{
+			Tools: toolDefs, Stream: !globalNoStream, OnDelta: onDelta, OnToolCall: onToolCall,
+		})
 		if err != nil {
 			return err
 		}

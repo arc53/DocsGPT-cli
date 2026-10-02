@@ -158,15 +158,15 @@ func TestRunWithToolsFeedsResultsBack(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	history, err := NewClient(srv.URL, "k").RunWithTools(
+	res, err := NewClient(srv.URL, "k").RunWithTools(
 		context.Background(),
 		[]Message{{Role: "user", Content: "go"}},
-		nil, false, nil,
-		func(tc ToolCall) string { return "42" },
+		RunOptions{OnToolCall: func(tc ToolCall) string { return "42" }},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	history := res.Messages
 	if turns != 2 {
 		t.Errorf("made %d requests, want 2", turns)
 	}
@@ -176,5 +176,118 @@ func TestRunWithToolsFeedsResultsBack(t *testing.T) {
 	}
 	if history[3].Content != "done" {
 		t.Errorf("final message = %q, want done", history[3].Content)
+	}
+}
+
+// sseServer replies to every request with the given data frames, recording
+// each request body.
+func sseServer(t *testing.T, frames ...string) (*httptest.Server, *[]ChatRequest) {
+	t.Helper()
+	var reqs []ChatRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		reqs = append(reqs, req)
+		for _, f := range frames {
+			fmt.Fprintf(w, "data: %s\n\n", f)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &reqs
+}
+
+func TestSendStreamCollectsMetadata(t *testing.T) {
+	big := strings.Repeat("x", 100*1024) // over bufio.Scanner's default line limit
+	srv, reqs := sseServer(t,
+		`{"model":"agent","choices":[{"delta":{},"finish_reason":null}],"docsgpt":{"type":"model","model":"gpt-x","provider":"p"}}`,
+		`{"choices":[{"delta":{"content":"Hi"}}]}`,
+		`{"choices":[{"delta":{}}],"docsgpt":{"type":"source","sources":[{"title":"Guide","source":"https://x/guide","text":"`+big+`"},"junk"]}}`,
+		// Older servers send the extension chunks bare, without choices.
+		`{"docsgpt":{"type":"id","conversation_id":"conv-9"}}`,
+		`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`,
+	)
+
+	resp, err := NewClient(srv.URL, "k").SendStream(context.Background(), ChatRequest{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := (*reqs)[0].StreamOptions; got == nil || !got.IncludeUsage {
+		t.Errorf("stream_options = %+v, want include_usage", got)
+	}
+	if resp.Choices[0].Message.Content != "Hi" {
+		t.Errorf("Content = %q, want Hi", resp.Choices[0].Message.Content)
+	}
+	if resp.DocsGPT.ConversationID != "conv-9" || resp.DocsGPT.Model != "gpt-x" || resp.Model != "agent" {
+		t.Errorf("meta = %+v model %q, want conv-9 / gpt-x / agent", resp.DocsGPT, resp.Model)
+	}
+	if resp.Usage == nil || resp.Usage.TotalTokens != 12 {
+		t.Errorf("Usage = %+v, want total 12", resp.Usage)
+	}
+	sources := ParseSources(resp.DocsGPT.Sources)
+	if len(sources) != 1 || sources[0].Title != "Guide" || len(sources[0].Text) != len(big) {
+		t.Errorf("sources = %d entries, want the one well-formed entry", len(sources))
+	}
+}
+
+func TestSendStreamErrorFrame(t *testing.T) {
+	srv, _ := sseServer(t,
+		`{"choices":[{"delta":{"content":"partial"}}]}`,
+		`{"error":{"message":"quota exceeded","type":"server_error"}}`,
+	)
+	_, err := NewClient(srv.URL, "k").SendStream(context.Background(), ChatRequest{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "quota exceeded") {
+		t.Fatalf("err = %v, want the server's error message", err)
+	}
+}
+
+func TestRunWithToolsCarriesConversationAndMetadata(t *testing.T) {
+	var reqs []ChatRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		reqs = append(reqs, req)
+		if len(reqs) == 1 {
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":null}],\"docsgpt\":{\"type\":\"source\",\"sources\":[{\"title\":\"A\"}]}}\n\n")
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"t1\",\"function\":{\"name\":\"run\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n")
+			fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":1,\"total_tokens\":6}}\n\n")
+		} else {
+			// The continuation reports no sources; the first round's stay.
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":null}],\"docsgpt\":{\"type\":\"source\",\"sources\":[]}}\n\n")
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"docsgpt\":{\"conversation_id\":\"c2\"}}\n\n")
+			fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	var content string
+	res, err := NewClient(srv.URL, "k").RunWithTools(context.Background(),
+		[]Message{{Role: "user", Content: "go"}},
+		RunOptions{
+			Stream:         true,
+			ConversationID: "c1",
+			OnDelta:        func(d Delta, _ string) { content += d.Content },
+			OnToolCall:     func(ToolCall) string { return "ok" },
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqs) != 2 || reqs[0].ConversationID != "c1" || reqs[1].ConversationID != "c1" {
+		t.Fatalf("requests = %d, conversation ids %q/%q; want 2 requests continuing c1",
+			len(reqs), reqs[0].ConversationID, reqs[len(reqs)-1].ConversationID)
+	}
+	if res.ConversationID != "c2" {
+		t.Errorf("ConversationID = %q, want the latest one the server named (c2)", res.ConversationID)
+	}
+	if len(res.Sources) != 1 || res.Sources[0].Title != "A" {
+		t.Errorf("Sources = %+v, want the first round's source", res.Sources)
+	}
+	if res.Usage == nil || *res.Usage != (Usage{PromptTokens: 12, CompletionTokens: 4, TotalTokens: 16}) {
+		t.Errorf("Usage = %+v, want both rounds summed", res.Usage)
+	}
+	if content != "done" || res.Messages[len(res.Messages)-1].Content != "done" {
+		t.Errorf("content = %q, final message %+v", content, res.Messages[len(res.Messages)-1])
 	}
 }

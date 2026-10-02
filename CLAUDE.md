@@ -11,8 +11,9 @@ cmd/docsgpt-cli/     → Entry point (package main), calls cmd.Execute(). Lives 
                        element)
 sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, package
                        docsgpt: the public chat client (Client, Send, SendStream,
-                       RunWithTools, StreamHandler, APIError) — OpenAI-compatible
-                       types and the tool-call loop. Stdlib-only, tagged sdk/vX.Y.Z
+                       RunWithTools + RunOptions/RunResult, StreamHandler, Source,
+                       APIError) — OpenAI-compatible types and the tool-call loop;
+                       results carry conversation id, sources, model and usage. Stdlib-only, tagged sdk/vX.Y.Z
                        independently of the CLI, currently pre-v1. The CLI depends
                        on it through a pinned require in go.mod (imported as
                        `docsgpt "…/sdk"`, since the package name is not the last
