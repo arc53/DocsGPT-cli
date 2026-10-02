@@ -656,7 +656,7 @@ func runWhoami(ctx context.Context, asJSON bool, out io.Writer) error {
 // printIdentity renders the /api/user/me document. The token is only ever
 // shown redacted.
 func printIdentity(out io.Writer, id *manage.Identity, token, source, baseURL string) {
-	row := func(k, v string) { fmt.Fprintf(out, "  %-13s %s\n", k, v) }
+	row := func(k, v string) { fmt.Fprintf(out, "  %-13s %s\n", k, display.Safe(v)) }
 	row("Server", baseURL)
 	row("User", textOrDash(id.UserID))
 	if id.Email != "" {

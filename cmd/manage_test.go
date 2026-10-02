@@ -809,7 +809,7 @@ func TestListCommandsOutput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/get_agents":
-			jsonReply(w, 200, `[{"id":"a1","name":"Support","slug":"support","agent_type":"classic","status":"published","ownership":"user"}]`)
+			jsonReply(w, 200, `[{"id":"a1","name":"Sup\u001b[2Jport","slug":"support","agent_type":"classic","status":"published","ownership":"user"}]`)
 		case "/api/sources":
 			jsonReply(w, 200, `[{"id":"s1","name":"Docs","tokens":1234,"type":"file","date":"2026-01-01","ownership":"user"}]`)
 		case "/api/get_prompts":
@@ -827,7 +827,7 @@ func TestListCommandsOutput(t *testing.T) {
 		run  func(io.Writer, bool) error
 		want []string
 	}{
-		{"agents", func(w io.Writer, j bool) error { return runAgentsList(ctx, client, j, w) }, []string{"a1", "Support", "published", "support"}},
+		{"agents", func(w io.Writer, j bool) error { return runAgentsList(ctx, client, j, w) }, []string{"a1", "Sup␛[2Jport", "published", "support"}},
 		{"sources", func(w io.Writer, j bool) error { return runSourcesList(ctx, client, j, w) }, []string{"s1", "Docs", "1234"}},
 		{"prompts", func(w io.Writer, j bool) error { return runPromptsList(ctx, client, j, w) }, []string{"default", "public"}},
 	}
@@ -841,6 +841,9 @@ func TestListCommandsOutput(t *testing.T) {
 				if !strings.Contains(table.String(), want) {
 					t.Errorf("table lacks %q:\n%s", want, table.String())
 				}
+			}
+			if strings.Contains(table.String(), "\x1b") {
+				t.Errorf("table carries a raw escape:\n%q", table.String())
 			}
 			if err := tt.run(&doc, true); err != nil {
 				t.Fatal(err)

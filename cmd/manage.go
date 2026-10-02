@@ -123,12 +123,13 @@ func stdinIsTerminal() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
 }
 
-// textOrDash renders empty table cells.
+// textOrDash renders a table cell or a value in a human line: "-" when
+// empty, control characters made visible (servers supply most of them).
 func textOrDash(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "-"
 	}
-	return s
+	return display.Safe(s)
 }
 
 // anyText renders loosely typed server fields (dates, token counts).

@@ -98,9 +98,11 @@ internal/
     style.go         → Accent/Muted/Dim/Success/Warn helpers, ErrorMsg (stderr)
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
                        (live last-5-lines region), DiffPreview for writes
-    safe.go          → Safe: every model/server string in tool blocks and sources is
-                       printed through it (control chars as ␛ ␍ ␊, format runes as
-                       \uXXXX), so an escape sequence cannot hide part of a command.
+    safe.go          → Safe: control chars as ␛ ␍ ␊, format runes as \uXXXX, so an
+                       escape sequence cannot hide part of a command. Every model/server
+                       string in tool blocks, sources, agents/sources lists, whoami, host
+                       pair/status and bench errors goes through it (cmd's textOrDash for
+                       table cells; --json stays raw).
                        StripControls: removes ESC/OSC/DCS/C1 sequences whole and other
                        controls but \n \t, for text read as text (answers, resumed
                        chats, the user-message block, /export, error messages)

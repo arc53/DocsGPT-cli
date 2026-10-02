@@ -174,7 +174,7 @@ func runSourcesList(ctx context.Context, c *manage.Client, asJSON bool, out io.W
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tNAME\tTYPE\tTOKENS\tDATE\tOWNERSHIP")
 	for _, s := range sources {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.ID, textOrDash(s.Name), textOrDash(s.Type),
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", textOrDash(s.ID), textOrDash(s.Name), textOrDash(s.Type),
 			textOrDash(anyText(s.Tokens)), textOrDash(anyText(s.Date)), textOrDash(s.Ownership))
 	}
 	return tw.Flush()
@@ -191,7 +191,7 @@ func runPromptsList(ctx context.Context, c *manage.Client, asJSON bool, out io.W
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tNAME\tTYPE")
 	for _, p := range prompts {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", p.ID, textOrDash(p.Name), textOrDash(p.Type))
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", textOrDash(p.ID), textOrDash(p.Name), textOrDash(p.Type))
 	}
 	return tw.Flush()
 }
@@ -227,7 +227,7 @@ func runToolsList(ctx context.Context, c *manage.Client, asJSON bool, out io.Wri
 		if name == "" {
 			name = t.DisplayName
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%s\n", t.ID, textOrDash(t.Name), textOrDash(name), t.Status, kind)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%s\n", textOrDash(t.ID), textOrDash(t.Name), textOrDash(name), t.Status, kind)
 	}
 	return tw.Flush()
 }
@@ -295,9 +295,9 @@ func runSourcesUpload(ctx context.Context, c *manage.Client, opts uploadOptions,
 		return err
 	}
 	if err == nil {
-		fmt.Fprintf(stdout, "%s source %s (task %s", display.Success("ok"), textOrDash(report.SourceID), report.TaskID)
+		fmt.Fprintf(stdout, "%s source %s (task %s", display.Success("ok"), textOrDash(report.SourceID), textOrDash(report.TaskID))
 		if report.Status != "" {
-			fmt.Fprintf(stdout, ", %s", report.Status)
+			fmt.Fprintf(stdout, ", %s", display.Safe(report.Status))
 		}
 		fmt.Fprintln(stdout, ")")
 	}

@@ -243,15 +243,16 @@ var hostStatusCmd = &cobra.Command{
 			return nil
 		}
 
-		fmt.Printf("device:         %s (%s)\n", d.Name, d.ID)
-		fmt.Printf("host:           %s · %s\n", d.Hostname, d.OS)
-		fmt.Printf("status:         %s\n", formatLastSeen(d))
-		fmt.Printf("approval_mode:  %s\n", d.ApprovalMode)
-		fmt.Printf("base_url:       %s\n", cfg.BaseURL)
-		fmt.Printf("poll_interval:  %s\n", cfg.PollInterval)
-		fmt.Printf("paired:         %s\n", formatPaired(d))
+		row := func(k, v string) { fmt.Printf("%-15s %s\n", k+":", display.Safe(v)) }
+		row("device", d.Name+" ("+d.ID+")")
+		row("host", d.Hostname+" · "+d.OS)
+		row("status", formatLastSeen(d))
+		row("approval_mode", d.ApprovalMode)
+		row("base_url", cfg.BaseURL)
+		row("poll_interval", cfg.PollInterval)
+		row("paired", formatPaired(d))
 		if d.Description != "" {
-			fmt.Printf("description:    %s\n", d.Description)
+			row("description", d.Description)
 		}
 		return nil
 	},

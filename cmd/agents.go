@@ -247,7 +247,7 @@ func runAgentsList(ctx context.Context, c *manage.Client, asJSON bool, out io.Wr
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tNAME\tTYPE\tSTATUS\tSLUG\tOWNERSHIP")
 	for _, a := range agents {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", a.ID, textOrDash(a.Name), textOrDash(a.AgentType),
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", textOrDash(a.ID), textOrDash(a.Name), textOrDash(a.AgentType),
 			textOrDash(a.Status), textOrDash(a.Slug), textOrDash(a.Ownership))
 	}
 	return tw.Flush()
@@ -392,7 +392,7 @@ func runAgentsApply(ctx context.Context, c *manage.Client, opts applyOptions, st
 		report.Applied++
 		report.Documents[i].Result = res
 		fmt.Fprintf(human, "%s %s: agent %s %s (status %s, slug %s)\n", display.Success("applied"),
-			p.doc.Label(), res.AgentID, res.Action, textOrDash(res.Status), textOrDash(res.Slug))
+			p.doc.Label(), textOrDash(res.AgentID), textOrDash(res.Action), textOrDash(res.Status), textOrDash(res.Slug))
 		for _, w := range res.Warnings {
 			warnLine(human, w)
 		}
@@ -408,7 +408,7 @@ func printPlan(w io.Writer, doc manage.Document, plan *manage.Plan, d *manage.De
 
 	switch plan.Target.Action {
 	case "update":
-		fmt.Fprintf(tw, "  agent\tUPDATE\t%s\tmatched by %s, status %s (kept)\n", plan.Target.AgentID,
+		fmt.Fprintf(tw, "  agent\tUPDATE\t%s\tmatched by %s, status %s (kept)\n", textOrDash(plan.Target.AgentID),
 			textOrDash(plan.Target.MatchedBy), textOrDash(plan.Target.Status))
 	default:
 		fmt.Fprintf(tw, "  agent\tCREATE\t%s\tnew draft agent\n", doc.Name)
@@ -433,14 +433,14 @@ func printPlan(w io.Writer, doc manage.Document, plan *manage.Plan, d *manage.De
 		if t.Status == manage.StatusCreate && len(t.RequiresSecrets) > 0 {
 			note = "needs secrets: " + strings.Join(t.RequiresSecrets, ", ")
 		}
-		fmt.Fprintf(tw, "  tool %s\t%s\t%s\t%s\n", t.Key, statusText(t.Status), label, detail(note, d.Covered["tool:"+t.Key]))
+		fmt.Fprintf(tw, "  tool %s\t%s\t%s\t%s\n", display.Safe(t.Key), statusText(t.Status), display.Safe(label), detail(note, d.Covered["tool:"+t.Key]))
 	}
 	for _, m := range plan.Models {
 		note := ""
 		if m.Status == manage.StatusCreate && len(m.RequiresSecrets) > 0 {
 			note = "needs secrets: " + strings.Join(m.RequiresSecrets, ", ")
 		}
-		fmt.Fprintf(tw, "  model\t%s\t%s\t%s\n", statusText(m.Status), m.Label(), detail(note, d.Covered["model:"+m.Label()]))
+		fmt.Fprintf(tw, "  model\t%s\t%s\t%s\n", statusText(m.Status), display.Safe(m.Label()), detail(note, d.Covered["model:"+m.Label()]))
 	}
 	if wf := plan.Workflow; wf != nil {
 		note := fmt.Sprintf("%d nodes, %d edges", wf.Nodes, wf.Edges)
@@ -466,7 +466,7 @@ func statusText(status string) string {
 	case manage.StatusMissing, manage.StatusUnavailable:
 		return strings.ToUpper(status)
 	}
-	return status
+	return display.Safe(status)
 }
 
 func idNote(id string) string {
@@ -483,7 +483,7 @@ func detail(parts ...string) string {
 			out = append(out, p)
 		}
 	}
-	return strings.Join(out, "; ")
+	return display.Safe(strings.Join(out, "; "))
 }
 
 // triggerOptions are the inputs of `agents trigger`.
