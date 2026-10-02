@@ -185,7 +185,7 @@ func (r *StreamRenderer) block(md string) string {
 	if strings.TrimSpace(md) == "" {
 		return ""
 	}
-	s := renderMarkdown(r.md, md)
+	s := renderMarkdown(r.md, r.width, md)
 	if s == "" {
 		return ""
 	}

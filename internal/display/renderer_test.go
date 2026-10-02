@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
+
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestCommitPoint(t *testing.T) {
@@ -162,4 +164,15 @@ func emulate(t *testing.T, out string, width, height int) string {
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func TestHangLists(t *testing.T) {
+	in := "\x1b[38;5;8m• \x1b[0mfirst item that is\nlong\n• short\n    1. nested item\n    that wraps\n\nplain paragraph\nline two"
+	want := "• first item that is\n  long\n• short\n    1. nested item that\n       wraps\n\nplain paragraph\nline two"
+	if got := xansi.Strip(hangLists(in, 24)); got != want {
+		t.Errorf("hangLists:\n got %q\nwant %q", got, want)
+	}
+	if got := tidy("a\n\n\n\nb\n\n"); got != "a\n\nb" {
+		t.Errorf("tidy kept doubled blank lines: %q", got)
+	}
 }

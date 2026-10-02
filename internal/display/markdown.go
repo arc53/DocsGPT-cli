@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 )
 
@@ -73,10 +74,11 @@ func markdownStyle(width int) ansi.StyleConfig {
 
 func ptr[T any](v T) *T { return &v }
 
-// renderMarkdown renders md with r (raw md when r is nil or fails) and tidies
-// glamour's output: no padding at the end of a line, no blank lines around.
+// renderMarkdown renders md with r (raw md when r is nil or fails) at width
+// and tidies glamour's output: no padding at the end of a line, no blank
+// lines around or doubled, wrapped list items indented under their text.
 // Unindented code fences are drawn by codeBlock, between dim fence lines.
-func renderMarkdown(r *glamour.TermRenderer, md string) string {
+func renderMarkdown(r *glamour.TermRenderer, width int, md string) string {
 	var parts []string
 	flush := func(text string) {
 		if strings.TrimSpace(text) == "" {
@@ -88,7 +90,7 @@ func renderMarkdown(r *glamour.TermRenderer, md string) string {
 				out = s
 			}
 		}
-		if out = tidy(out); out != "" {
+		if out = hangLists(tidy(out), width); out != "" {
 			parts = append(parts, out)
 		}
 	}
@@ -116,19 +118,62 @@ func renderMarkdown(r *glamour.TermRenderer, md string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// tidy drops glamour's line padding and the blank lines around its output.
+// tidy drops glamour's line padding, the blank lines around its output and
+// all but one of consecutive blank lines (a list followed by another).
 func tidy(out string) string {
-	lines := strings.Split(out, "\n")
-	for i, line := range lines {
-		lines[i] = trimPadding(line)
-	}
-	for len(lines) > 0 && lines[0] == "" {
-		lines = lines[1:]
+	var lines []string
+	for _, line := range strings.Split(out, "\n") {
+		line = trimPadding(line)
+		if line == "" && (len(lines) == 0 || lines[len(lines)-1] == "") {
+			continue
+		}
+		lines = append(lines, line)
 	}
 	for len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// listMarker matches a rendered list item's indent and marker.
+var listMarker = regexp.MustCompile(`^( *)(?:• |\d+\. |\[[✓ ]\] )`)
+
+// hangLists rewraps list items whose text glamour wrapped back to the
+// item's own indent, so the continuation lines sit under the text instead.
+func hangLists(out string, width int) string {
+	lines := strings.Split(out, "\n")
+	var res []string
+	for i := 0; i < len(lines); {
+		m := listMarker.FindStringSubmatch(xansi.Strip(lines[i]))
+		j := i + 1
+		for m != nil && j < len(lines) {
+			p := xansi.Strip(lines[j])
+			if strings.TrimSpace(p) == "" || listMarker.MatchString(p) || len(p)-len(strings.TrimLeft(p, " ")) > len(m[1]) {
+				break
+			}
+			j++
+		}
+		if j == i+1 || width <= 0 {
+			res = append(res, lines[i])
+			i++
+			continue
+		}
+		hang := xansi.StringWidth(m[0])
+		body := xansi.TruncateLeft(lines[i], hang, "")
+		for _, l := range lines[i+1 : j] {
+			p := xansi.Strip(l)
+			body += " " + xansi.TruncateLeft(l, len(p)-len(strings.TrimLeft(p, " ")), "")
+		}
+		for k, l := range strings.Split(xansi.Wrap(body, max(width-hang, 10), ""), "\n") {
+			if k == 0 {
+				res = append(res, xansi.Truncate(lines[i], hang, "")+l)
+			} else {
+				res = append(res, strings.Repeat(" ", hang)+l)
+			}
+		}
+		i = j
+	}
+	return strings.Join(res, "\n")
 }
 
 // codeBlock draws a fenced code block like pi: dim fence lines around the
