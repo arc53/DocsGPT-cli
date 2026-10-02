@@ -1,15 +1,17 @@
 // Package session saves chats, so they can be resumed: one JSONL file per
-// chat under ~/.docsgpt/sessions/<encoded cwd>/, a header line and then the
-// messages as they complete (pi's format, without its tree).
+// chat under ~/.docsgpt/sessions/<cwd slug>-<cwd hash>/, a header line and
+// then the messages as they complete (pi's format, without its tree).
 package session
 
 import (
 	"bufio"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -48,11 +50,19 @@ type Session struct {
 	Messages       []Entry // the "message" entries, in order
 }
 
-// Dir returns the directory of cwd's sessions.
+// Dir returns the directory of cwd's sessions: the end of the path made
+// readable, and a hash of it, as paths can read the same (/x/a-b, /x/a/b).
 func Dir(cwd string) string {
-	safe := strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(strings.TrimLeft(cwd, `/\`))
-	return filepath.Join(config.Dir(), "sessions", "--"+safe+"--")
+	sum := sha256.Sum256([]byte(cwd))
+	name := hex.EncodeToString(sum[:4])
+	slug := strings.Trim(nonSlug.ReplaceAllString(cwd, "-"), "-")
+	if slug = strings.TrimLeft(slug[max(0, len(slug)-48):], "-"); slug != "" {
+		name = slug + "-" + name
+	}
+	return filepath.Join(config.Dir(), "sessions", name)
 }
+
+var nonSlug = regexp.MustCompile(`[^A-Za-z0-9_]+`)
 
 // New starts a session in memory; its file is written with the first
 // messages.
@@ -144,7 +154,7 @@ func List(cwd string) ([]*Session, error) {
 	}
 	var out []*Session
 	for _, p := range paths {
-		if s, err := Load(p); err == nil && len(s.Messages) > 0 {
+		if s, err := Load(p); err == nil && len(s.Messages) > 0 && s.Cwd == cwd {
 			out = append(out, s)
 		}
 	}

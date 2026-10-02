@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 func TestRecordAndLoad(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cwd := "/work/repo"
-	if got := filepath.Base(Dir(cwd)); got != "--work-repo--" {
+	if got := filepath.Base(Dir(cwd)); !strings.HasPrefix(got, "work-repo-") || len(got) != len("work-repo-")+8 {
 		t.Errorf("Dir = %q", got)
 	}
 	s := New(cwd, "https://example.com", "test")
@@ -50,5 +51,31 @@ func TestRecordAndLoad(t *testing.T) {
 	}
 	if got.Title() != "hello" || len(got.Messages) != 3 || got.Messages[0].Message.Content != user.Content {
 		t.Errorf("title %q, %d messages", got.Title(), len(got.Messages))
+	}
+}
+
+// TestDirsDoNotCollide: paths that read alike keep their own chats, and a
+// session file in the wrong directory is not listed.
+func TestDirsDoNotCollide(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if Dir("/x/a-b") == Dir("/x/a/b") || Dir(`C:\x`) == Dir("/C/x") {
+		t.Fatal("different paths share a session directory")
+	}
+	if got := filepath.Base(Dir("/")); len(got) != 8 {
+		t.Errorf("Dir(/) = %q", got)
+	}
+	long := "/" + strings.Repeat("deep/", 40) + "project"
+	if got := filepath.Base(Dir(long)); len(got) > 60 || !strings.HasSuffix(got[:len(got)-9], "project") {
+		t.Errorf("Dir(long) = %q", got)
+	}
+
+	q := docsgpt.Message{Role: "user", Content: "hi"}
+	other := New("/x/a/b", "https://example.com", "k")
+	other.Path = filepath.Join(Dir("/x/a-b"), filepath.Base(other.Path)) // as the old encoding did
+	if err := other.Record("k", "conv", Entry{Message: &q}); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := List("/x/a-b"); len(list) != 0 {
+		t.Fatalf("listed another directory's chat: %+v", list[0])
 	}
 }
