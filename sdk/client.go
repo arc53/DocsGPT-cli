@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -103,6 +104,7 @@ func (c *Client) SendStream(ctx context.Context, req ChatRequest, onDelta Stream
 		out          ChatResponse
 		accumulated  Delta
 		finishReason string
+		done         bool
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -116,6 +118,7 @@ func (c *Client) SendStream(ctx context.Context, req ChatRequest, onDelta Stream
 		}
 		data = strings.TrimSpace(data)
 		if data == "[DONE]" {
+			done = true
 			break
 		}
 
@@ -194,6 +197,11 @@ func (c *Client) SendStream(ctx context.Context, req ChatRequest, onDelta Stream
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("reading stream: %w", err)
+	}
+	// Some servers omit [DONE] after the finish_reason; without either the
+	// connection was cut and the answer is incomplete.
+	if !done && finishReason == "" {
+		return nil, errors.New("stream ended unexpectedly")
 	}
 
 	out.Choices = []Choice{{Message: accumulated, FinishReason: finishReason}}
