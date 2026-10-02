@@ -352,10 +352,13 @@ func TestRegularFile(t *testing.T) {
 
 func TestReadReason(t *testing.T) {
 	root := t.TempDir()
-	home := filepath.Join(root, "home")
+	home := filepath.Join(root, "Home")
 	proj := filepath.Join(home, "proj")
 	os.MkdirAll(filepath.Join(proj, "sub", ".ssh"), 0o755)
-	for _, f := range []string{"main.go", ".env", ".env.local", "prod.env", "server.pem", "id_ed25519", "id_test.go", "sub/.ssh/config", "notes.txt"} {
+	os.MkdirAll(filepath.Join(proj, ".aws"), 0o755)
+	os.MkdirAll(filepath.Join(proj, "deploy", "secrets"), 0o755)
+	for _, f := range []string{"main.go", ".env", ".env.local", "prod.env", "server.pem", "id_ed25519", "id_test.go", "sub/.ssh/config", "notes.txt",
+		".envrc", ".netrc", ".npmrc", ".pypirc", "cert.p12", "credentials", ".aws/config", "deploy/secrets/db.yaml", "secrets.yaml", "credentials_test.go"} {
 		os.WriteFile(filepath.Join(proj, f), []byte("x\n"), 0o644)
 	}
 	os.WriteFile(filepath.Join(home, "secret.txt"), []byte("x\n"), 0o644)
@@ -382,6 +385,16 @@ func TestReadReason(t *testing.T) {
 		"server.pem":                      "may hold secrets",
 		"id_ed25519":                      "may hold secrets",
 		"sub/.ssh/config":                 "may hold secrets",
+		".envrc":                          "may hold secrets",
+		".netrc":                          "may hold secrets",
+		".npmrc":                          "may hold secrets",
+		".pypirc":                         "may hold secrets",
+		"cert.p12":                        "may hold secrets",
+		"credentials":                     "may hold secrets",
+		".aws/config":                     "may hold secrets",
+		"deploy/secrets/db.yaml":          "may hold secrets",
+		"secrets.yaml":                    "may hold secrets",
+		"credentials_test.go":             "",
 		"../secret.txt":                   "outside the working directory",
 		"link.txt":                        "outside the working directory",
 		filepath.Join(home, "secret.txt"): "outside the working directory",
@@ -394,6 +407,25 @@ func TestReadReason(t *testing.T) {
 	t.Chdir(home) // the home directory is not a project: everything asks
 	if got := reason("proj/main.go"); got == "" {
 		t.Error("read under a home working directory: want approval")
+	}
+	t.Chdir(root)
+	if got := reason("Home/proj/main.go"); got == "" {
+		t.Error("read under a working directory above home: want approval")
+	}
+
+	// The home directory under another spelling, where the file system
+	// ignores case (macOS, Windows): the working directory keeps it.
+	lower := filepath.Join(root, "home")
+	if _, err := os.Stat(lower); err != nil {
+		t.Skip("case-sensitive file system")
+	}
+	t.Chdir(lower)
+	t.Setenv("PWD", lower)
+	if wd, _ := os.Getwd(); filepath.Base(wd) != "home" {
+		t.Skipf("Getwd gives %s", wd)
+	}
+	if got := reason("proj/main.go"); got == "" {
+		t.Error("read under the home directory spelt in lower case: want approval")
 	}
 }
 
