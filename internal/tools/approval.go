@@ -73,7 +73,7 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 		}
 		items := []ui.Item{{Label: "Approve", Value: "approve", Keys: []string{"a", "y"}}}
 		if key := alwaysKey(command); key != "" {
-			items = append(items, ui.Item{Label: "Always allow " + key, Value: "always", Keys: []string{"l"}})
+			items = append(items, ui.Item{Label: "Always allow " + display.Safe(key), Value: "always", Keys: []string{"l"}})
 		}
 		items = append(items,
 			ui.Item{Label: "Deny", Value: "deny", Keys: []string{"d", "n"}},
@@ -83,9 +83,12 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 			return refusal
 		}
 		if choice == "edit" {
-			v, err := ui.Input{Title: "Edit command", Value: command, Stderr: true, Summary: func(string) string { return "" }}.Run()
-			if v = strings.TrimSpace(v); err == nil && v != "" && v != command {
-				command, edited, titled = v, true, false
+			// The one-line field shows the command as the title does; what
+			// the user submits is what runs, with ␊ read back as a newline.
+			shown := display.Safe(command)
+			v, err := ui.Input{Title: "Edit command", Value: shown, Stderr: true, Summary: func(string) string { return "" }}.Run()
+			if v = strings.TrimSpace(v); err == nil && v != "" && v != shown {
+				command, edited, titled = strings.ReplaceAll(v, "␊", "\n"), true, false
 			}
 			continue // ask again, about the edited command
 		}
