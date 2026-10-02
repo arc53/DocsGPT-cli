@@ -3,22 +3,27 @@ package tools
 import (
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"unicode"
 )
 
 // alwaysKey returns what "Always allow" covers for command, or "" when it
-// must not be offered: the program and its first argument when that is a
-// subcommand word ("git status", "npm test"), else the program alone
-// ("ls"). Every command is checked, so a later one runs unasked only when
-// it has the same key and passes the same checks:
+// must not be offered: the program and its subcommand ("git status", "npm
+// test"), or the program alone when it has no subcommands ("ls", "grep")
+// or no other words than options ("git --version"). Every command is
+// checked, so a later one runs unasked only when it has the same key and
+// passes the same checks:
 //   - a simple command: no shell operators, substitutions, globs, escapes,
 //     comments or several lines (quotes are fine, except on Windows);
 //   - no leading VAR=value, and the program not given as a path;
 //   - not a program that runs other programs or code (runsCode);
 //   - no argument that makes a program run code or change what it works
 //     on (riskyArg), such as git -c, -C or --upload-pack;
-//   - not a subcommand that does (git config, npm exec).
+//   - the subcommand is the first word: an option before it may take the
+//     next word as its value (git --namespace status push runs git push),
+//     so only options known to take none may come first (git --no-pager);
+//   - not a subcommand that runs code (git config, npm exec).
 func alwaysKey(command string) string {
 	words := simpleWords(command)
 	if len(words) == 0 {
@@ -34,13 +39,36 @@ func alwaysKey(command string) string {
 			return ""
 		}
 	}
-	if len(words) == 1 || !subcommandRe.MatchString(words[1]) {
-		return prog
+	rest := words[1:]
+	for len(rest) > 0 && bareOptions[name+" "+rest[0]] {
+		rest = rest[1:]
 	}
-	if riskySubcommands[name+" "+words[1]] {
+	switch {
+	case plainPrograms[name] || !slices.ContainsFunc(rest, func(w string) bool { return !strings.HasPrefix(w, "-") }):
+		return prog
+	case !subcommandRe.MatchString(rest[0]) || riskySubcommands[name+" "+rest[0]]:
 		return ""
 	}
-	return prog + " " + words[1]
+	return prog + " " + rest[0]
+}
+
+// plainPrograms have no subcommands and only read, so their key is the
+// program whatever its arguments.
+var plainPrograms = setOf(`ls cat head tail wc grep egrep fgrep rg ag ack tree du df stat file
+	diff cmp nl cut column jq pwd echo printf which whoami uname id date ps
+	realpath readlink basename dirname md5sum sha1sum sha256sum shasum cksum od hexdump strings`)
+
+// bareOptions take no value and change nothing the key is about, so they
+// may come before the subcommand.
+var bareOptions = setOf(`git|--no-pager git|-P git|--no-optional-locks
+	npm|-s npm|--silent npm|-q npm|--quiet`)
+
+func setOf(words string) map[string]bool {
+	m := map[string]bool{}
+	for _, w := range strings.Fields(words) {
+		m[strings.ReplaceAll(w, "|", " ")] = true
+	}
+	return m
 }
 
 var subcommandRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
@@ -89,25 +117,23 @@ func simpleWords(command string) []string {
 }
 
 // codeRunners run other programs or code they are handed: shells, wrappers,
-// interpreters, remote shells, editors and pagers with shell escapes, build
-// and archive tools that run commands. Allowing one would allow anything.
-var codeRunners = map[string]bool{}
-
-func init() {
-	for _, n := range strings.Fields(`
-		sh bash zsh fish dash ksh mksh csh tcsh ash busybox nu elvish xonsh
-		cmd powershell pwsh start wsl runas wscript cscript mshta rundll32
-		env sudo doas su nohup time timeout nice ionice chroot setsid stdbuf unbuffer
-		xargs parallel eval exec command builtin source . watch script expect flock nsenter
-		strace ltrace gdb lldb taskset chrt caffeinate systemd-run open xdg-open
-		ssh scp sftp rsync telnet nc ncat socat
-		find fd fdfind awk gawk mawk nawk sed osascript tclsh wish irb jshell julia r rscript
-		deno bun npx pnpx bunx uvx
-		vi vim nvim view ex emacs nano less more man
-		make gmake bmake cmake tar gtar bsdtar zip 7z`) {
-		codeRunners[n] = true
-	}
-}
+// interpreters, database shells, remote shells, editors and pagers with
+// shell escapes, build, task and archive tools that run commands. Allowing
+// one would allow anything.
+var codeRunners = setOf(`
+	sh bash zsh fish dash ksh mksh csh tcsh ash busybox nu elvish xonsh
+	cmd powershell pwsh start wsl runas wscript cscript mshta rundll32
+	env sudo doas su nohup time timeout nice ionice chroot setsid stdbuf unbuffer
+	xargs parallel eval exec command builtin source . watch script expect flock nsenter
+	strace ltrace gdb lldb taskset chrt caffeinate systemd-run open xdg-open
+	tmux screen at batch crontab direnv entr nix nix-shell
+	ssh scp sftp rsync telnet nc ncat socat
+	find fd fdfind awk gawk mawk nawk sed osascript tclsh wish irb jshell julia r rscript
+	deno bun npx pnpx bunx uvx pipx tsx ts-node
+	sqlite3 duckdb psql mysql mariadb mongo mongosh
+	vi vim nvim view ex emacs nano less more man
+	make gmake bmake cmake just task rake mvn gradle ant sbt dotnet ansible ansible-playbook
+	tar gtar bsdtar zip 7z`)
 
 // runsCode reports whether the program (lower case, without .exe) runs
 // arbitrary code, versioned interpreters (python3.12, perl5) included.
@@ -120,26 +146,40 @@ func runsCode(name string) bool {
 	return codeRunners[name]
 }
 
-// riskySubcommands run commands of their own or change what later
-// commands run (git config core.fsmonitor, git submodule foreach).
-var riskySubcommands = map[string]bool{
-	"git config": true, "git submodule": true, "git bisect": true, "git filter-branch": true,
-	"git difftool": true, "git mergetool": true,
-	"npm exec": true, "npm x": true, "npm explore": true, "pnpm exec": true, "pnpm dlx": true,
-	"yarn exec": true, "yarn dlx": true, "bun x": true,
-}
+// riskySubcommands run code named in their arguments (go run x@latest,
+// npm install pkg, docker run, kubectl exec), change what later commands
+// run (git config core.fsmonitor, go env -w GOFLAGS=...) or hand out
+// credentials (git credential fill). Running a project's own scripts (npm
+// test, cargo run) is what allowing them means.
+var riskySubcommands = setOf(`
+	git|config git|submodule git|bisect git|filter-branch git|difftool git|mergetool
+	git|credential git|send-email
+	go|run go|generate go|env go|install cargo|install
+	npm|exec npm|x npm|explore npm|install npm|i npm|in npm|add npm|isntall npm|install-test npm|it
+	npm|link npm|ln npm|init npm|create npm|config npm|set
+	pnpm|exec pnpm|dlx pnpm|add pnpm|install pnpm|i pnpm|create pnpm|config
+	yarn|exec yarn|dlx yarn|add yarn|create yarn|node yarn|config
+	pip|install pip|download pip|wheel pip3|install pip3|download pip3|wheel
+	uv|run uv|pip uv|tool uv|add poetry|run poetry|add pipenv|run pipenv|install conda|run
+	gem|install bundle|exec brew|install brew|reinstall
+	docker|run docker|exec docker|create docker|compose docker|container docker|build docker|buildx
+	podman|run podman|exec podman|create podman|compose podman|container podman|build
+	kubectl|exec kubectl|run kubectl|debug kubectl|attach kubectl|cp kubectl|plugin
+	gh|alias gh|extension gh|ext`)
 
 // riskyOptions are long options (by name, any spelling after it) that make
 // a program run a command, write where it is told or work on another
-// repository.
+// repository or project.
 var riskyOptions = []string{
 	"exec", "eval", "checkpoint-action", "upload-pack", "receive-pack", "git-dir", "work-tree",
-	"config", "template", "to-command", "use-compress-program", "rsh", "command", "shell",
-	"output", "editor", "pager",
+	"config", "template", "to-command", "use-compress-program", "compress-program", "rsh",
+	"command", "shell", "script-shell", "node-options", "output", "editor", "pager",
+	"open-files-in-pager", "toolexec", "vettool", "ldflags", "extld", "manifest-path", "prefix",
+	"kubeconfig", "userconfig", "globalconfig", "hostname-bin", "diff-program",
 }
 
 // riskyArg reports whether an argument is a risky option: -c, -C, -e, -o,
-// -x or -X alone, with a value attached (-ofile) or in a short cluster
+// -O, -x or -X alone, with a value attached (-ofile) or in a short cluster
 // (-ec), a riskyOptions name after one or two dashes (--exec-path=…,
 // -exec), or rg's --pre.
 func riskyArg(w string) bool {
@@ -148,8 +188,8 @@ func riskyArg(w string) bool {
 		return false
 	}
 	long := strings.HasPrefix(body, "-")
-	if !long && (strings.ContainsRune("cCeoxX", rune(body[0])) ||
-		len(body) <= 3 && strings.ContainsAny(body, "cCeoxX")) {
+	if !long && (strings.ContainsRune("cCeoOxX", rune(body[0])) ||
+		len(body) <= 3 && strings.ContainsAny(body, "cCeoOxX")) {
 		return true
 	}
 	body, _, _ = strings.Cut(strings.TrimPrefix(body, "-"), "=")

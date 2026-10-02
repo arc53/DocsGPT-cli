@@ -26,8 +26,29 @@ func TestAlwaysKey(t *testing.T) {
 		"  ls -la src ":                  "ls",
 		"ls":                             "ls",
 		"grep -rn foo internal":          "grep",
-		"grep shutdown app.log":          "grep shutdown",
+		"grep shutdown app.log":          "grep", // no subcommands
+		"ls -la src":                     "ls",
+		"head -n 50 main.go":             "head",
 		"cargo build --release":          "cargo build",
+		"git --version":                  "git",
+		"git --no-pager log -5":          "git log",
+		"git -P diff":                    "git diff",
+		"npm -s test":                    "npm test",
+
+		// Options before the subcommand: one may take the next word as
+		// its value, so the subcommand is unknown.
+		"git --namespace status push --force":         "",
+		"git --no-pager --namespace status push":      "",
+		"git --no-pager config core.fsmonitor 'x'":    "",
+		"git -P submodule foreach 'rm -rf ~'":         "",
+		"git --no-optional-locks config alias.x '!x'": "",
+		"npm -s exec -- cowsay":                       "",
+		"npm --prefix /tmp/x test":                    "",
+		"npm --loglevel silent exec cowsay":           "",
+		"docker -H tcp://x run alpine":                "",
+		"kubectl -n prod delete ns prod":              "",
+		"cargo +nightly install evil":                 "",
+		"curl http://example.com":                     "",
 
 		// Shell syntax.
 		"":                     "",
@@ -109,6 +130,75 @@ func TestAlwaysKey(t *testing.T) {
 		"npm x cowsay":                           "",
 		"yarn dlx cowsay":                        "",
 		"zip -T -TT 'sh -c x' a.zip f":           "",
+
+		// Options and programs that run code named in their arguments.
+		"git grep -O'touch /tmp/p' x":                  "",
+		"git grep -Otouch x":                           "",
+		"git grep --open-files-in-pager='touch p' x":   "",
+		"git difftool -y":                              "",
+		"git mergetool":                                "",
+		"git filter-branch --tree-filter 'x' HEAD":     "",
+		"git credential fill":                          "",
+		"go test -toolexec=/tmp/x ./...":               "",
+		"go test -toolexec /tmp/x ./...":               "",
+		"go vet -vettool=/tmp/x ./...":                 "",
+		"go build -ldflags=-extld=/tmp/x .":            "",
+		"go test -overlay=o.json ./...":                "",
+		"go run example.com/evil@latest":               "",
+		"go generate ./...":                            "",
+		"go env -w GOFLAGS=-toolexec=/tmp/x":           "",
+		"go install example.com/evil@latest":           "",
+		"cargo install evil":                           "",
+		"cargo test --manifest-path /tmp/x/Cargo.toml": "",
+		"cargo build --config 'target.x.runner=\"x\"'": "",
+		"npm install evil":                             "",
+		"npm i evil":                                   "",
+		"npm init evil":                                "",
+		"npm test --script-shell=/tmp/x":               "",
+		"npm test --node-options='--require /tmp/x'":   "",
+		"npm test --prefix /tmp/x":                     "",
+		"npm config set script-shell /tmp/x":           "",
+		"pnpm add evil":                                "",
+		"yarn node -e x":                               "",
+		"pip install evil":                             "",
+		"pip3 download evil":                           "",
+		"uv run x.py":                                  "",
+		"uv pip install evil":                          "",
+		"poetry run x":                                 "",
+		"bundle exec x":                                "",
+		"docker run --rm -v /:/h alpine":               "",
+		"docker exec c sh":                             "",
+		"docker compose run x":                         "",
+		"docker container run alpine":                  "",
+		"kubectl exec pod -- sh":                       "",
+		"kubectl get pods --kubeconfig=/tmp/x":         "",
+		"gh alias set --shell x 'touch p'":             "",
+		"gh extension install evil/x":                  "",
+		"sqlite3 db '.shell touch /tmp/p'":             "",
+		"psql -f x.sql":                                "",
+		"mysql db":                                     "",
+		"duckdb":                                       "",
+		"rg --hostname-bin=/tmp/x foo":                 "",
+		"sort --compress-program=/tmp/x f":             "",
+		"tsx x.ts":                                     "",
+		"just build":                                   "",
+		"gradle test":                                  "",
+		"dotnet run":                                   "",
+		"crontab x":                                    "",
+		"tmux new -d x":                                "",
+
+		// Still offered: the project's own scripts and plain reads.
+		"go vet ./...":      "go vet",
+		"go build ./...":    "go build",
+		"cargo run":         "cargo run",
+		"npm run lint":      "npm run",
+		"npm ci":            "npm ci",
+		"docker ps -a":      "docker ps",
+		"kubectl get pods":  "kubectl get",
+		"git grep -n foo":   "git grep",
+		"pip list":          "pip list",
+		"gh pr view 1":      "gh pr",
+		"git log --oneline": "git log",
 	}
 	if runtime.GOOS == "windows" {
 		cases["git commit -m 'fix: a b'"] = "" // cmd.exe has no single quotes
@@ -123,18 +213,21 @@ func TestAlwaysKey(t *testing.T) {
 // TestAlwaysAllowMatching: an allowed key lets through later commands with
 // the same key only, and never ones that fail the checks.
 func TestAlwaysAllowMatching(t *testing.T) {
-	s := &Session{allowed: map[string]bool{alwaysKey("git status"): true, alwaysKey("ls -la"): true}}
+	s := &Session{allowed: map[string]bool{alwaysKey("git status"): true, alwaysKey("ls -la"): true, alwaysKey("git --version"): true}}
 	for cmd, want := range map[string]bool{
-		"git status --short":         true,
-		"git status -c x":            false,
-		"git -C /tmp/evil status":    false,
-		"git push":                   false,
-		"ls src":                     false, // key "ls src"
-		"ls -R":                      true,
-		"ls -la; rm -rf ~":           false,
-		"CI=1 git status":            false,
-		"/usr/bin/git status":        false,
-		"git status && touch /tmp/p": false,
+		"git status --short":          true,
+		"git status -c x":             false,
+		"git -C /tmp/evil status":     false,
+		"git push":                    false,
+		"ls src":                      true, // ls has no subcommands
+		"ls -R":                       true,
+		"git --no-pager status":       true,
+		"git --no-pager config x y":   false,
+		"git --namespace status push": false,
+		"ls -la; rm -rf ~":            false,
+		"CI=1 git status":             false,
+		"/usr/bin/git status":         false,
+		"git status && touch /tmp/p":  false,
 	} {
 		key := alwaysKey(cmd)
 		if got := key != "" && s.allowed[key]; got != want {
@@ -259,10 +352,13 @@ func TestRegularFile(t *testing.T) {
 
 func TestReadReason(t *testing.T) {
 	root := t.TempDir()
-	home := filepath.Join(root, "home")
+	home := filepath.Join(root, "Home")
 	proj := filepath.Join(home, "proj")
 	os.MkdirAll(filepath.Join(proj, "sub", ".ssh"), 0o755)
-	for _, f := range []string{"main.go", ".env", ".env.local", "prod.env", "server.pem", "id_ed25519", "id_test.go", "sub/.ssh/config", "notes.txt"} {
+	os.MkdirAll(filepath.Join(proj, ".aws"), 0o755)
+	os.MkdirAll(filepath.Join(proj, "deploy", "secrets"), 0o755)
+	for _, f := range []string{"main.go", ".env", ".env.local", "prod.env", "server.pem", "id_ed25519", "id_test.go", "sub/.ssh/config", "notes.txt",
+		".envrc", ".netrc", ".npmrc", ".pypirc", "cert.p12", "credentials", ".aws/config", "deploy/secrets/db.yaml", "secrets.yaml", "credentials_test.go"} {
 		os.WriteFile(filepath.Join(proj, f), []byte("x\n"), 0o644)
 	}
 	os.WriteFile(filepath.Join(home, "secret.txt"), []byte("x\n"), 0o644)
@@ -289,6 +385,16 @@ func TestReadReason(t *testing.T) {
 		"server.pem":                      "may hold secrets",
 		"id_ed25519":                      "may hold secrets",
 		"sub/.ssh/config":                 "may hold secrets",
+		".envrc":                          "may hold secrets",
+		".netrc":                          "may hold secrets",
+		".npmrc":                          "may hold secrets",
+		".pypirc":                         "may hold secrets",
+		"cert.p12":                        "may hold secrets",
+		"credentials":                     "may hold secrets",
+		".aws/config":                     "may hold secrets",
+		"deploy/secrets/db.yaml":          "may hold secrets",
+		"secrets.yaml":                    "may hold secrets",
+		"credentials_test.go":             "",
 		"../secret.txt":                   "outside the working directory",
 		"link.txt":                        "outside the working directory",
 		filepath.Join(home, "secret.txt"): "outside the working directory",
@@ -301,6 +407,25 @@ func TestReadReason(t *testing.T) {
 	t.Chdir(home) // the home directory is not a project: everything asks
 	if got := reason("proj/main.go"); got == "" {
 		t.Error("read under a home working directory: want approval")
+	}
+	t.Chdir(root)
+	if got := reason("Home/proj/main.go"); got == "" {
+		t.Error("read under a working directory above home: want approval")
+	}
+
+	// The home directory under another spelling, where the file system
+	// ignores case (macOS, Windows): the working directory keeps it.
+	lower := filepath.Join(root, "home")
+	if _, err := os.Stat(lower); err != nil {
+		t.Skip("case-sensitive file system")
+	}
+	t.Chdir(lower)
+	t.Setenv("PWD", lower)
+	if wd, _ := os.Getwd(); filepath.Base(wd) != "home" {
+		t.Skipf("Getwd gives %s", wd)
+	}
+	if got := reason("proj/main.go"); got == "" {
+		t.Error("read under the home directory spelt in lower case: want approval")
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -64,6 +63,7 @@ type chatSession struct {
 	toolDefs      []docsgpt.Tool
 	tools         *tools.Session
 	quit          bool
+	stopped       error // TERM or HUP ended a request: the chat exits with it
 }
 
 // chatCommand is a slash command of the chat.
@@ -135,7 +135,7 @@ func runChat(first string) error {
 	for _, c := range chatCommands {
 		editor.Commands = append(editor.Commands, ui.Command{Name: c.name, Description: c.desc})
 	}
-	for !s.quit {
+	for !s.quit && s.stopped == nil {
 		editor.Footer, editor.Status = s.footer()
 		text, shown, err := editor.Run()
 		if errors.Is(err, io.EOF) {
@@ -149,7 +149,7 @@ func runChat(first string) error {
 	if s.sess.Saved() {
 		fmt.Println(display.Dim("Continue this chat with: docsgpt-cli -c"))
 	}
-	return nil
+	return s.stopped
 }
 
 // footer returns the text under the input: where, as whom and what is on.
@@ -166,13 +166,14 @@ func (s *chatSession) footer() (left, right string) {
 }
 
 // handle acts on one submitted input: a command, a shell command or a
-// message for the agent.
+// message for the agent. What the user saw decides, so a collapsed paste
+// starting with ! or / is a message.
 func (s *chatSession) handle(text, shown string) {
-	line := strings.TrimSpace(text)
+	line, seen := strings.TrimSpace(text), strings.TrimSpace(shown)
 	switch {
-	case strings.HasPrefix(line, "!"):
+	case strings.HasPrefix(seen, "!"):
 		s.shell(line)
-	case strings.HasPrefix(line, "/") && s.command(line):
+	case strings.HasPrefix(seen, "/") && s.command(line):
 	default:
 		s.send(text, shown)
 	}
@@ -204,13 +205,17 @@ func (s *chatSession) shell(line string) {
 	if command == "" {
 		return
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signalContext()
 	defer stop()
 	// The tool block opens with a blank line, which the input already left.
 	fmt.Fprint(os.Stderr, "\x1b[1A")
 	restore := ui.HoldInput()
+	defer restore()
 	out := tools.RunShell(ctx, command)
 	restore()
+	if s.stopped = terminated(ctx); s.stopped != nil {
+		return
+	}
 	if keep {
 		s.shellOutput = append(s.shellOutput, fmt.Sprintf("I ran `%s`:\n```\n%s\n```", command, strings.TrimRight(out, "\n")))
 	}
@@ -235,7 +240,7 @@ func (s *chatSession) send(text, shown string) {
 
 	// The editor is not running, so the terminal is in cooked mode and
 	// Ctrl+C is a real SIGINT: it cancels the request, not the chat.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signalContext()
 	defer stop()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -258,6 +263,9 @@ func (s *chatSession) send(text, shown string) {
 	renderer.Flush()
 	restore()
 	if err != nil {
+		if s.stopped = terminated(ctx); s.stopped != nil {
+			return
+		}
 		if ctx.Err() != nil {
 			gap := "" // after a partial answer
 			if renderer.Content() != "" {
@@ -282,7 +290,7 @@ func (s *chatSession) send(text, shown string) {
 	}
 	added[0].Text = text
 	added[len(added)-1].Sources = res.Sources
-	if err := s.sess.Record(s.keyName, res.ConversationID, added...); err != nil {
+	if err := s.sess.Record(s.baseURL, s.keyName, res.ConversationID, added...); err != nil {
 		printError("Could not save the chat: " + err.Error())
 		fmt.Println()
 	}
@@ -437,6 +445,23 @@ func (s *chatSession) export(file string) {
 	if file == "" {
 		file = "docsgpt-" + time.Now().Format("2006-01-02-150405") + ".md"
 	}
+	shown := file
+	if strings.HasPrefix(file, "~/") || strings.HasPrefix(file, "~"+string(filepath.Separator)) {
+		if home, err := os.UserHomeDir(); err == nil {
+			file = filepath.Join(home, file[2:])
+		}
+	}
+	if fi, err := os.Stat(file); err == nil {
+		if !fi.Mode().IsRegular() {
+			printError(shown + " is not a file.")
+			fmt.Println()
+			return
+		}
+		if ok, _ := ui.Confirm("Overwrite "+shown+"?", false); !ok {
+			fmt.Println(display.Dim("Not exported.") + "\n")
+			return
+		}
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# DocsGPT chat · %s\n", time.Now().Format("2006-01-02 15:04"))
 	for _, t := range turns {
@@ -462,7 +487,7 @@ func (s *chatSession) export(file string) {
 		fmt.Println()
 		return
 	}
-	fmt.Println(display.Success("✓") + " " + display.Dim("Exported to "+file) + "\n")
+	fmt.Println(display.Success("✓") + " " + display.Dim("Exported to "+shown) + "\n")
 }
 
 // switchKey picks another stored key (or adds one) and starts a new

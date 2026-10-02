@@ -37,6 +37,9 @@ func runCommand(ctx context.Context, command, dir string, timeout time.Duration,
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(runCtx, "cmd", "/C", command)
+		// cmd.exe looks for a program in the working directory before PATH,
+		// so an approved "git status" could run a repository's git.bat.
+		cmd.Env = append(os.Environ(), "NoDefaultCurrentDirectoryInExePath=1")
 	} else {
 		cmd = exec.CommandContext(runCtx, "sh", "-c", command)
 	}

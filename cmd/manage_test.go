@@ -748,6 +748,10 @@ func TestSourcesUploadAndWait(t *testing.T) {
 			if got := exitCodeFor(err); got != tt.wantExit {
 				t.Fatalf("exit = %d (%v), want %d", got, err, tt.wantExit)
 			}
+			// A timed-out poll may still be in the handler.
+			srv.Close()
+			mu.Lock()
+			defer mu.Unlock()
 			if tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("err = %v, want %q", err, tt.wantErr)
 			}

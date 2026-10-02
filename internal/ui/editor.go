@@ -145,8 +145,9 @@ func (m *editorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		os.Remove(msg.path)
 	case tea.KeyMsg:
-		before := m.text()
+		before, row, col := m.text(), m.row, m.col
 		cmd := m.key(msg)
+		m.snap(row, col)
 		if s := msg.String(); m.text() != before && s != "up" && s != "down" {
 			m.changed()
 		}
@@ -155,9 +156,17 @@ func (m *editorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// changed follows an edit: history browsing ends and the popup refreshes.
+// changed follows an edit: history browsing ends, pastes whose marker is
+// gone are dropped and the popup refreshes.
 func (m *editorModel) changed() {
 	m.hist = len(m.History.entries)
+	kept := map[int]string{}
+	for _, sub := range PasteMarker.FindAllStringSubmatch(m.text(), -1) {
+		if id, _ := strconv.Atoi(sub[1]); m.pastes[id] != "" {
+			kept[id] = m.pastes[id]
+		}
+	}
+	m.pastes = kept
 	m.refreshPopup()
 }
 
@@ -229,18 +238,14 @@ func (m *editorModel) key(k tea.KeyMsg) tea.Cmd {
 	case "down":
 		m.down()
 	case "left", "ctrl+b":
-		if s, _, ok := m.marker(); ok {
-			m.col = s
-		} else if m.col > 0 {
+		if m.col > 0 {
 			m.col--
 		} else if m.row > 0 {
 			m.row--
 			m.col = len(m.lines[m.row])
 		}
 	case "right", "ctrl+f":
-		if _, e, ok := m.markerAfter(); ok {
-			m.col = e
-		} else if m.col < len(line) {
+		if m.col < len(line) {
 			m.col++
 		} else if m.row < len(m.lines)-1 {
 			m.row, m.col = m.row+1, 0
@@ -263,12 +268,8 @@ func (m *editorModel) key(k tea.KeyMsg) tea.Cmd {
 	case "end", "ctrl+e":
 		m.col = len(line)
 	case "backspace", "ctrl+h":
-		if s, _, ok := m.marker(); ok {
-			m.lines[m.row] = slices.Delete(line, s, m.col)
-			m.col = s
-		} else if m.col > 0 {
-			m.lines[m.row] = slices.Delete(line, m.col-1, m.col)
-			m.col--
+		if m.col > 0 {
+			m.cut(m.col-1, m.col)
 		} else if m.row > 0 {
 			prev := m.lines[m.row-1]
 			m.col = len(prev)
@@ -279,18 +280,15 @@ func (m *editorModel) key(k tea.KeyMsg) tea.Cmd {
 	case "delete":
 		m.deleteForward()
 	case "ctrl+u":
-		m.lines[m.row] = line[m.col:]
-		m.col = 0
+		m.cut(0, m.col)
 	case "ctrl+k":
 		if m.col == len(line) {
 			m.deleteForward()
 		} else {
-			m.lines[m.row] = line[:m.col]
+			m.cut(m.col, len(line))
 		}
 	case "ctrl+w", "alt+backspace":
-		start := wordStart(line, m.col)
-		m.lines[m.row] = slices.Delete(line, start, m.col)
-		m.col = start
+		m.cut(wordStart(line, m.col), m.col)
 	case "ctrl+g":
 		return m.externalEditor()
 	default:
@@ -373,35 +371,42 @@ func (m *editorModel) paste(s string) {
 
 func (m *editorModel) deleteForward() {
 	line := m.lines[m.row]
-	switch _, e, ok := m.markerAfter(); {
-	case ok:
-		m.lines[m.row] = slices.Delete(line, m.col, e)
-	case m.col < len(line):
-		m.lines[m.row] = slices.Delete(line, m.col, m.col+1)
-	case m.row < len(m.lines)-1:
+	if m.col < len(line) {
+		m.cut(m.col, m.col+1)
+	} else if m.row < len(m.lines)-1 {
 		m.lines[m.row] = append(line, m.lines[m.row+1]...)
 		m.lines = slices.Delete(m.lines, m.row+1, m.row+2)
 	}
 }
 
-// marker returns the paste marker ending at the cursor, in runes.
-func (m *editorModel) marker() (start, end int, ok bool) {
+// Paste markers are one unit: deleting part of one deletes all of it, and
+// the cursor never rests inside one.
+
+// cut deletes runes [start, end) of the current line, widened to the paste
+// markers it reaches into, and leaves the cursor at the start.
+func (m *editorModel) cut(start, end int) {
 	for _, r := range m.markers() {
-		if r[1] == m.col {
-			return r[0], r[1], true
+		if r[0] < end && start < r[1] {
+			start, end = min(start, r[0]), max(end, r[1])
 		}
 	}
-	return 0, 0, false
+	m.lines[m.row] = slices.Delete(m.lines[m.row], start, end)
+	m.col = start
 }
 
-// markerAfter returns the paste marker starting at the cursor.
-func (m *editorModel) markerAfter() (start, end int, ok bool) {
+// snap moves a cursor that landed inside a paste marker to its start or
+// end, whichever lies the way it moved from (row, col).
+func (m *editorModel) snap(row, col int) {
 	for _, r := range m.markers() {
-		if r[0] == m.col {
-			return r[0], r[1], true
+		if r[0] < m.col && m.col < r[1] {
+			if m.row < row || m.row == row && m.col < col {
+				m.col = r[0]
+			} else {
+				m.col = r[1]
+			}
+			return
 		}
 	}
-	return 0, 0, false
 }
 
 // markers lists the rune ranges of the current line's paste markers.

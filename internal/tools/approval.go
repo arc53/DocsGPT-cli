@@ -227,12 +227,18 @@ func readReason(real string) string {
 	if err != nil || !filepath.IsLocal(rel) {
 		return "outside the working directory"
 	}
+	// Compared as files: on macOS and Windows "cd /users/me" is the home
+	// directory under another spelling, which the path keeps.
 	if home, err := os.UserHomeDir(); err == nil {
-		if h, err := filepath.EvalSymlinks(home); err == nil {
-			home = h
-		}
-		if r, err := filepath.Rel(cwd, home); err == nil && filepath.IsLocal(r) {
-			return "the working directory holds your home directory"
+		if wd, err := os.Stat(cwd); err == nil {
+			for d := home; ; d = filepath.Dir(d) {
+				if fi, err := os.Stat(d); err == nil && os.SameFile(fi, wd) {
+					return "the working directory holds your home directory"
+				}
+				if filepath.Dir(d) == d {
+					break
+				}
+			}
 		}
 	}
 	for _, name := range strings.Split(rel, string(filepath.Separator)) {
@@ -246,9 +252,12 @@ func readReason(real string) string {
 // secretNames are files and directories that commonly hold credentials.
 var secretNames = map[string]bool{
 	".ssh": true, ".gnupg": true, ".aws": true, ".azure": true, ".kube": true, ".docker": true,
-	".docsgpt": true, ".password-store": true, ".netrc": true, "_netrc": true, ".git-credentials": true,
-	".npmrc": true, ".pypirc": true, ".pgpass": true, ".htpasswd": true, ".vault-token": true,
-	"credentials": true, "credentials.json": true,
+	".docsgpt": true, ".password-store": true, "gcloud": true, ".netrc": true, "_netrc": true,
+	".npmrc": true, ".yarnrc.yml": true, ".pypirc": true, ".pgpass": true, ".my.cnf": true, ".mylogin.cnf": true,
+	".htpasswd": true, ".vault-token": true, ".envrc": true, ".dockercfg": true, ".s3cfg": true, ".boto": true,
+	".terraformrc": true, "terraform.rc": true, ".authinfo": true, "auth.json": true,
+	"secrets": true, ".secrets": true, ".git-credentials": true, "credentials": true, "credentials.json": true,
+	"credentials.toml": true, "credentials.db": true, "application_default_credentials.json": true,
 }
 
 // secretName reports whether a file or directory name suggests secrets:
@@ -257,10 +266,12 @@ func secretName(name string) bool {
 	name = strings.ToLower(name)
 	switch ext := filepath.Ext(name); {
 	case secretNames[name], name == ".env", strings.HasPrefix(name, ".env."), ext == ".env",
+		strings.HasPrefix(name, "secrets."), strings.HasPrefix(name, "client_secret"),
 		strings.HasPrefix(name, "id_") && ext == "", strings.HasSuffix(name, "_history"):
 		return true
 	default:
-		return slices.Contains([]string{".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".kdbx", ".ppk", ".gpg", ".asc", ".tfstate", ".tfvars"}, ext)
+		return slices.Contains([]string{".pem", ".key", ".p12", ".pfx", ".p8", ".jks", ".keystore", ".kdbx",
+			".keychain", ".keychain-db", ".ppk", ".gpg", ".asc", ".ovpn", ".tfstate", ".tfvars"}, ext)
 	}
 }
 

@@ -75,6 +75,7 @@ var (
 	globalNoTools     bool
 	globalAutoApprove bool
 	globalTimeout     int // seconds a tool command may run
+	globalNoStdin     bool
 	chatContinue      bool
 	chatResume        bool
 )
@@ -306,6 +307,9 @@ func init() {
 		f.IntVar(&globalTimeout, "tool-timeout", 30, "Seconds a command run by the agent may take")
 		f.Bool("no-motion", false, "")
 		f.MarkDeprecated("no-motion", "the banner no longer animates")
+	}
+	for _, c := range []*cobra.Command{rootCmd, askCmd} {
+		c.Flags().BoolVar(&globalNoStdin, "no-stdin", false, "Don't read piped input (for ssh, CI jobs and while-read loops)")
 	}
 	for _, c := range []*cobra.Command{rootCmd, chatCmd} {
 		c.Flags().BoolVarP(&chatContinue, "continue", "c", false, "Continue the latest chat in this directory")
