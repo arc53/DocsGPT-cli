@@ -83,11 +83,12 @@ func Interactive() bool {
 type sizer interface{ setSize(w, h int) }
 
 // run drives one prompt inline on stdout, or on stderr when toStderr is
-// set, and returns its final model.
+// set, and returns its final model. With in, it reads stdin through in, the
+// terminal reporting modified keys meanwhile.
 func run(m interface {
 	tea.Model
 	sizer
-}, toStderr bool) (tea.Model, error) {
+}, toStderr bool, in *ttyInput) (tea.Model, error) {
 	out := os.Stdout
 	if toStderr {
 		out = os.Stderr
@@ -103,7 +104,16 @@ func run(m interface {
 	}
 	// bubbletea would end on TERM as if the prompt were answered, and leave
 	// HUP to kill the process in raw mode; both stop the prompt instead.
-	p := tea.NewProgram(m, tea.WithOutput(out), tea.WithoutSignalHandler())
+	opts := []tea.ProgramOption{tea.WithOutput(out), tea.WithoutSignalHandler()}
+	if in != nil {
+		opts = append(opts, tea.WithInput(in))
+		out.WriteString(keysOn)
+		defer out.WriteString(keysOff) // a panic in the program too
+	}
+	p := tea.NewProgram(m, opts...)
+	if in != nil {
+		in.send = p.Send
+	}
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigs)

@@ -44,11 +44,11 @@ const quitWindow = time.Second
 // shown (pastes as their markers), or io.EOF when the user quits: Ctrl+D on
 // an empty editor, or Ctrl+C twice.
 func (e *Editor) Run() (text, shown string, err error) {
-	final, err := run(newEditorModel(e), false)
-	if err != nil {
+	m := newEditorModel(e)
+	m.tty = newTTYInput()
+	if _, err := run(m, false, m.tty); err != nil {
 		return "", "", err
 	}
-	m := final.(*editorModel)
 	if m.quit {
 		return "", "", io.EOF
 	}
@@ -73,6 +73,8 @@ type editorModel struct {
 	done     bool
 	quit     bool
 	away     bool // in $EDITOR: the frame is cleared, or it would stay above
+
+	tty *ttyInput // nil off a Unix terminal
 }
 
 type (
@@ -561,9 +563,26 @@ func (m *editorModel) externalEditor() tea.Cmd {
 	f.Close()
 	args := append(strings.Fields(editor), f.Name())
 	m.away = true
-	return tea.ExecProcess(exec.Command(args[0], args[1:]...), func(err error) tea.Msg {
-		return editedMsg{f.Name(), err}
-	})
+	done := func(err error) tea.Msg { return editedMsg{f.Name(), err} }
+	if m.tty == nil {
+		return tea.ExecProcess(exec.Command(args[0], args[1:]...), done)
+	}
+	return tea.Exec(plainKeys{exec.Command(args[0], args[1:]...)}, done)
+}
+
+// plainKeys runs a program on the terminal itself (bubbletea would hand it
+// ttyInput, which an exec.Cmd copies through a pipe), with the key reports
+// as they were.
+type plainKeys struct{ *exec.Cmd }
+
+func (c plainKeys) SetStdin(r io.Reader)  { c.Stdin = r.(*ttyInput).File }
+func (c plainKeys) SetStdout(w io.Writer) { c.Stdout = w }
+func (c plainKeys) SetStderr(w io.Writer) { c.Stderr = w }
+
+func (c plainKeys) Run() error {
+	os.Stdout.WriteString(keysOff)
+	defer os.Stdout.WriteString(keysOn)
+	return c.Cmd.Run()
 }
 
 // isCommand reports whether name is one of the commands.

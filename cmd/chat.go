@@ -31,8 +31,8 @@ var chatCmd = &cobra.Command{
 	Long: `Start an interactive multi-turn chat session with DocsGPT.
 
 Type / for the commands, !cmd to run a shell command and send its output with
-your next message (!!cmd to keep it to yourself). Enter sends, Ctrl+J or
-Alt+Enter (or a trailing \) starts a new line, ↑/↓ browse earlier prompts and
+your next message (!!cmd to keep it to yourself). Enter sends, Shift+Enter,
+Ctrl+J or Alt+Enter (or a trailing \) starts a new line, ↑/↓ browse earlier prompts and
 Ctrl+G edits the message in $EDITOR. Ctrl+C stops an answer or clears the
 input; twice on an empty input (or Ctrl+D) quits.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -564,7 +564,7 @@ func (s *chatSession) help(string) {
 	for _, k := range [][2]string{
 		{"!cmd", "run a command, its output goes with your next message (!!cmd: not sent)"},
 		{"enter", "send"},
-		{"ctrl+j, alt+enter", "new line (or end the line with \\)"},
+		{"shift+enter, ctrl+j", "new line (alt+enter too, or end the line with \\)"},
 		{"↑ ↓", "move between lines, browse earlier messages"},
 		{"ctrl+g", "edit the message in $EDITOR"},
 		{"ctrl+c", "stop the answer, clear the input; twice to quit"},

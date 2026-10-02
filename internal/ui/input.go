@@ -25,7 +25,7 @@ type Input struct {
 
 // Run shows the prompt and returns the submitted text.
 func (in Input) Run() (string, error) {
-	m, err := run(newInputModel(in), in.Stderr)
+	m, err := run(newInputModel(in), in.Stderr, nil)
 	if err != nil {
 		return "", err
 	}

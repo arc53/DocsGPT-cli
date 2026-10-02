@@ -53,7 +53,7 @@ func (s Select) Run() (string, error) {
 	if len(s.Items) == 0 {
 		return "", errors.New("ui: select has no items")
 	}
-	m, err := run(newSelectModel(s), s.Stderr)
+	m, err := run(newSelectModel(s), s.Stderr, nil)
 	if err != nil {
 		return "", err
 	}
