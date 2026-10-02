@@ -117,6 +117,7 @@ may still change.
 
 ```bash
 docsgpt-cli                                 # interactive chat
+docsgpt-cli -c                              # continue the latest chat here
 docsgpt-cli "how do I rotate the API key?"  # ask once and exit
 git diff | docsgpt-cli "review this"        # send piped input along
 docsgpt-cli login                           # add an agent API key
@@ -132,15 +133,51 @@ tail -n 50 app.log | docsgpt-cli "Why does this fail?"
 docsgpt-cli "Summarize the README" > summary.md
 ```
 
+With a question, piped input is read when it starts arriving within a second
+(so an idle stdin under ssh or CI is left alone), and a redirected file only
+from its start; input over 1 MB is cut.
+
 A single word that looks like a mistyped command (`docsgpt-cli agnets`) is
 rejected with a hint instead of being sent; `docsgpt-cli -- <words>` always sends
 them as a question. `ask` and `chat` still work as before.
 
 Chat flags: `--no-stream`, `--no-context` (don't send the working directory, its
-files or shell history), `--auto-approve` (run the agent's tool calls without
-asking) and `--tool-timeout <seconds>` (formerly `--timeout`). Every command
+files, AGENTS.md or shell history), `--no-tools` (don't let the agent run
+commands or touch files), `--auto-approve` (run the agent's tool calls without
+asking), `--tool-timeout <seconds>` (formerly `--timeout`), and `-c/--continue`
+or `-r/--resume` to pick up an earlier chat. Every command
 takes `--url`, `--key <name>` and `--token`; run `docsgpt-cli <command> --help`
 for the rest.
+
+### Chatting
+
+Enter sends; Ctrl+J or Alt+Enter (or a line ending in `\`) starts a new line,
+↑/↓ walk through earlier messages, Ctrl+G edits the message in `$EDITOR`, and a
+long paste shows as `[paste #1 +200 lines]` until it is sent. Ctrl+C stops an
+answer or clears the input; press it twice on an empty input, or Ctrl+D, to
+quit. Type `/` for the commands:
+
+| Command | |
+|---|---|
+| `/new` | start a new conversation (`/clear`) |
+| `/resume` | pick an earlier chat in this directory |
+| `/copy` | copy the last answer, or one of its code blocks |
+| `/export [file]` | save the conversation as markdown |
+| `/think` | show or hide the model's reasoning |
+| `/key` | switch to another stored key (or add one) |
+| `/settings` | change settings |
+| `/help`, `/quit` | |
+
+`!command` runs a shell command and sends its output along with your next
+message; `!!command` runs it without sending anything.
+
+Each chat starts with a short description of where you are: the working
+directory, its first 50 entries, and the `AGENTS.md` (or `CLAUDE.md`) files from
+the repository root down to it. Recent shell commands are sent only if you turn
+on `send_last_commands`. Chats are saved under `~/.docsgpt/sessions/` and your
+prompts in `~/.docsgpt/history` (lines that look like keys or tokens are left
+out); `docsgpt-cli -c` continues the latest chat of the directory and `-r` lets
+you pick one.
 
 ### Signing in
 
@@ -174,7 +211,8 @@ docsgpt-cli config path                       # ~/.docsgpt/config.json
 
 Keys: `url`, `default_key`, `auto_update` (on/notify/off), `banner`
 (always/once/never), `theme` (auto/dark/light), `send_current_directory`,
-`send_directory_contents`, `send_last_commands`, `number_of_last_commands`.
+`send_directory_contents`, `send_project_instructions` (AGENTS.md),
+`send_last_commands` (off by default), `number_of_last_commands`.
 
 ### Local tools
 

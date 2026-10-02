@@ -22,7 +22,7 @@ sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, pa
 cmd/
   root.go            → Root command = the entry point (chat on a TTY, else one-shot ask), typo guard, global flags (--url, --key, --token), chat flags, help groups + usage template, Execute (startup config, update gate)
   ask.go             → Single-shot Q&A with streaming + tool support (hidden alias; the root runs it)
-  chat.go            → Interactive multi-turn chat REPL with tool support (hidden alias; optional first message)
+  chat.go            → Interactive chat (hidden alias; optional first message): editor loop, the slash command table, !cmd, sessions (-c/-r//resume)
   config.go          → config get / set / show / path + the settings menu; one `settings` table drives all of them
   install.go         → Hidden `install` (run by the install scripts), wiring over internal/install
   update.go          → Self-update to latest GitHub release (--check, --yes, --rollback, hidden --worker)
@@ -32,7 +32,7 @@ cmd/
   login.go           → login / logout / whoami / hidden keys: agent API keys + the PAT, the key picker, first-run key prompt (chatKey)
   agents.go          → agents list / export / plan / apply / delete (agents as code), agents trigger (incoming webhook); flags + output only, the flows live in internal/manage
   sources.go         → sources list / upload / delete, agents prompts / agents tools (old `prompts list` / `tools list` hidden)
-  utils.go           → printError, extractCommand, copyToClipboard
+  utils.go           → printError, codeBlocks/extractCommand, copyToClipboard
 internal/
   config/
     config.go        → Unified config load/save/migrate from ~/.docsgpt/config.json; key/token/URL resolution (flag > env > config, ErrNoKey), key and token redaction
@@ -59,7 +59,9 @@ internal/
     install.go       → InstallService / UninstallService over systemd (service.go), launchd (launchd.go), Task Scheduler (wintask.go)
     transport.go     → Signed polling + SSE session transport; invocation.go runs and streams tool calls; pairing.go, device.go, revoke.go
   context/
-    enricher.go      → Context building: cwd, dir contents, shell history
+    enricher.go      → the <context> block: cwd, capped listing, AGENTS.md/CLAUDE.md (git root → cwd, 12KB), shell history (opt-in)
+  session/
+    session.go       → saved chats: ~/.docsgpt/sessions/<encoded cwd>/<time>_<id>.jsonl (0600, dirs 0700); header + message/state lines, List/Load/Turns
   display/
     theme.go         → semantic palette (pi's OKHSL tones: hex + 256 + 16-color fallbacks,
                        dark/light; plain under NO_COLOR); also sets ui.Colors. InitTheme
@@ -72,7 +74,8 @@ internal/
     markdown.go      → glamour style built from the palette (no margins/fills); top-level
                        code fences drawn by us (dim ``` lines, 2-space indent, chroma
                        tokens colored from the palette)
-    chrome.go        → one dim header line (docsgpt · key · host · cwd), chat key hints
+    chrome.go        → one dim header line (docsgpt · key · host · cwd) for ask; chat
+                       welcome line, footer text, the user-message block, Ago
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
                        (live last-5-lines region), DiffPreview for writes
     sources.go       → dim numbered "Sources" block, OSC 8 links, TTY only
@@ -81,7 +84,9 @@ internal/
     banner.go        → dino banner, interactive chat only, default "once", no animation
   ui/                → inline bubbletea prompts: Select (list / inline row, filter, key
                        shortcuts), Confirm, Input (mask, validate), Spinner (stderr);
-                       Stderr option for prompts drawn while stdout carries an answer
+                       Stderr option for prompts drawn while stdout carries an answer.
+                       editor.go: the chat input (Editor); history.go: prompt history
+                       file; hold_*.go: echo off while an answer streams, DiscardInput
   tools/
     definitions.go   → Tool schemas: run_command, read_file (offset/limit), write_file
     approval.go      → Session: per chat session / ask run; title, approval, execution,
@@ -110,8 +115,10 @@ rejects (exit 2, with a `-- <words>` hint) a lone bare word that is a prefix or 
 subcommands ("agnets list"); a quoted multi-word question or anything after `--` is
 never checked. Group commands (`agents`, `sources`, `config`, `host`) reject unknown
 subcommands the same way (`subcommandArgs`). Only `--url/--key/--token` are global;
-`--no-stream/--no-context/--auto-approve/--tool-timeout` live on the root, ask and
-chat (`--timeout` is a deprecated alias on ask/chat; `--theme`/`--no-motion` hidden).
+`--no-stream/--no-context/--no-tools/--auto-approve/--tool-timeout` live on the root,
+ask and chat (`--timeout` is a deprecated alias on ask/chat; `--theme`/`--no-motion`
+hidden); `-c/--continue` and `-r/--resume` on the root and chat open the chat (a TTY
+is required; arguments become its first message).
 Root `SilenceUsage` + flag error func: usage errors exit 2 everywhere, runtime errors
 print no usage; `ui.ErrCancelled` exits 1 without a message.
 
@@ -132,9 +139,9 @@ removing the default promotes the first remaining key. `whoami`: active key
 `keys` is a hidden alias of the TTY picker (the old add/set/delete flags are gone).
 
 ### ask command
-1. Reads piped/redirected stdin (pipes and files only, never a TTY or /dev/null): alone it is the question, with args it is appended as `<stdin>…</stdin>`
+1. Reads piped/redirected stdin (pipes, sockets and files; never a TTY, mintty included, or a device), at most 1 MB (cut with a note): alone it is the question and is read to EOF; with args it is appended as `<stdin>…</stdin>`, but only a file read from its start (offset 0: a `while read` loop shares the file) or a pipe whose data starts within 1s (`stdinWait`; ssh and CI leave stdin open and idle)
 2. Loads config from `~/.docsgpt/config.json`, resolves API key (Bearer auth, first-run prompt via `chatKey`) and base URL
-3. Optionally enriches question with context (cwd, dir listing, shell history)
+3. Unless `--no-context`, prepends the `<context>` block (see chat)
 4. Sends to `POST {base_url}/v1/chat/completions` with streaming
 5. Handles tool calls (run_command, read_file, write_file) with user approval loop; tools are only offered when stdin is a TTY or `--auto-approve` is set. Tool UI (titles, approval prompt, command output, status) goes to stderr
 6. stdout not a TTY: stdout carries only the raw answer (no header, sources, clipboard). On a TTY: header, rendered answer, dim `Sources` block, first bash/sh block copied to the clipboard (with a dim note)
@@ -142,16 +149,50 @@ removing the default promotes the first remaining key. `whoami`: active key
 Errors (every command) go to stderr; a missing question or a bad flag is a usage error (exit 2, flags with a `--help` pointer); Ctrl+C exits `ask` with 130.
 
 ### chat command
-Interactive REPL with multi-turn conversation history. Same API + tool support.
-Each turn sends the full messages plus the `conversation_id` the server returned
-for the previous turn; a current server then takes the history from that stored
-conversation (no duplication, the messages are ignored except the last question
-and a system message), an older one falls back to the messages. `/clear` and a
-failed turn start a new conversation; a failed or interrupted turn is dropped
-from the local history.
-Special commands: `/quit`, `/clear`, `/copy`, `/think`. Ctrl+C cancels the in-flight
-request (signal.NotifyContext in the executor; the prompt library restores cooked mode
-around the executor so it is a real SIGINT) or clears the input line; Ctrl+D exits.
+Loop: `ui.Editor.Run` (a fresh inline bubbletea program per message, so it is never
+running while an answer streams) → `handle`: `/command`, `!cmd`, or a message.
+- Editor: dim rules above and below the text, a dim footer (`…/dir · key · host`,
+  right: `think on`, `+N command outputs`). Enter sends; Ctrl+J / Alt+Enter / a
+  trailing `\` insert a newline; ↑/↓ move by visual row, history at the edges
+  (`~/.docsgpt/history`, JSON string per line, 0600, 500 entries, entries ≤16KB and
+  not matching `secretLike`); bracketed pastes >10 lines or >1000 chars become
+  `[paste #N +L lines]` markers (atomic for cursor/backspace, expanded on send, shown
+  collapsed in the scrollback); Ctrl+A/E/K/U/W, Alt+←/→; Ctrl+G opens $VISUAL/$EDITOR;
+  Ctrl+C clears, twice within 1s on an empty input quits (dim hint); Ctrl+D on empty
+  quits. Typing `/` opens the command popup (prefix then fuzzy matches); Tab
+  completes, Enter runs the exact or selected command at once, Esc closes it.
+- Commands (`chatCommands`, one table for popup, /help, dispatch): /new (/clear),
+  /resume, /copy (whole answer, or a `ui.Select` of its code blocks), /export [file]
+  (markdown, default `docsgpt-<date>.md`), /think, /key (switch or add a key → new
+  conversation), /settings (the config menu), /help, /quit (/exit). An unknown
+  `/word` is an error; `/path/like …` is a message. `!cmd` runs through
+  `tools.RunShell` (no approval, no time limit) and its output is prepended to the
+  next message; `!!cmd` is not sent.
+- Rhythm: every block ends with one blank line (user block, answer + sources,
+  command output, tool blocks open with their own); the editor and pickers draw
+  right after it and leave nothing when dismissed.
+- Sending: the user block (`display.UserMessage`, subtle background, `❯` without
+  colors), then `RunWithTools` with the messages + `conversation_id`; the server
+  then takes the history from the stored conversation, an older one from the
+  messages. A failed or interrupted turn is dropped; a failed one also drops the
+  conversation id. Ctrl+C is a real SIGINT (signal.NotifyContext) since the editor
+  is not running; `ui.HoldInput` turns the echo off meanwhile (typed text waits for
+  the next editor; `DiscardInput` before a tool approval).
+- Context: the server treats `system` messages as a prompt override that agents
+  ignore by default, so ask and chat put a `<context>` block (cwd, first 50 entries
+  with `/` on dirs, AGENTS.md or else CLAUDE.md of every dir from the git root down
+  to cwd within 12KB, shell history only with `send_last_commands`, no placeholder
+  text) before the first user message, and again only when it changes.
+  `--no-context` keeps the tools; `--no-tools` drops them.
+- Sessions (`internal/session`): created lazily with the first answer; header
+  (cwd, server, key, conversation_id), then `message` lines (the sent message, `text`
+  = what was typed, sources on the last assistant message) and `state` lines when the
+  key or conversation changes. `-c` = latest in cwd, `-r`/`/resume` = filterable
+  picker (first message · age · count · key). Resuming reprints the last 3
+  exchanges under `── resumed · 3h ago · N messages ──`, restores history, the
+  conversation id and the last context block; a chat of another key switches to it
+  when stored (and no --key/env override), else warns and goes on in a new
+  conversation; another server likewise. /new and /key start a new session.
 The approval prompt is a bubbletea program on stderr; it reads keys in raw mode, so Ctrl+C there cancels the run at once.
 
 ### Auto-update flow
@@ -206,7 +247,8 @@ Single file: `~/.docsgpt/config.json`
   "settings": {
     "send_current_directory": true,
     "send_directory_contents": true,
-    "send_last_commands": true,
+    "send_project_instructions": true,
+    "send_last_commands": false,
     "number_of_last_commands": 3,
     "auto_update": "on"
   }
@@ -215,6 +257,8 @@ Single file: `~/.docsgpt/config.json`
 
 `token` is optional (written by `login`, removed by `logout`, omitted when empty); the file is always written as a 0600 temp file and renamed into place (atomic, never readable by others, tightens an older permissive file). Environment overrides: `DOCSGPT_API_KEY`, `DOCSGPT_TOKEN`, `DOCSGPT_URL`. `config get|set <key>` use the setting names `url` (= `base_url`), `default_key` and the `settings` fields; `config show` redacts keys (`config.RedactKey`, first/last 4) and the token.
 
+Settings missing from the file keep their defaults (`Load` decodes over `DefaultConfig`); `send_last_commands` defaults to false for new configs only, since saved configs always carry it. Also under `~/.docsgpt`: `history` (chat prompts) and `sessions/` (saved chats).
+
 Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on first run.
 
 ## Key dependencies
@@ -222,7 +266,7 @@ Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on fi
 - `spf13/cobra` — CLI framework
 - `charmbracelet/glamour` + `lipgloss` — markdown rendering and styling
 - `atotto/clipboard` — clipboard access
-- `elk-language/go-prompt` — interactive chat prompt (maintained fork of c-bata/go-prompt; the original never restores the terminal after raw mode, which broke the tool-approval prompt and Ctrl-C inside `chat`)
+- `charmbracelet/bubbletea` — every interactive prompt, the chat editor included
 - `minio/selfupdate` — atomic binary replacement for the update command
 - `golang.org/x/mod/semver` — version comparison
 - `gopkg.in/yaml.v3` — bench suite/case files
@@ -242,5 +286,5 @@ go build -o docsgpt-cli ./cmd/docsgpt-cli
 - Releases: `.github/workflows/release.yml` (dispatch, or a hand-pushed `v*` tag) → GoReleaser builds linux/darwin/windows (amd64+arm64) archives + checksums.txt with stable asset names, attaches `deployment/install.sh`/`install.ps1`, and commits a Homebrew **cask** to `arc53/homebrew-DocsGPT-cli` with `HOMEBREW_TAP_TOKEN` (`skip_upload: auto` keeps prereleases out of brew; the job only runs on `arc53/DocsGPT-cli`). Cut from Actions → Release → Run workflow (a `cli`/`sdk` bump input; one run tags the sdk, pushes the `go.mod` pin bump, then tags and releases the CLI in that order) — there is no local release target; see `RELEASING.md`
 - Install script: `docs.ac/install-cli` redirects to `releases/latest/download/install.sh`, so the live installer is whatever the newest release carries — a fix lands only on the next tag. Both installers verify the archive against `checksums.txt`, then hand off to `docsgpt-cli install`, which owns the PATH logic for every platform
 - SSE streaming parsed with stdlib bufio.Scanner (no external SSE lib)
-- Shell history: zsh, bash, fish
+- Shell history (opt-in context): zsh, bash, fish
 - Cross-platform: Unix + Windows
