@@ -30,7 +30,7 @@ var hostCmd = &cobra.Command{
 	Use:   "host",
 	Short: "Run docsgpt-cli as a long-lived daemon paired to a DocsGPT account",
 	Long: "Run docsgpt-cli as a long-lived daemon paired to a DocsGPT account.\n\n" +
-		"Approval mode is set in the DocsGPT UI under Settings -> Tools -> <your device>.",
+		"Pair a device in DocsGPT under Settings → Devices, where its approval mode is set too.",
 	Args: subcommandArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runHostDaemon()
