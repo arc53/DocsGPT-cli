@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -32,6 +33,9 @@ type Editor struct {
 	History  *History // nil for none
 	Footer   string   // left of the footer line
 	Status   string   // right of the footer line
+	// Pin draws the editor at the bottom of the window, blank rows between
+	// it and the text above; it collapses to where it started when done.
+	Pin bool
 }
 
 // PasteMarker matches the marker a collapsed paste leaves in the editor.
@@ -39,6 +43,13 @@ var PasteMarker = regexp.MustCompile(`\[paste #(\d+) (?:\+\d+ lines|\d+ chars)\]
 
 // quitWindow is how soon a second Ctrl+C on an empty editor quits.
 const quitWindow = time.Second
+
+// cursorWait bounds the wait for the terminal to say where the cursor is.
+const cursorWait = 500 * time.Millisecond
+
+// noCursorReports is set once a terminal left a cursor request unanswered:
+// later editors do not wait for it again.
+var noCursorReports atomic.Bool
 
 // Run edits one message. It returns the text with pastes expanded, and as
 // shown (pastes as their markers), or io.EOF when the user quits: Ctrl+D on
@@ -74,7 +85,13 @@ type editorModel struct {
 	quit     bool
 	away     bool // in $EDITOR: the frame is cleared, or it would stay above
 
-	tty *ttyInput // nil off a Unix terminal
+	tty      *ttyInput // nil off a Unix terminal
+	at       int       // pinned: the window row (from 1) the frame starts on, 0 if unknown
+	locating int       // the cursor position asked for (counting), 0 when none is due
+	asked    int       // cursor positions asked for
+	resizes  int       // counts resizes, so only the last one relocates
+	widths   []int     // the last frame's line widths
+	residue  int       // rows of an earlier frame a narrower window wrapped
 }
 
 type (
@@ -83,6 +100,9 @@ type (
 		path string
 		err  error
 	}
+	relocateMsg int
+	atMsg       int
+	unanswered  int // the cursor position asked for that has not come
 )
 
 func newEditorModel(e *Editor) *editorModel {
@@ -97,7 +117,31 @@ func newEditorModel(e *Editor) *editorModel {
 
 func (m *editorModel) setSize(w, h int) { m.width, m.height = max(w, 10), max(h, 5) }
 
-func (m *editorModel) Init() tea.Cmd { return nil }
+// Init asks where the cursor is when pinned: until the answer the editor
+// draws nothing, as it would be drawn in the wrong place.
+func (m *editorModel) Init() tea.Cmd {
+	if !m.Pin || m.tty != nil && noCursorReports.Load() {
+		return nil
+	}
+	return m.locate()
+}
+
+// locate asks for the cursor position, answered with a cursorMsg: by the
+// terminal through ttyInput, or the console on Windows. While it is due the
+// editor does not quit, so the answer never reaches the shell.
+func (m *editorModel) locate() tea.Cmd {
+	m.asked++
+	m.locating = m.asked
+	tty, n := m.tty, m.asked
+	return tea.Batch(func() tea.Msg {
+		if tty == nil {
+			return cursorMsg{consoleCursorRow()}
+		}
+		tty.cursor.Store(true)
+		os.Stdout.WriteString("\x1b[6n")
+		return nil
+	}, tea.Tick(cursorWait, func(time.Time) tea.Msg { return unanswered(n) }))
+}
 
 func (m *editorModel) text() string {
 	parts := make([]string, len(m.lines))
@@ -133,7 +177,67 @@ func (m *editorModel) setText(s string) {
 func (m *editorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		w, h := m.width, m.height
+		if m.at > 0 && msg.Width < w && len(m.widths) > 0 {
+			// The terminal wraps the frame's lines, and bubbletea redraws
+			// from below the extra rows; they stay above it.
+			for _, lw := range m.widths[:len(m.widths)-1] {
+				m.residue += max(0, (lw-1)/msg.Width)
+			}
+		}
 		m.setSize(msg.Width, msg.Height)
+		// The terminal may have moved the frame (rows to or from the
+		// scrollback): ask where it is once the window settles.
+		if m.at > 0 && (w != m.width || h != m.height) {
+			m.resizes++
+			n := m.resizes
+			return m, tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg { return relocateMsg(n) })
+		}
+	case relocateMsg:
+		if int(msg) == m.resizes && !m.done && m.locating == 0 {
+			return m, m.locate()
+		}
+	case unanswered:
+		if int(msg) != m.locating {
+			break
+		}
+		m.locating = 0
+		if m.tty != nil && m.at == 0 {
+			noCursorReports.Store(true)
+		}
+		if m.done {
+			return m, tea.Quit
+		}
+	case cursorMsg:
+		if m.locating == 0 {
+			break
+		}
+		m.locating = 0
+		switch {
+		case m.done:
+			return m, tea.Quit
+		case msg.row > 0 && m.at == 0:
+			m.at = msg.row
+		case msg.row > 0:
+			// After a resize: bubbletea left the cursor on the frame's last
+			// row. Rows the window wrapped are erased and drawn over.
+			top := max(1, msg.row-min(len(m.widths), m.height)+1)
+			k := min(m.residue, top-1)
+			m.residue = 0
+			if k == 0 {
+				m.at = top
+				break
+			}
+			return m, func() tea.Msg {
+				os.Stdout.WriteString("\x1b[" + strconv.Itoa(k) + "A")
+				return atMsg(top - k)
+			}
+		}
+	case atMsg:
+		// The cursor is k rows up: a full redraw from there (bubbletea
+		// would skip the rows that look unchanged).
+		m.at = int(msg)
+		return m, func() tea.Msg { return tea.WindowSizeMsg{Width: m.width, Height: m.height} }
 	case hintMsg:
 		if time.Since(m.quitAt) >= quitWindow {
 			m.quitAt = time.Time{}
@@ -308,6 +412,9 @@ func (m *editorModel) key(k tea.KeyMsg) tea.Cmd {
 
 func (m *editorModel) finish(quit bool) tea.Cmd {
 	m.done, m.quit, m.popup = true, quit, nil
+	if m.locating > 0 {
+		return nil // quits with the cursor position
+	}
 	return tea.Quit
 }
 
@@ -630,7 +737,7 @@ func (m *editorModel) refreshPopup() {
 }
 
 func (m *editorModel) View() string {
-	if m.done || m.away {
+	if m.done || m.away || m.locating > 0 && m.at == 0 {
 		return summary("")
 	}
 	rows := m.layout()
@@ -668,12 +775,25 @@ func (m *editorModel) View() string {
 		left, right = "press ctrl+c again to quit", ""
 	}
 	if right != "" {
-		room := m.width - lipgloss.Width(right) - 2
-		left = ansi.Truncate(left, max(room, 0), "…")
+		// Cut from the start: the end has the directory's name.
+		room := max(0, m.width-lipgloss.Width(right)-2)
+		if w := lipgloss.Width(left); w > room {
+			left = ansi.TruncateLeft(left, w-room+1, "…")
+		}
 		left += strings.Repeat(" ", max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right))) + right
 	}
 	lines = append(lines, dim.Render(ansi.Truncate(left, m.width, "…")))
-	return frame(lines, m.width)
+	if gap := m.height - (m.at - 1) - len(lines); m.at > 0 && gap > 0 {
+		lines = append(make([]string, gap), lines...)
+	} else if m.at > 0 {
+		m.at = max(1, m.height-len(lines)+1) // the window scrolls up under it
+	}
+	m.widths = m.widths[:0]
+	for i, l := range lines {
+		lines[i] = ansi.Truncate(l, m.width, "…")
+		m.widths = append(m.widths, lipgloss.Width(lines[i]))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // rule is the editor's border, noting rows scrolled out of view.

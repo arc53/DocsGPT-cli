@@ -268,3 +268,41 @@ func TestEditorSetTextPrintable(t *testing.T) {
 		t.Fatalf("setText kept controls: %q", got)
 	}
 }
+
+// TestEditorPinned: the frame fills the window from the row it starts on
+// down, and waits for the cursor position before quitting.
+func TestEditorPinned(t *testing.T) {
+	m := testEditor()
+	m.Pin = true
+	m.setSize(40, 20)
+	m.Init()
+	if m.locating == 0 || m.View() != " " {
+		t.Fatal("drawn before the cursor position came")
+	}
+	if cmd := press(m, runes("hi"), key(tea.KeyEnter)); cmd != nil {
+		t.Fatal("quit with the cursor position due")
+	}
+	if _, cmd := m.Update(cursorMsg{5}); cmd == nil || m.at != 0 {
+		t.Fatal("did not quit once it came")
+	}
+
+	m = testEditor()
+	m.Pin = true
+	m.setSize(40, 20)
+	m.Init()
+	m.Update(cursorMsg{5})
+	if rows := strings.Split(m.View(), "\n"); len(rows) != 16 || rows[0] != "" || !strings.HasPrefix(ansi.Strip(rows[12]), "───") {
+		t.Fatalf("frame from row 5: %d rows, %q", len(rows), rows)
+	}
+	// A narrower window wraps the rules: two rows above the frame then.
+	m.Update(tea.WindowSizeMsg{Width: 20, Height: 20})
+	m.View()
+	m.Update(relocateMsg(m.resizes))
+	if _, cmd := m.Update(cursorMsg{20}); cmd == nil || m.at != 5 {
+		t.Fatalf("at %d, without moving up over the wrapped rows", m.at)
+	}
+	m.Update(atMsg(3))
+	if rows := strings.Split(m.View(), "\n"); len(rows) != 18 {
+		t.Fatalf("frame from row 3: %d rows", len(rows))
+	}
+}

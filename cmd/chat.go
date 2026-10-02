@@ -60,6 +60,7 @@ type chatSession struct {
 	sess        *session.Session
 	lastAnswer  string
 
+	newline       string // the key for a new line, for the header
 	showReasoning bool
 	toolDefs      []docsgpt.Tool
 	tools         *tools.Session
@@ -104,17 +105,17 @@ func runChat(first string) error {
 	baseURL := cfg.ResolveURL(globalURL)
 	s := &chatSession{
 		cfg: cfg, keyName: keyName, baseURL: baseURL,
-		client: docsgpt.NewClient(baseURL, apiKey),
-		tools:  &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second},
+		client:  docsgpt.NewClient(baseURL, apiKey),
+		tools:   &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second},
+		newline: ui.NewlineKey(),
 	}
 	s.reset()
 	if !globalNoTools {
 		s.toolDefs = tools.ToolDefinitions()
 	}
 
-	display.ShowBanner(cfg.Settings.Banner)
-	fmt.Println(display.ChatWelcome(Version))
-	fmt.Println()
+	// -r picks the chat first, inline: leaving the picker leaves the
+	// window as it was.
 	switch {
 	case chatResume:
 		if !s.pickSession() {
@@ -124,15 +125,18 @@ func runChat(first string) error {
 		cwd, _ := os.Getwd()
 		if list, _ := session.List(cwd); len(list) > 0 {
 			s.resume(list[0])
-		} else {
-			fmt.Println(display.Dim("No earlier chat in this directory; starting a new one.") + "\n")
+			break
 		}
+		s.top()
+		fmt.Println(display.Dim("No earlier chat in this directory; starting a new one.") + "\n")
+	default:
+		s.top()
 	}
 
 	if first = strings.TrimSpace(first); first != "" {
 		s.send(first, first)
 	}
-	editor := &ui.Editor{History: ui.LoadHistory(filepath.Join(config.Dir(), "history"))}
+	editor := &ui.Editor{History: ui.LoadHistory(filepath.Join(config.Dir(), "history")), Pin: true}
 	for _, c := range chatCommands {
 		editor.Commands = append(editor.Commands, ui.Command{Name: c.name, Description: c.desc})
 	}
@@ -156,17 +160,33 @@ func runChat(first string) error {
 	return s.stopped
 }
 
-// footer returns the text under the input: where, as whom and what is on.
+// footer returns the text under the input: where (left), as whom and
+// what is on (right).
 func (s *chatSession) footer() (left, right string) {
 	cwd, _ := os.Getwd()
-	var status []string
+	status := []string{s.keyName, hostOf(s.baseURL)}
 	if n := len(s.shellOutput); n > 0 {
 		status = append(status, fmt.Sprintf("+%d command %s", n, plural(n, "output", "outputs")))
 	}
 	if s.showReasoning {
 		status = append(status, "think on")
 	}
-	return display.ChatFooter(cwd, s.keyName, s.baseURL), strings.Join(status, " · ")
+	right = strings.Join(status, " · ")
+	return display.ChatFooter(cwd, right), right
+}
+
+// top starts the window over with the chat's header: what it showed goes
+// to the scrollback.
+func (s *chatSession) top() {
+	if ui.Interactive() {
+		display.ClaimScreen()
+	}
+	display.ShowBanner(s.cfg.Settings.Banner)
+	var files []string
+	if !globalNoContext {
+		files = ctxenrich.Files(s.cfg.Settings)
+	}
+	fmt.Println(display.ChatHeader(Version, s.newline, files))
 }
 
 // handle acts on one submitted input: a command, a shell command or a
@@ -368,6 +388,7 @@ func (s *chatSession) resume(sess *session.Session) {
 	}
 
 	turns := sess.Turns()
+	s.top()
 	fmt.Println(display.Dim(fmt.Sprintf("── resumed · %s · %d %s ──", display.Ago(sess.Updated), len(turns), plural(len(turns), "message", "messages"))) + "\n")
 	for _, t := range turns[max(0, len(turns)-3):] {
 		display.UserMessage(t.Question)
@@ -383,7 +404,7 @@ func (s *chatSession) resume(sess *session.Session) {
 
 func (s *chatSession) newConversation(string) {
 	s.reset()
-	fmt.Println(display.Dim("New conversation.") + "\n")
+	s.top()
 }
 
 func (s *chatSession) toggleThinking(string) {

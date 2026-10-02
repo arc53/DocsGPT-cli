@@ -52,6 +52,20 @@ func Build(s config.Settings) string {
 	return "<context>\nThe user is asking from a terminal (docsgpt-cli). Their environment:\n" + b.String() + "</context>"
 }
 
+// Files names the instruction files Build sends, relative to the working
+// directory.
+func Files(s config.Settings) []string {
+	cwd, err := os.Getwd()
+	if err != nil || !s.SendProjectInstructions {
+		return nil
+	}
+	var names []string
+	for _, f := range instructions(cwd) {
+		names = append(names, f.name)
+	}
+	return names
+}
+
 // Prepend puts the context block before text, when there is one.
 func Prepend(block, text string) string {
 	if block == "" {
