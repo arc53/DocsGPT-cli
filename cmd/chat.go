@@ -455,6 +455,7 @@ func (s *chatSession) export(file string) {
 			b.WriteString("- " + title + "\n")
 		}
 	}
+	os.MkdirAll(filepath.Dir(file), 0o755)
 	if err := os.WriteFile(file, []byte(b.String()), 0o644); err != nil {
 		printError(err.Error())
 		fmt.Println()
