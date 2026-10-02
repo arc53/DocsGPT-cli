@@ -47,9 +47,9 @@ func RenderApprovalCard(toolName, detail string, preview []string, risk string) 
 	case "safe":
 		badge = T.Success.Render(" SAFE ")
 	case "caution":
-		badge = T.Warn.Render(" CAUTION ")
+		badge = T.Warning.Render(" CAUTION ")
 	case "danger":
-		badge = T.Danger.Render(" DANGER ")
+		badge = T.Error.Render(" DANGER ")
 	default:
 		badge = T.Muted.Render(" " + risk + " ")
 	}
@@ -58,7 +58,7 @@ func RenderApprovalCard(toolName, detail string, preview []string, risk string) 
 	header := fmt.Sprintf("🔧 %s  %s", T.Accent.Bold(true).Render(toolName), badge)
 
 	// Detail line
-	detailLine := T.Info.Render(detail)
+	detailLine := T.Link.Render(detail)
 
 	// Build body parts
 	parts := []string{header, detailLine}
@@ -77,7 +77,7 @@ func RenderApprovalCard(toolName, detail string, preview []string, risk string) 
 
 	// Separator + choices
 	choices := fmt.Sprintf("  %s  %s  %s",
-		T.Selection.Render("[1] Approve"),
+		T.Accent.Render("[1] Approve"),
 		T.Muted.Render("[2] Deny"),
 		T.Muted.Render("[3] Edit"),
 	)
@@ -94,7 +94,7 @@ func RenderApprovalCard(toolName, detail string, preview []string, risk string) 
 
 	cardStyle := lipgloss.NewStyle().
 		Border(border).
-		BorderForeground(T.Border.GetForeground()).
+		BorderForeground(T.Dim.GetForeground()).
 		Padding(0, 1).
 		Width(w)
 

@@ -63,7 +63,7 @@ func (r *StreamRenderer) Delta(delta docsgpt.Delta) {
 	if delta.ReasoningContent != "" && r.ShowReasoning && r.tty {
 		var b strings.Builder
 		r.erase(&b)
-		b.WriteString(T.Reasoning.Render(delta.ReasoningContent))
+		b.WriteString(T.Thinking.Render(delta.ReasoningContent))
 		io.WriteString(r.out, b.String())
 		r.midLine = !strings.HasSuffix(delta.ReasoningContent, "\n")
 		r.started = true

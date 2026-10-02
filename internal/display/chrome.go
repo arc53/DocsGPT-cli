@@ -44,7 +44,7 @@ func RenderHeader(keyName, baseURL, cwd string) string {
 
 	style := lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder(), false, false, true, false).
-		BorderForeground(T.Border.GetForeground()).
+		BorderForeground(T.Dim.GetForeground()).
 		Width(w - 2)
 
 	return style.Render(header)

@@ -15,6 +15,11 @@ func Muted(s string) string {
 	return T.Muted.Render(s)
 }
 
+// Dim renders text in the dim color (chrome, hints, metadata).
+func Dim(s string) string {
+	return T.Dim.Render(s)
+}
+
 // Success renders text in the success color.
 func Success(s string) string {
 	return T.Success.Render(s)
@@ -22,30 +27,20 @@ func Success(s string) string {
 
 // Warn renders text in the warning color.
 func Warn(s string) string {
-	return T.Warn.Render(s)
+	return T.Warning.Render(s)
 }
 
-// Danger renders text in the danger/error color.
+// Danger renders text in the error color.
 func Danger(s string) string {
-	return T.Danger.Render(s)
+	return T.Error.Render(s)
 }
 
-// Info renders text in the info/highlight color.
+// Info renders text in the link color.
 func Info(s string) string {
-	return T.Info.Render(s)
+	return T.Link.Render(s)
 }
 
 // ErrorMsg prints a formatted error message to stderr.
 func ErrorMsg(message string) {
 	fmt.Fprintf(os.Stderr, "%s %s\n", Danger("Error:"), message)
-}
-
-// Prompt renders a prompt symbol in accent color.
-func Prompt(symbol string) string {
-	return T.Accent.Render(symbol)
-}
-
-// KeyValue renders a key in accent and value in default text.
-func KeyValue(key, value string) string {
-	return fmt.Sprintf("%s %s", Accent(key), value)
 }

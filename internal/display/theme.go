@@ -3,27 +3,59 @@ package display
 import (
 	"os"
 
+	"github.com/arc53/DocsGPT-cli/internal/ui"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
 
-// Theme holds semantic styles for all UI elements.
+// tone is one palette color: truecolor hex with xterm-256 and 16-color
+// fallbacks, for dark and light backgrounds. An empty 16-color value keeps
+// the terminal's default foreground.
+func tone(darkHex, dark256, lightHex, light256, ansi string) lipgloss.CompleteAdaptiveColor {
+	return lipgloss.CompleteAdaptiveColor{
+		Dark:  lipgloss.CompleteColor{TrueColor: darkHex, ANSI256: dark256, ANSI: ansi},
+		Light: lipgloss.CompleteColor{TrueColor: lightHex, ANSI256: light256, ANSI: ansi},
+	}
+}
+
+// The palette: pi's OKHSL tones, so every hue sits at the same perceived
+// lightness (67% on dark backgrounds, 46% on light ones).
+var (
+	colText     = tone("#dee0e1", "254", "#3b3f41", "237", "")
+	colAccent   = tone("#a798d7", "140", "#7459b4", "61", "5")
+	colMuted    = tone("#9da5a9", "248", "#677176", "242", "8")
+	colDim      = tone("#7e888e", "102", "#879095", "245", "8")
+	colSuccess  = tone("#68b78d", "72", "#337e58", "29", "2")
+	colWarning  = tone("#cd9a22", "172", "#8f6802", "94", "3")
+	colError    = tone("#ea7f81", "174", "#c8253d", "160", "1")
+	colLink     = tone("#69add0", "74", "#2f7899", "31", "4")
+	colThinking = tone("#96a0a4", "247", "#7c868c", "102", "8")
+	colString   = tone("#de8d5a", "173", "#a45417", "130", "3")
+	colVariable = tone("#5db3ba", "73", "#287a81", "30", "6")
+)
+
+// Theme holds the semantic styles every UI element draws with.
 type Theme struct {
-	Text      lipgloss.Style
-	Muted     lipgloss.Style
-	Accent    lipgloss.Style
-	Success   lipgloss.Style
-	Warn      lipgloss.Style
-	Danger    lipgloss.Style
-	Info      lipgloss.Style
-	Border    lipgloss.Style
-	Selection lipgloss.Style
-	Reasoning lipgloss.Style
+	Text       lipgloss.Style
+	Accent     lipgloss.Style // prompts, headings, the selected item
+	Muted      lipgloss.Style // secondary text, tool output
+	Dim        lipgloss.Style // chrome, hints, metadata
+	Success    lipgloss.Style
+	Warning    lipgloss.Style
+	Error      lipgloss.Style
+	Link       lipgloss.Style
+	Thinking   lipgloss.Style // reasoning tokens
+	ToolTitle  lipgloss.Style // "$ command", "read path"
+	ToolOutput lipgloss.Style
 }
 
 // T is the active theme. It starts dark without asking the terminal, so
 // display helpers work before InitTheme runs.
-var T = newTheme(true)
+var T = func() *Theme {
+	lipgloss.SetHasDarkBackground(true)
+	return newTheme()
+}()
 
 // darkBackground records the background InitTheme settled on, for the
 // markdown style.
@@ -38,7 +70,7 @@ func InitTheme(mode string) {
 	darkBackground = dark
 	// Adaptive colors elsewhere must not query the terminal a second time.
 	lipgloss.SetHasDarkBackground(dark)
-	T = newTheme(dark)
+	T = newTheme()
 }
 
 // colorless reports whether output must stay free of colors.
@@ -53,51 +85,53 @@ func UsePlainTheme() { T = plainTheme() }
 
 // plainTheme returns the unstyled (no ANSI) theme.
 func plainTheme() *Theme {
+	none := lipgloss.NoColor{}
+	ui.Colors = ui.Palette{Accent: none, Muted: none, Dim: none, Success: none, Error: none, Border: none}
+	s := lipgloss.NewStyle()
 	return &Theme{
-		Text:      lipgloss.NewStyle(),
-		Muted:     lipgloss.NewStyle(),
-		Accent:    lipgloss.NewStyle(),
-		Success:   lipgloss.NewStyle(),
-		Warn:      lipgloss.NewStyle(),
-		Danger:    lipgloss.NewStyle(),
-		Info:      lipgloss.NewStyle(),
-		Border:    lipgloss.NewStyle(),
-		Selection: lipgloss.NewStyle().Bold(true),
-		Reasoning: lipgloss.NewStyle(),
+		Text: s, Accent: s, Muted: s, Dim: s, Success: s, Warning: s, Error: s, Link: s,
+		Thinking: s, ToolTitle: s.Bold(true), ToolOutput: s,
 	}
 }
 
-func newTheme(dark bool) *Theme {
+func newTheme() *Theme {
 	if colorless() {
 		return plainTheme()
 	}
-
-	if dark {
-		return &Theme{
-			Text:      lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
-			Muted:     lipgloss.NewStyle().Foreground(lipgloss.Color("243")),
-			Accent:    lipgloss.NewStyle().Foreground(lipgloss.Color("133")),            // dark magenta/purple
-			Success:   lipgloss.NewStyle().Foreground(lipgloss.Color("78")),             // muted green
-			Warn:      lipgloss.NewStyle().Foreground(lipgloss.Color("214")),            // yellow/orange
-			Danger:    lipgloss.NewStyle().Foreground(lipgloss.Color("196")),            // red
-			Info:      lipgloss.NewStyle().Foreground(lipgloss.Color("183")),            // light purple/lavender
-			Border:    lipgloss.NewStyle().Foreground(lipgloss.Color("238")),            // dark gray
-			Selection: lipgloss.NewStyle().Foreground(lipgloss.Color("177")).Bold(true), // bright purple
-			Reasoning: lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true),
-		}
+	ui.Colors = ui.Palette{
+		Accent: colAccent, Muted: colMuted, Dim: colDim,
+		Success: colSuccess, Error: colError, Border: colDim,
 	}
-
-	// Light theme
+	fg := func(c lipgloss.TerminalColor) lipgloss.Style { return lipgloss.NewStyle().Foreground(c) }
 	return &Theme{
-		Text:      lipgloss.NewStyle().Foreground(lipgloss.Color("235")),
-		Muted:     lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
-		Accent:    lipgloss.NewStyle().Foreground(lipgloss.Color("90")),  // dark magenta
-		Success:   lipgloss.NewStyle().Foreground(lipgloss.Color("28")),  // dark green
-		Warn:      lipgloss.NewStyle().Foreground(lipgloss.Color("172")), // dark yellow
-		Danger:    lipgloss.NewStyle().Foreground(lipgloss.Color("160")), // dark red
-		Info:      lipgloss.NewStyle().Foreground(lipgloss.Color("97")),  // muted purple
-		Border:    lipgloss.NewStyle().Foreground(lipgloss.Color("250")), // light gray
-		Selection: lipgloss.NewStyle().Foreground(lipgloss.Color("90")).Bold(true),
-		Reasoning: lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Italic(true),
+		Text:       fg(colText),
+		Accent:     fg(colAccent),
+		Muted:      fg(colMuted),
+		Dim:        fg(colDim),
+		Success:    fg(colSuccess),
+		Warning:    fg(colWarning),
+		Error:      fg(colError),
+		Link:       fg(colLink),
+		Thinking:   fg(colThinking).Italic(true),
+		ToolTitle:  lipgloss.NewStyle().Bold(true),
+		ToolOutput: fg(colMuted),
 	}
+}
+
+// colorCode returns c as glamour takes it: the value for the active
+// background and color profile ("" for none).
+func colorCode(c lipgloss.CompleteAdaptiveColor) string {
+	cc := c.Light
+	if darkBackground {
+		cc = c.Dark
+	}
+	switch termenv.ColorProfile() {
+	case termenv.TrueColor:
+		return cc.TrueColor
+	case termenv.ANSI256:
+		return cc.ANSI256
+	case termenv.ANSI:
+		return cc.ANSI
+	}
+	return ""
 }
