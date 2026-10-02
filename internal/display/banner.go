@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
+	"strings"
 
 	"github.com/mattn/go-isatty"
 )
@@ -46,73 +46,31 @@ var wordmark = []string{
 
 var tagline = `              ━━━━━━━  Terminal AI Assistant  ━━━━━━━`
 
-// ShowBanner displays the animated startup banner of an interactive chat.
-// setting: "always", "once", "never" (empty defaults to "once").
-func ShowBanner(setting string, noMotion bool) {
+// ShowBanner prints the startup banner of an interactive chat, all at once.
+// setting: "always", "once", "never" (empty defaults to "once"). The
+// wordmark needs 80 columns; narrower terminals get the dino alone.
+func ShowBanner(setting string) {
 	if setting == "" {
 		setting = "once"
 	}
-	if setting == "never" {
+	if setting == "never" || !isatty.IsTerminal(os.Stdout.Fd()) || os.Getenv("TERM") == "dumb" {
 		return
 	}
-
-	// Skip for non-TTY, screen readers, dumb terminals
-	if !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsCygwinTerminal(os.Stdout.Fd()) {
-		return
-	}
-	if os.Getenv("TERM") == "dumb" {
-		return
-	}
-
 	if setting == "once" && bannerShown() {
 		return
 	}
-
-	accent := T.Accent
-	accentBold := T.Accent.Bold(true)
-	muted := T.Muted
-
-	// No-motion: print everything at once
-	if noMotion || os.Getenv("NO_MOTION") != "" {
-		for _, line := range dinoArt {
-			fmt.Println(accent.Render(line))
-		}
-		fmt.Println()
-		for _, line := range wordmark {
-			fmt.Println(accentBold.Render(line))
-		}
-		fmt.Println(muted.Render(tagline))
-		fmt.Println()
-		if setting == "once" {
-			markBannerShown()
-		}
-		return
-	}
-
-	// === Animated version ===
-	fmt.Print("\033[?25l") // hide cursor
-	defer fmt.Print("\033[?25h")
-
-	// Phase 1: Dino reveals line by line
+	var b strings.Builder
 	for _, line := range dinoArt {
-		fmt.Println(accent.Render(line))
-		time.Sleep(22 * time.Millisecond)
+		b.WriteString(T.Accent.Render(line) + "\n")
 	}
-
-	time.Sleep(40 * time.Millisecond)
-
-	// Phase 2: Wordmark
-	fmt.Println()
-	for _, line := range wordmark {
-		fmt.Println(accentBold.Render(line))
-		time.Sleep(30 * time.Millisecond)
+	if termWidth() >= 80 {
+		b.WriteString("\n")
+		for _, line := range wordmark {
+			b.WriteString(T.Accent.Bold(true).Render(line) + "\n")
+		}
+		b.WriteString(T.Muted.Render(tagline) + "\n")
 	}
-	time.Sleep(80 * time.Millisecond)
-	fmt.Println(muted.Render(tagline))
-
-	time.Sleep(150 * time.Millisecond)
-	fmt.Println()
-
+	fmt.Println(b.String())
 	if setting == "once" {
 		markBannerShown()
 	}

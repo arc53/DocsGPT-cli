@@ -48,12 +48,10 @@ live autocomplete.`,
 		baseURL := cfg.ResolveURL(globalURL)
 		client := docsgpt.NewClient(baseURL, apiKey)
 
-		display.ShowBanner(cfg.Settings.Banner, globalNoMotion)
+		display.ShowBanner(cfg.Settings.Banner)
 		cwd, _ := os.Getwd()
-		fmt.Println(display.RenderHeader(keyName, baseURL, cwd))
-		if hints := display.RenderHints("chat"); hints != "" {
-			fmt.Println(hints)
-		}
+		fmt.Println(display.RenderHeader(Version, keyName, baseURL, cwd))
+		fmt.Println(display.RenderHints())
 		fmt.Println()
 
 		var history []docsgpt.Message
