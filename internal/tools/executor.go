@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -57,50 +58,129 @@ func runCommand(ctx context.Context, command, dir string, timeout time.Duration,
 	return err
 }
 
-// readFile returns lines [offset, offset+limit) of the file at path (1-based;
-// limit 0 reads to the end), within maxOutputLines and maxOutputBytes, with
-// a note telling the model how to continue when lines are left. shown and
-// total count the lines returned and in the file.
-func readFile(path string, offset, limit int) (text string, shown, total int, err error) {
-	data, err := os.ReadFile(path)
+// regularFile resolves path (relative to the working directory, symlinks
+// followed) to the absolute path of a regular file. Devices, FIFOs and
+// directories are refused: reading /dev/zero never ends, /dev/tty waits for
+// the user.
+func regularFile(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	fi, err := os.Stat(real)
+	switch {
+	case err != nil:
+		return "", err
+	case fi.IsDir():
+		return "", fmt.Errorf("%s is a directory", path)
+	case !fi.Mode().IsRegular():
+		return "", fmt.Errorf("%s is not a regular file", path)
+	}
+	return real, nil
+}
+
+// readFile returns lines [offset, offset+limit) of the regular file at path
+// (1-based; limit 0 reads to the end), within maxOutputLines and
+// maxOutputBytes, with a note telling the model how to continue when lines
+// are left. shown and total count the lines returned and in the file. It
+// reads in chunks, holding no more than it returns, and stops when ctx ends.
+func readFile(ctx context.Context, path string, offset, limit int) (text string, shown, total int, err error) {
+	f, err := os.Open(path)
 	if err != nil {
 		return "", 0, 0, err
 	}
-	if bytes.IndexByte(data[:min(len(data), 8192)], 0) >= 0 {
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return "", 0, 0, fmt.Errorf("%s is not a regular file", path)
+	}
+	r := bufio.NewReaderSize(f, 64*1024)
+	if head, _ := r.Peek(8192); bytes.IndexByte(head, 0) >= 0 {
 		return "", 0, 0, fmt.Errorf("%s is a binary file", path)
 	}
-	lines := splitLines(string(data))
-	total = len(lines)
+
 	start := max(offset, 1) - 1
+	want := maxOutputLines
+	if limit > 0 {
+		want = min(want, limit)
+	}
+	var (
+		b       strings.Builder
+		line    []byte // the current line, up to maxOutputBytes+1 bytes of it
+		pending bool   // part of the current line was read
+		full    bool   // no further line fits
+	)
+	for !full {
+		if err := ctx.Err(); err != nil {
+			return "", 0, 0, err
+		}
+		chunk, rerr := r.ReadSlice('\n')
+		if rerr != nil && rerr != bufio.ErrBufferFull && rerr != io.EOF {
+			return "", 0, 0, rerr
+		}
+		if total >= start {
+			line = append(line, chunk[:min(len(chunk), maxOutputBytes+1-len(line))]...)
+		}
+		pending = pending || len(chunk) > 0
+		if rerr == nil || rerr == io.EOF && pending {
+			if total >= start {
+				s := strings.TrimSuffix(string(line), "\n")
+				switch {
+				case shown == want:
+					full = true
+				case b.Len()+len(s)+1 <= maxOutputBytes:
+					b.WriteString(s + "\n")
+					shown++
+				case shown > 0:
+					full = true
+				default: // a single line over the budget: keep its start
+					cut := maxOutputBytes
+					for cut > 0 && cut < len(s) && !utf8.RuneStart(s[cut]) {
+						cut--
+					}
+					b.WriteString(s[:min(cut, len(s))] + " … [line truncated]\n")
+					shown++
+				}
+			}
+			total++
+			line, pending = line[:0], false
+		}
+		if rerr == io.EOF {
+			break
+		}
+	}
+	if full { // only the line count is left
+		buf, last := make([]byte, 64*1024), byte('\n')
+		for {
+			if err := ctx.Err(); err != nil {
+				return "", 0, 0, err
+			}
+			n, rerr := r.Read(buf)
+			if n > 0 {
+				total += bytes.Count(buf[:n], []byte{'\n'})
+				last = buf[n-1]
+			}
+			if rerr == io.EOF {
+				break
+			} else if rerr != nil {
+				return "", 0, 0, rerr
+			}
+		}
+		if last != '\n' {
+			total++
+		}
+	}
+
 	if start >= total && total > 0 {
 		return "", 0, total, fmt.Errorf("offset %d is beyond the end of the file (%d lines)", offset, total)
 	}
-	end := total
-	if limit > 0 {
-		end = min(end, start+limit)
-	}
-	end = min(end, start+maxOutputLines)
-
-	var b strings.Builder
-	n := start
-	for ; n < end; n++ {
-		line := lines[n]
-		if b.Len()+len(line)+1 > maxOutputBytes {
-			if n > start {
-				break
-			}
-			cut := maxOutputBytes
-			for cut > 0 && cut < len(line) && !utf8.RuneStart(line[cut]) {
-				cut--
-			}
-			line = line[:cut] + " … [line truncated]"
-		}
-		b.WriteString(line + "\n")
-	}
-	if n < total {
+	if n := start + shown; n < total {
 		fmt.Fprintf(&b, "\n[Showing lines %d-%d of %d. Use offset=%d to continue.]", start+1, n, total, n+1)
 	}
-	return b.String(), n - start, total, nil
+	return b.String(), shown, total, nil
 }
 
 // writeFile writes content to path, creating missing parent directories.
