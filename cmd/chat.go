@@ -55,20 +55,7 @@ live autocomplete.`,
 		fmt.Println(display.RenderHints())
 		fmt.Println()
 
-		var history []docsgpt.Message
-
-		// Optionally add context as system message
-		if !globalNoContext {
-			ctx := ctxenrich.BuildContext(cfg.Settings)
-			if ctx != "" {
-				history = append(history, docsgpt.Message{
-					Role:    "system",
-					Content: "Here is context about the user's environment:\n" + ctx,
-				})
-			}
-		}
-
-		return runChatLoop(client, history, strings.Join(args, " "))
+		return runChatLoop(client, cfg.Settings, strings.Join(args, " "))
 	},
 }
 
@@ -84,6 +71,10 @@ type chatSession struct {
 	// supplies the history (the messages are still sent, for servers that
 	// ignore the id).
 	conversationID string
+	settings       config.Settings
+	// sentContext is the context block the conversation last carried; it
+	// is sent again only when it changes.
+	sentContext string
 }
 
 func (s *chatSession) executor(input string) {
@@ -97,13 +88,10 @@ func (s *chatSession) executor(input string) {
 		fmt.Println(display.Dim("Goodbye"))
 		os.Exit(0)
 	case "/clear":
-		var newHistory []docsgpt.Message
-		if len(s.history) > 0 && s.history[0].Role == "system" {
-			newHistory = append(newHistory, s.history[0])
-		}
-		s.history = newHistory
+		s.history = nil
 		s.lastAnswer = ""
 		s.conversationID = ""
+		s.sentContext = ""
 		fmt.Println(display.Dim("History cleared."))
 		return
 	case "/copy":
@@ -128,7 +116,13 @@ func (s *chatSession) executor(input string) {
 		return
 	}
 
-	s.history = append(s.history, docsgpt.Message{Role: "user", Content: input})
+	content, block := input, ""
+	if !globalNoContext {
+		if block = ctxenrich.Build(s.settings); block != s.sentContext {
+			content = ctxenrich.Prepend(block, input)
+		}
+	}
+	s.history = append(s.history, docsgpt.Message{Role: "user", Content: content})
 
 	// The prompt library restores cooked mode (ISIG on) while the executor
 	// runs, so Ctrl-C here is a real SIGINT. Turn it into a cancellation of
@@ -176,6 +170,7 @@ func (s *chatSession) executor(input string) {
 	display.PrintSources(res.Sources)
 	s.history = res.Messages
 	s.conversationID = res.ConversationID
+	s.sentContext = block
 	s.lastAnswer = renderer.Content()
 
 	fmt.Println()
@@ -202,15 +197,15 @@ func (s *chatSession) completer(d prompt.Document) ([]prompt.Suggest, pstrings.R
 	return prompt.FilterHasPrefix(suggestions, text, true), start, end
 }
 
-func runChatLoop(client *docsgpt.Client, history []docsgpt.Message, first string) error {
+func runChatLoop(client *docsgpt.Client, settings config.Settings, first string) error {
 	var toolDefs []docsgpt.Tool
-	if !globalNoContext {
+	if !globalNoTools {
 		toolDefs = tools.ToolDefinitions()
 	}
 
 	session := &chatSession{
 		client:   client,
-		history:  history,
+		settings: settings,
 		toolDefs: toolDefs,
 		tools:    &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second},
 	}

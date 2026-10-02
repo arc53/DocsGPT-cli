@@ -70,6 +70,7 @@ var settings = []setting{
 	choice("theme", "Theme", func(c *config.Config) *string { return &c.Settings.Theme }, "auto", "auto", "dark", "light"),
 	toggle("send_current_directory", "Send working directory", func(c *config.Config) *bool { return &c.Settings.SendCurrentDirectory }),
 	toggle("send_directory_contents", "Send directory listing", func(c *config.Config) *bool { return &c.Settings.SendDirectoryContents }),
+	toggle("send_project_instructions", "Send AGENTS.md", func(c *config.Config) *bool { return &c.Settings.SendProjectInstructions }),
 	toggle("send_last_commands", "Send recent shell commands", func(c *config.Config) *bool { return &c.Settings.SendLastCommands }),
 	{
 		key: "number_of_last_commands", title: "Shell commands to send", doc: "0-50",

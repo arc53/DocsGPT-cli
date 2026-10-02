@@ -42,14 +42,17 @@ type Config struct {
 }
 
 type Settings struct {
-	SendCurrentDirectory  bool   `json:"send_current_directory"`
-	SendDirectoryContents bool   `json:"send_directory_contents"`
-	SendLastCommands      bool   `json:"send_last_commands"`
-	NumberOfLastCommands  int    `json:"number_of_last_commands"`
-	Theme                 string `json:"theme,omitempty"`                // "auto", "dark", "light"
-	Banner                string `json:"banner,omitempty"`               // "always", "once", "never"
-	AutoUpdate            string `json:"auto_update,omitempty"`          // "on", "notify", "off"
-	DisableUpdateCheck    bool   `json:"disable_update_check,omitempty"` // legacy, superseded by auto_update
+	SendCurrentDirectory  bool `json:"send_current_directory"`
+	SendDirectoryContents bool `json:"send_directory_contents"`
+	SendLastCommands      bool `json:"send_last_commands"`
+	// SendProjectInstructions sends AGENTS.md (or CLAUDE.md) files; a
+	// config written before it existed gets the default.
+	SendProjectInstructions bool   `json:"send_project_instructions"`
+	NumberOfLastCommands    int    `json:"number_of_last_commands"`
+	Theme                   string `json:"theme,omitempty"`                // "auto", "dark", "light"
+	Banner                  string `json:"banner,omitempty"`               // "always", "once", "never"
+	AutoUpdate              string `json:"auto_update,omitempty"`          // "on", "notify", "off"
+	DisableUpdateCheck      bool   `json:"disable_update_check,omitempty"` // legacy, superseded by auto_update
 }
 
 // AutoUpdateMode resolves the effective auto-update mode: "on" (stage and
@@ -72,10 +75,10 @@ func DefaultConfig() Config {
 		DefaultKey: "",
 		Keys:       make(map[string]string),
 		Settings: Settings{
-			SendCurrentDirectory:  true,
-			SendDirectoryContents: true,
-			SendLastCommands:      true,
-			NumberOfLastCommands:  3,
+			SendCurrentDirectory:    true,
+			SendDirectoryContents:   true,
+			SendProjectInstructions: true,
+			NumberOfLastCommands:    3,
 		},
 	}
 }

@@ -72,6 +72,7 @@ var (
 var (
 	globalNoStream    bool
 	globalNoContext   bool
+	globalNoTools     bool
 	globalAutoApprove bool
 	globalTimeout     int // seconds a tool command may run
 )
@@ -266,7 +267,8 @@ func init() {
 	for _, c := range []*cobra.Command{rootCmd, askCmd, chatCmd} {
 		f := c.Flags()
 		f.BoolVar(&globalNoStream, "no-stream", false, "Print the answer once it is complete")
-		f.BoolVar(&globalNoContext, "no-context", false, "Don't send the working directory, its files or shell history")
+		f.BoolVar(&globalNoContext, "no-context", false, "Don't send the working directory, its files, AGENTS.md or shell history")
+		f.BoolVar(&globalNoTools, "no-tools", false, "Don't let the agent run commands or read and write files")
 		f.BoolVar(&globalAutoApprove, "auto-approve", false, "Run the agent's tool calls without asking")
 		f.IntVar(&globalTimeout, "tool-timeout", 30, "Seconds a command run by the agent may take")
 		f.Bool("no-motion", false, "")

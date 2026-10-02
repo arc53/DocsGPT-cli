@@ -66,8 +66,10 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 		baseURL := cfg.ResolveURL(globalURL)
 		client := docsgpt.NewClient(baseURL, apiKey)
 
-		includeContext := !globalNoContext
-		fullQuestion := ctxenrich.BuildQuestion(question, cfg.Settings, includeContext)
+		fullQuestion := question
+		if !globalNoContext {
+			fullQuestion = ctxenrich.Prepend(ctxenrich.Build(cfg.Settings), question)
+		}
 
 		messages := []docsgpt.Message{
 			{Role: "user", Content: fullQuestion},
@@ -85,7 +87,7 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 		defer cancel()
 		// Tool calls need a person on stdin to approve them.
 		var toolDefs []docsgpt.Tool
-		if !globalNoContext && (globalAutoApprove || stdinIsTerminal()) {
+		if !globalNoTools && (globalAutoApprove || stdinIsTerminal()) {
 			toolDefs = tools.ToolDefinitions()
 		}
 		toolSession := &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second}
