@@ -73,8 +73,11 @@ func InitTheme(mode string) {
 	T = newTheme()
 }
 
-// colorless reports whether output must stay free of colors.
-func colorless() bool {
+// DarkBackground reports the background the theme was set up for.
+func DarkBackground() bool { return darkBackground }
+
+// Colorless reports whether output must stay free of colors.
+func Colorless() bool {
 	return termenv.ColorProfile() == termenv.Ascii || os.Getenv("NO_COLOR") != ""
 }
 
@@ -95,7 +98,7 @@ func plainTheme() *Theme {
 }
 
 func newTheme() *Theme {
-	if colorless() {
+	if Colorless() {
 		return plainTheme()
 	}
 	ui.Colors = ui.Palette{

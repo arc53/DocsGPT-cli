@@ -30,7 +30,7 @@ func newMarkdown(width int) *glamour.TermRenderer {
 // markdownStyle builds the glamour style from the palette: no margins or
 // background fills, headings in bold accent, dim rules, muted list markers.
 func markdownStyle(width int) ansi.StyleConfig {
-	if colorless() {
+	if Colorless() {
 		s := styles.NoTTYStyleConfig
 		s.Document = ansi.StyleBlock{}
 		s.HorizontalRule.Format = "\n" + strings.Repeat("─", min(width, 80)) + "\n"
@@ -152,7 +152,7 @@ func codeBlock(lang, code string, closed bool) string {
 // highlight colors code with the palette's syntax tones, by token.
 func highlight(lang, code string) string {
 	lexer := lexers.Get(lang)
-	if lexer == nil || lang == "" || colorless() {
+	if lexer == nil || lang == "" || Colorless() {
 		return strings.ReplaceAll(code, "\t", "    ")
 	}
 	it, err := chroma.Coalesce(lexer).Tokenise(nil, code)

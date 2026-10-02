@@ -40,7 +40,7 @@ func Info(s string) string {
 	return T.Link.Render(s)
 }
 
-// ErrorMsg prints a formatted error message to stderr.
+// ErrorMsg prints "✗ message" in the error color to stderr.
 func ErrorMsg(message string) {
-	fmt.Fprintf(os.Stderr, "%s %s\n", Danger("Error:"), message)
+	fmt.Fprintln(os.Stderr, T.Error.Render("✗ "+message))
 }

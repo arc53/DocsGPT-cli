@@ -93,7 +93,7 @@ func (s *chatSession) executor(input string) {
 
 	switch input {
 	case "/quit":
-		fmt.Println("Goodbye!")
+		fmt.Println(display.Dim("Goodbye"))
 		os.Exit(0)
 	case "/clear":
 		var newHistory []docsgpt.Message
@@ -103,7 +103,7 @@ func (s *chatSession) executor(input string) {
 		s.history = newHistory
 		s.lastAnswer = ""
 		s.conversationID = ""
-		fmt.Println("History cleared.")
+		fmt.Println(display.Dim("History cleared."))
 		return
 	case "/copy":
 		if s.lastAnswer == "" {
@@ -120,9 +120,9 @@ func (s *chatSession) executor(input string) {
 	case "/think":
 		s.showReasoning = !s.showReasoning
 		if s.showReasoning {
-			fmt.Println(display.Muted("Reasoning: visible"))
+			fmt.Println(display.Dim("Reasoning: visible"))
 		} else {
-			fmt.Println(display.Muted("Reasoning: hidden"))
+			fmt.Println(display.Dim("Reasoning: hidden"))
 		}
 		return
 	}
@@ -161,13 +161,14 @@ func (s *chatSession) executor(input string) {
 		// message doesn't carry a dangling question.
 		s.history = s.history[:len(s.history)-1]
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-			fmt.Println(display.Muted("Interrupted."))
+			fmt.Println(display.Dim("Interrupted.") + "\n")
 			return
 		}
 		// The server may have refused the conversation (deleted, say):
 		// the next turn starts a new one from the messages.
 		s.conversationID = ""
 		printError(err.Error())
+		fmt.Println()
 		return
 	}
 
@@ -213,23 +214,38 @@ func runChatLoop(client *docsgpt.Client, history []docsgpt.Message) error {
 		tools:    &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second},
 	}
 
-	p := prompt.New(
-		session.executor,
+	opts := append(promptColors(),
 		prompt.WithCompleter(session.completer),
-		prompt.WithPrefix("> "),
-		prompt.WithPrefixTextColor(prompt.Purple),
-		prompt.WithSuggestionBGColor(prompt.DarkGray),
-		prompt.WithSuggestionTextColor(prompt.White),
-		prompt.WithSelectedSuggestionBGColor(prompt.Purple),
-		prompt.WithSelectedSuggestionTextColor(prompt.White),
-		prompt.WithDescriptionBGColor(prompt.DarkGray),
-		prompt.WithDescriptionTextColor(prompt.White),
-		prompt.WithSelectedDescriptionBGColor(prompt.Purple),
-		prompt.WithSelectedDescriptionTextColor(prompt.White),
-		prompt.WithScrollbarBGColor(prompt.DarkGray),
-		prompt.WithScrollbarThumbColor(prompt.Purple),
+		prompt.WithPrefix("❯ "),
 		prompt.WithShowCompletionAtStart(),
 	)
+	p := prompt.New(session.executor, opts...)
 	p.Run()
 	return nil
+}
+
+// promptColors styles the chat prompt with the palette's 16-color tones,
+// the only ones the prompt library knows: accent prefix and selection, a
+// suggestion box that follows the background, no colors under NO_COLOR.
+func promptColors() []prompt.Option {
+	accent, box, text, selected := prompt.Purple, prompt.DarkGray, prompt.White, prompt.White
+	if !display.DarkBackground() {
+		box, text = prompt.LightGray, prompt.Black
+	}
+	if display.Colorless() {
+		accent, box, text, selected = prompt.DefaultColor, prompt.DefaultColor, prompt.DefaultColor, prompt.DefaultColor
+	}
+	return []prompt.Option{
+		prompt.WithPrefixTextColor(accent),
+		prompt.WithSuggestionBGColor(box),
+		prompt.WithSuggestionTextColor(text),
+		prompt.WithSelectedSuggestionBGColor(accent),
+		prompt.WithSelectedSuggestionTextColor(selected),
+		prompt.WithDescriptionBGColor(box),
+		prompt.WithDescriptionTextColor(text),
+		prompt.WithSelectedDescriptionBGColor(accent),
+		prompt.WithSelectedDescriptionTextColor(selected),
+		prompt.WithScrollbarBGColor(box),
+		prompt.WithScrollbarThumbColor(accent),
+	}
 }

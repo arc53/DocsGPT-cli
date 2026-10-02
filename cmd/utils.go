@@ -41,5 +41,5 @@ func copyToClipboard(command string) {
 	if multi {
 		first += fmt.Sprintf(" … (+%d lines)", strings.Count(rest, "\n")+1)
 	}
-	fmt.Println(display.Muted("Copied to clipboard: " + first))
+	fmt.Println(display.Success("✓") + " " + display.Dim("Copied to clipboard: "+first))
 }
