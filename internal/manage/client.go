@@ -175,7 +175,7 @@ func (c *Client) setHeaders(req *http.Request) {
 // send performs the request and returns the body of a successful response.
 // Non-2xx statuses, and 2xx JSON bodies carrying success:false, become
 // *APIError. Transport failures are returned with the token-free URL path.
-func (c *Client) send(req *http.Request, path string) ([]byte, http.Header, error) {
+func (c *Client) send(req *http.Request, path string) ([]byte, error) {
 	c.setHeaders(req)
 	httpClient := c.HTTP
 	if httpClient == nil {
@@ -187,22 +187,22 @@ func (c *Client) send(req *http.Request, path string) ([]byte, http.Header, erro
 		if errors.As(err, &ue) && ue.Err != nil {
 			err = ue.Err
 		}
-		return nil, nil, fmt.Errorf("%s %s%s: %w", req.Method, c.BaseURL, path, err)
+		return nil, fmt.Errorf("%s %s%s: %w", req.Method, c.BaseURL, path, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		return nil, resp.Header, newAPIError(req.Method, path, resp.StatusCode, body)
+		return nil, newAPIError(req.Method, path, resp.StatusCode, body)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, resp.Header, fmt.Errorf("%s %s: read response: %w", req.Method, path, err)
+		return nil, fmt.Errorf("%s %s: read response: %w", req.Method, path, err)
 	}
 	if isJSON(resp.Header) && reportsFailure(body) {
-		return nil, resp.Header, newAPIError(req.Method, path, resp.StatusCode, body)
+		return nil, newAPIError(req.Method, path, resp.StatusCode, body)
 	}
-	return body, resp.Header, nil
+	return body, nil
 }
 
 func isJSON(h http.Header) bool {
@@ -269,8 +269,7 @@ func (c *Client) getRaw(ctx context.Context, path string, query url.Values, acce
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
-	body, _, err := c.send(req, path)
-	return body, err
+	return c.send(req, path)
 }
 
 // getJSON performs a GET, decodes the body into out and returns the raw body
@@ -287,34 +286,29 @@ func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out
 }
 
 // doJSON sends method with an optional JSON payload and decodes the reply.
-func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, payload, out any) (json.RawMessage, error) {
+func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, payload, out any) error {
 	ctx, cancel := withTimeout(ctx, c.Timeout, DefaultTimeout)
 	defer cancel()
 	var rdr io.Reader
 	if payload != nil {
 		b, err := json.Marshal(payload)
 		if err != nil {
-			return nil, fmt.Errorf("encode %s %s body: %w", method, path, err)
+			return fmt.Errorf("encode %s %s body: %w", method, path, err)
 		}
 		rdr = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(path, query), rdr)
 	if err != nil {
-		return nil, fmt.Errorf("build %s %s: %w", method, path, err)
+		return fmt.Errorf("build %s %s: %w", method, path, err)
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	body, _, err := c.send(req, path)
+	body, err := c.send(req, path)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if out != nil {
-		if err := decode(method, path, body, out); err != nil {
-			return nil, err
-		}
-	}
-	return body, nil
+	return decode(method, path, body, out)
 }
 
 func decode(method, path string, body []byte, out any) error {

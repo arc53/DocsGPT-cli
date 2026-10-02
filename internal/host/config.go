@@ -78,10 +78,7 @@ func LoadHostConfig() (HostConfig, error) {
 	if err != nil {
 		return cfg, err
 	}
-	parsed, err := parseSimpleYAML(string(data))
-	if err != nil {
-		return cfg, fmt.Errorf("parse host.yml: %w", err)
-	}
+	parsed := parseSimpleYAML(string(data))
 	if v, ok := parsed["device_id"]; ok {
 		cfg.DeviceID = v
 	}
@@ -140,7 +137,7 @@ func (c *HostConfig) PollIntervalDuration() time.Duration {
 
 // parseSimpleYAML reads a flat `key: value` document. We avoid pulling in
 // gopkg.in/yaml.v3 to keep dependencies minimal — host.yml is a flat map.
-func parseSimpleYAML(s string) (map[string]string, error) {
+func parseSimpleYAML(s string) map[string]string {
 	out := map[string]string{}
 	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimRight(line, " \t\r")
@@ -156,7 +153,7 @@ func parseSimpleYAML(s string) (map[string]string, error) {
 		value = strings.Trim(value, "\"'")
 		out[key] = value
 	}
-	return out, nil
+	return out
 }
 
 func serializeSimpleYAML(m map[string]string) string {

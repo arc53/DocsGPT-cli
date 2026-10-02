@@ -654,7 +654,7 @@ func (rc *runContext) runOnce(ctx context.Context, c *spec.Case, tg target.Targe
 			if te := c.Turns[ti].Expect; te != nil && !te.Empty() {
 				tr.Assertions = assert.Evaluate(*te, tres, nil)
 				if te.Judge != nil && !rc.opts.UpdateGolden {
-					jr, _ := rc.evaluateJudge(ctx, c, history, tres.Answer, te.Judge, eff, resolvedURL)
+					jr, _ := rc.evaluateJudge(ctx, history, tres.Answer, te.Judge, eff, resolvedURL)
 					tr.Assertions = append(tr.Assertions, jr)
 				}
 				for _, a := range tr.Assertions {
@@ -696,7 +696,7 @@ func (rc *runContext) runOnce(ctx context.Context, c *spec.Case, tg target.Targe
 
 	assertions := append(turnAsserts, assert.Evaluate(c.Expect, &final, golden)...)
 	if c.Expect.Judge != nil && !rc.opts.UpdateGolden {
-		jr, verdict := rc.evaluateJudge(ctx, c, history, res.Answer, c.Expect.Judge, eff, resolvedURL)
+		jr, verdict := rc.evaluateJudge(ctx, history, res.Answer, c.Expect.Judge, eff, resolvedURL)
 		assertions = append(assertions, jr)
 		rr.Judge = verdict
 	}
@@ -721,7 +721,7 @@ func (rc *runContext) runOnce(ctx context.Context, c *spec.Case, tg target.Targe
 // evaluateJudge grades answer with the resolved judge agent and returns a
 // single assert.Result named "judge" plus the recorded verdict (nil on
 // error). For multi-turn cases the judge sees the whole transcript so far.
-func (rc *runContext) evaluateJudge(ctx context.Context, c *spec.Case, history []target.Exchange, answer string, je *spec.JudgeExpect, eff spec.Effective, resolvedURL string) (assert.Result, *JudgeResult) {
+func (rc *runContext) evaluateJudge(ctx context.Context, history []target.Exchange, answer string, je *spec.JudgeExpect, eff spec.Effective, resolvedURL string) (assert.Result, *JudgeResult) {
 	const name = "judge"
 	opts := rc.opts
 	if opts.Judge == nil {

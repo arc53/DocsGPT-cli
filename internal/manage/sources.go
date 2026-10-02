@@ -110,7 +110,7 @@ func (c *Client) UploadSource(ctx context.Context, name string, paths []string, 
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
 	}
-	respBody, _, err := c.send(req, path)
+	respBody, err := c.send(req, path)
 	if err != nil {
 		return nil, err
 	}

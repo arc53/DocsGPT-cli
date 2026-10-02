@@ -68,7 +68,7 @@ func (c *Client) ExportAgent(ctx context.Context, id string) ([]byte, error) {
 
 // DeleteAgent calls DELETE /api/delete_agent?id= (scope agents:write).
 func (c *Client) DeleteAgent(ctx context.Context, id string) error {
-	_, err := c.doJSON(ctx, http.MethodDelete, "/api/delete_agent", url.Values{"id": {id}}, nil, nil)
+	err := c.doJSON(ctx, http.MethodDelete, "/api/delete_agent", url.Values{"id": {id}}, nil, nil)
 	return err
 }
 
@@ -207,7 +207,7 @@ func (c *Client) PlanImport(ctx context.Context, yamlDoc string) (*Plan, error) 
 	var env struct {
 		Plan json.RawMessage `json:"plan"`
 	}
-	if _, err := c.doJSON(ctx, http.MethodPost, "/api/import_agent/plan", nil, importRequest{YAML: yamlDoc}, &env); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/api/import_agent/plan", nil, importRequest{YAML: yamlDoc}, &env); err != nil {
 		return nil, err
 	}
 	var plan Plan
@@ -227,7 +227,7 @@ func (c *Client) ApplyImport(ctx context.Context, yamlDoc string, res *Resolutio
 		body.Resolution = res
 	}
 	var out ApplyResult
-	if _, err := c.doJSON(ctx, http.MethodPost, "/api/import_agent", nil, body, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/api/import_agent", nil, body, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
