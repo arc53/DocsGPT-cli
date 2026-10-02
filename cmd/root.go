@@ -162,7 +162,10 @@ func suggestions(cmd *cobra.Command, typed string) []string {
 func groupCommand(c *cobra.Command) {
 	c.Args = subcommandArgs
 	c.RunE = func(cmd *cobra.Command, args []string) error { return cmd.Help() }
+	c.Annotations = map[string]string{groupAnnotation: "true"}
 }
+
+const groupAnnotation = "docsgpt/group"
 
 func Execute() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
@@ -250,7 +253,7 @@ func init() {
 
 	pf := rootCmd.PersistentFlags()
 	pf.StringVar(&globalURL, "url", "", "DocsGPT server URL (default: config, else "+config.DefaultBaseURL+")")
-	pf.StringVar(&globalKey, "key", "", "Chat with the stored API key of this name")
+	pf.StringVar(&globalKey, "key", "", "Use the stored API key of this name")
 	pf.StringVar(&globalToken, "token", "", "Personal access token (dgpt_pat_…) for account commands")
 	pf.StringVar(&globalTheme, "theme", "", "Color theme: auto, dark, light")
 	pf.MarkHidden("theme")
@@ -274,6 +277,15 @@ func init() {
 	rootCmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return usageErrf("%w\nRun '%s --help' for usage.", err, c.CommandPath())
 	})
+	cobra.AddTemplateFunc("namePadding", func(c *cobra.Command) int {
+		n := 9
+		for _, sib := range c.Parent().Commands() {
+			if sib.IsAvailableCommand() {
+				n = max(n, len(sib.Name()))
+			}
+		}
+		return n + 2
+	})
 	rootCmd.SetUsageTemplate(usageTemplate)
 	cobra.EnableCommandSorting = false
 
@@ -293,9 +305,10 @@ func init() {
 		promptsCmd, toolsCmd, benchCmd, configCmd, updateCmd, installCmd, hostCmd)
 }
 
-// usageTemplate is cobra's, minus the help command and the "Additional
-// Commands" section that hidden aliases would otherwise bring back.
-const usageTemplate = `Usage:{{if .Runnable}}
+// usageTemplate is cobra's, minus the help command, the "Additional
+// Commands" section and the padding that hidden aliases would bring back,
+// and the "<cmd> [flags]" line of commands that only group others.
+const usageTemplate = `Usage:{{if and .Runnable (not (index .Annotations "` + groupAnnotation + `"))}}
   {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
   {{.CommandPath}} <command>{{end}}{{if gt (len .Aliases) 0}}
 
@@ -306,10 +319,10 @@ Examples:
 {{.Example}}{{end}}{{if .HasAvailableSubCommands}}{{$cmds := .Commands}}{{if eq (len .Groups) 0}}
 
 Commands:{{range $cmds}}{{if .IsAvailableCommand}}
-  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{else}}{{range $group := .Groups}}
+  {{rpad .Name (namePadding .)}} {{.Short}}{{end}}{{end}}{{else}}{{range $group := .Groups}}
 
 {{.Title}}{{range $cmds}}{{if (and (eq .GroupID $group.ID) .IsAvailableCommand)}}
-  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
+  {{rpad .Name (namePadding .)}} {{.Short}}{{end}}{{end}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
 
 Flags:
 {{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableInheritedFlags}}

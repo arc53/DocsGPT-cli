@@ -29,14 +29,13 @@ var (
 
 var sourcesCmd = &cobra.Command{
 	Use:   "sources",
-	Short: "List, upload and delete sources (personal access token)",
-	Long: `Manage knowledge sources with a personal access token.
-
-  docsgpt-cli sources list
+	Short: "List, upload and delete sources (access token)",
+	Long: `Manage the knowledge sources agents answer from. Needs a personal access
+token (see 'docsgpt-cli login') with sources:read to list and sources:write to
+upload or delete.`,
+	Example: `  docsgpt-cli sources list
   docsgpt-cli sources upload docs/*.md --name "Product docs" --wait
-  docsgpt-cli sources delete <id> --yes
-
-Scopes: sources:read (list) and sources:write (upload incl. --wait, delete).`,
+  docsgpt-cli sources delete <id> --yes`,
 }
 
 var sourcesListCmd = &cobra.Command{
@@ -103,14 +102,10 @@ var sourcesDeleteCmd = &cobra.Command{
 	},
 }
 
-var promptsCmd = &cobra.Command{
+// agents prompts / agents tools list what agent YAML can reference.
+var agentsPromptsCmd = &cobra.Command{
 	Use:   "prompts",
-	Short: "List prompts (personal access token)",
-}
-
-var promptsListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List built-in, private and team prompts (scope prompts:read)",
+	Short: "List the prompts agents can use (scope prompts:read)",
 	Args:  usageArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withClient(func(ctx context.Context, c *manage.Client) error {
@@ -119,13 +114,8 @@ var promptsListCmd = &cobra.Command{
 	},
 }
 
-var toolsCmd = &cobra.Command{
+var agentsToolsCmd = &cobra.Command{
 	Use:   "tools",
-	Short: "List configured tools (personal access token)",
-}
-
-var toolsListCmd = &cobra.Command{
-	Use:   "list",
 	Short: "List your configured tools (scope tools:read)",
 	Args:  usageArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -134,6 +124,14 @@ var toolsListCmd = &cobra.Command{
 		})
 	},
 }
+
+// The old paths, `prompts list` and `tools list`.
+var (
+	promptsCmd     = &cobra.Command{Use: "prompts", Hidden: true}
+	promptsListCmd = &cobra.Command{Use: "list", Args: agentsPromptsCmd.Args, RunE: agentsPromptsCmd.RunE}
+	toolsCmd       = &cobra.Command{Use: "tools", Hidden: true}
+	toolsListCmd   = &cobra.Command{Use: "list", Args: agentsToolsCmd.Args, RunE: agentsToolsCmd.RunE}
+)
 
 func init() {
 	sourcesListCmd.Flags().BoolVar(&sourcesListJSON, "json", false, "Print the server's source list as JSON")
@@ -148,8 +146,12 @@ func init() {
 
 	sourcesDeleteCmd.Flags().BoolVarP(&sourcesDeleteYes, "yes", "y", false, "Do not ask for confirmation")
 
-	promptsListCmd.Flags().BoolVar(&promptsListJSON, "json", false, "Print the server's prompt list as JSON")
-	toolsListCmd.Flags().BoolVar(&toolsListJSON, "json", false, "Print the server's tool list as JSON")
+	for _, c := range []*cobra.Command{agentsPromptsCmd, promptsListCmd} {
+		c.Flags().BoolVar(&promptsListJSON, "json", false, "Print the server's prompt list as JSON")
+	}
+	for _, c := range []*cobra.Command{agentsToolsCmd, toolsListCmd} {
+		c.Flags().BoolVar(&toolsListJSON, "json", false, "Print the server's tool list as JSON")
+	}
 
 	sourcesCmd.AddCommand(sourcesListCmd, sourcesUploadCmd, sourcesDeleteCmd)
 	promptsCmd.AddCommand(promptsListCmd)

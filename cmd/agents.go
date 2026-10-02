@@ -38,36 +38,25 @@ var (
 	agentsTriggerJSON    bool
 )
 
-const resolveHelp = `Unresolved references are settled with --resolve <kind>:<selector>=<value>
-(repeatable), which maps onto the import API's "resolution" object:
+const resolveHelp = `A reference the server cannot match is settled with --resolve (repeatable):
 
-  source:<name>=<source-id>            attach this existing source for the named spec source
-  source:<name>=skip                   accept that the source stays unattached
-  tool:<sel>=reuse:<tool-id>           link one of your existing tools
-  tool:<sel>=create                    create a new tool even if a (type, name) match exists
-  tool:<sel>=skip                      leave the tool off the agent
-  tool:<sel>.secret.<field>=<value>    secret used when the tool is created (e.g. token)
-  model:<display-name>=<api-key>       API key used to create a custom model
-  model:<id-or-name>=skip              accept that the model is dropped
+  source:<name>=<source-id>|skip
+  tool:<sel>=reuse:<tool-id>|create|skip
+  tool:<sel>.secret.<field>=<value>
+  model:<name>=<api-key>|skip
 
-<sel> is the plan key (tool-0, tool-1, ... = position in spec.tools) or, when
-unambiguous, the tool's name or type. Positional keys are rejected when several
-documents are processed at once.`
+<sel> is tool-N (its position in spec.tools) or the tool's name or type.`
 
 var agentsCmd = &cobra.Command{
 	Use:   "agents",
-	Short: "List, export, plan, apply and delete agents (personal access token)",
-	Long: `Manage agents as code with a personal access token.
-
-  docsgpt-cli agents list
-  docsgpt-cli agents export <id> -o agents/support.yaml
+	Short: "Manage agents as code: list, export, apply (access token)",
+	Long: `Manage agents as YAML you can keep in git. Needs a personal access token
+(see 'docsgpt-cli login') with agents:read to list and export, agents:write to
+plan, apply and delete, and agents:keys to trigger an agent by id.`,
+	Example: `  docsgpt-cli agents export <id> -o agents/support.yaml
   docsgpt-cli agents plan -f agents/
   docsgpt-cli agents apply -f agents/ --resolve "source:Handbook=<source-id>"
-  docsgpt-cli agents delete <id> --yes
-  docsgpt-cli agents trigger --webhook-url "$DOCSGPT_WEBHOOK_URL" -f payload.json
-
-Scopes: agents:read (list, export), agents:write (plan, apply, delete) and
-agents:keys (trigger <id>; trigger --webhook-url needs no token).`,
+  docsgpt-cli agents trigger <id> -f payload.json --wait`,
 }
 
 var agentsListCmd = &cobra.Command{
@@ -97,10 +86,9 @@ file is safe to commit.`,
 
 var agentsPlanCmd = &cobra.Command{
 	Use:   "plan -f <file|dir|->",
-	Short: "Show what applying agent YAML would do (nothing is written)",
-	Long: `Resolve every reference of the given agent documents against your account
-and print the plan. Equivalent to 'agents apply --dry-run': exits 1 when a
-reference is missing/unavailable and not covered by --resolve.
+	Short: "Show what apply would do, without writing anything",
+	Long: `Match every reference of the agent YAML against your account and print the
+plan, like 'agents apply --dry-run'. Exits 1 when a reference is unresolved.
 
 ` + resolveHelp,
 	Args: usageArgs(cobra.NoArgs),
@@ -116,20 +104,16 @@ reference is missing/unavailable and not covered by --resolve.
 var agentsApplyCmd = &cobra.Command{
 	Use:   "apply -f <file|dir|-> [-f ...]",
 	Short: "Create or update agents from YAML",
-	Long: `Apply agent documents. -f accepts a file, a directory (its *.yaml/*.yml
-files, sorted) or - for stdin, and may be repeated; multi-document files are
-applied document by document. Only kind: Agent is accepted.
+	Long: `Create or update agents from YAML (kind: Agent). -f takes a file, a directory
+of *.yaml files, or - for stdin, and can be repeated.
 
-Every document is planned first and the plan is printed. If any document has a
-missing or unavailable reference that --resolve does not cover, NOTHING is
-applied and the command exits 1. An agent is matched by metadata.id, then
-metadata.slug: a match is updated in place (keeping its status and API key),
-anything else is created as a draft.
+Everything is planned first; if any reference is unresolved, nothing is
+applied. An agent is matched by metadata.id, then metadata.slug, and updated
+in place; anything else is created as a draft.
 
 ` + resolveHelp + `
 
-Exit codes: 0 applied (or a clean --dry-run), 1 blocked or failed, 2 usage or
-validation error.`,
+Exit codes: 0 applied, 1 blocked or failed, 2 usage error.`,
 	Args: usageArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withClient(func(ctx context.Context, c *manage.Client) error {
@@ -163,35 +147,18 @@ var agentsDeleteCmd = &cobra.Command{
 var agentsTriggerCmd = &cobra.Command{
 	Use:   "trigger [<agent-id>] -f <file|->",
 	Short: "Run an agent through its incoming webhook with a JSON payload",
-	Long: `Post a JSON payload to an agent's incoming webhook. The whole payload becomes
-the agent's input; the agent runs asynchronously and the task id is printed.
---wait polls the run until it finishes and prints the agent's answer.
+	Long: `Post a JSON payload to an agent's incoming webhook; the payload becomes the
+agent's input. The run is queued and its task id printed; --wait waits for it
+and prints the answer.
 
-Address the agent in exactly one way:
+Name the agent by its webhook URL (--webhook-url, else ` + config.EnvWebhookURL + `;
+no token needed, and the URL is never printed) or by <agent-id> (looked up
+with a personal access token, scope agents:keys).
 
-  --webhook-url <url>   the webhook URL itself, or ` + config.EnvWebhookURL + ` when
-                        neither the flag nor an agent id is given. No personal
-                        access token is needed: the URL is the secret.
-  <agent-id>            look the webhook up with a personal access token (scope
-                        agents:keys). The server creates the webhook if the
-                        agent has none yet.
-
-  docsgpt-cli agents trigger --webhook-url "$TRIAGE_WEBHOOK_URL" -f payload.json
+Exit codes: 0 ok, 1 the call or the run failed or timed out, 2 usage error.`,
+	Example: `  docsgpt-cli agents trigger --webhook-url "$TRIAGE_WEBHOOK_URL" -f payload.json
   echo '{"event":"deploy"}' | docsgpt-cli agents trigger <agent-id> -f - --wait
-  docsgpt-cli agents trigger <agent-id> -f payload.json --wait --json | jq -r .answer
-
-The webhook URL is never printed: output and errors show it as
-<base>/api/webhooks/agents/...
-
---idempotency-key makes retries safe: a repeat with the same key within about
-24 hours returns the original task instead of running the agent again.
-
---wait reads /api/task_status without credentials. If the server requires
-them, the personal access token is used (it needs chat:run, sources:read or
-sources:write), and only when it is configured for the webhook's host.
-
-Exit codes: 0 ok, 1 the webhook call or the agent run failed or timed out,
-2 usage error.`,
+  docsgpt-cli agents trigger <agent-id> -f payload.json --wait --json | jq -r .answer`,
 	Args: usageArgs(cobra.MaximumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		opts := triggerOptions{
@@ -248,7 +215,8 @@ func init() {
 	tf.DurationVar(&agentsTriggerTO, "timeout", 10*time.Minute, "How long --wait polls before giving up (e.g. 90s, 15m)")
 	tf.BoolVar(&agentsTriggerJSON, "json", false, "Print the result as JSON on stdout")
 
-	agentsCmd.AddCommand(agentsListCmd, agentsExportCmd, agentsPlanCmd, agentsApplyCmd, agentsDeleteCmd, agentsTriggerCmd)
+	agentsCmd.AddCommand(agentsListCmd, agentsExportCmd, agentsPlanCmd, agentsApplyCmd, agentsDeleteCmd, agentsTriggerCmd,
+		agentsPromptsCmd, agentsToolsCmd)
 	groupCommand(agentsCmd)
 }
 
