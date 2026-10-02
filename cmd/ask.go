@@ -29,11 +29,12 @@ var askCmd = &cobra.Command{
 	Long: `Ask a question to DocsGPT, and instantly find answers about anything.
 
 Anything piped into the command is sent along with the question (or is the
-question, when none is given), up to 1 MB. With a question, a pipe is read
-only if its data starts within a second, and a redirected file only from its
-start, so an idle stdin (ssh, CI) or a "while read" loop is left alone. When
-stdout is not a terminal, only the answer is written to it, as plain text
-(terminal control sequences removed, as on a terminal).
+question, when none is given), up to 1 MB: unless stdin is a terminal or a
+device such as /dev/null, it is read to its end. Where stdin stays open
+without input (ssh, CI jobs, a "while read" loop), pass --no-stdin or
+redirect it from /dev/null. When stdout is not a terminal, only the answer is
+written to it, as plain text (terminal control sequences removed, as on a
+terminal).
 
 Example usage:
     docsgpt-cli ask "How do I open a file in Python?"
@@ -44,9 +45,13 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 	RunE: func(cmd *cobra.Command, args []string) error {
 		question := strings.Join(args, " ")
 		var piped string
-		if !stdinIsTerminal() {
+		if !globalNoStdin {
+			var hint io.Writer
+			if isatty.IsTerminal(os.Stderr.Fd()) {
+				hint = os.Stderr
+			}
 			var err error
-			if piped, err = readPipedStdin(os.Stdin, question != ""); err != nil {
+			if piped, err = readPipedStdin(os.Stdin, hint); err != nil {
 				return err
 			}
 		}
@@ -143,46 +148,45 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 // maxStdin caps what is read from stdin.
 const maxStdin = 1 << 20
 
-// stdinWait is how long a pipe may stay silent before it is ignored, when
-// a question was given.
-var stdinWait = time.Second
+// stdinHint is how long stdin may stay silent before the user is told that
+// the command waits for it.
+var stdinHint = time.Second
 
-// readPipedStdin returns what was piped or redirected into f. Without a
-// question it reads everything (the input is the question). With one, it
-// reads a file only from its start (a "while read" loop shares the file
-// and has consumed some of it) and a pipe only when data arrives within
-// stdinWait (ssh and CI jobs leave stdin open and idle). A device such as
-// /dev/null gives "".
-func readPipedStdin(f *os.File, question bool) (string, error) {
-	fi, err := f.Stat()
-	if err != nil {
+// readPipedStdin reads what was piped or redirected into f to its end, or
+// returns "" for a terminal or a device such as /dev/null. When nothing has
+// come after stdinHint, it says so on hint (stderr when that is a terminal,
+// else nil): ssh, CI jobs and "while read" loops leave stdin open, and
+// --no-stdin is for them.
+func readPipedStdin(f *os.File, hint io.Writer) (string, error) {
+	if fi, err := f.Stat(); err != nil || fi.Mode()&os.ModeCharDevice != 0 {
 		return "", nil
 	}
-	var r io.Reader = f
-	switch {
-	case fi.Mode().IsRegular():
-		if off, err := f.Seek(0, io.SeekCurrent); question && (err != nil || off != 0) {
-			return "", nil
-		}
-	case fi.Mode()&(os.ModeNamedPipe|os.ModeSocket) != 0:
-		if question {
-			first := make(chan []byte, 1)
-			go func() {
-				buf := make([]byte, 32<<10)
-				n, _ := f.Read(buf)
-				first <- buf[:n]
-			}()
-			select {
-			case b := <-first:
-				r = io.MultiReader(bytes.NewReader(b), f)
-			case <-time.After(stdinWait):
-				return "", nil
-			}
-		}
-	default:
-		return "", nil
+	type chunk struct {
+		b   []byte
+		err error
 	}
-	b, err := io.ReadAll(io.LimitReader(r, maxStdin+1))
+	first := make(chan chunk, 1)
+	go func() {
+		b := make([]byte, 32<<10)
+		n, err := f.Read(b)
+		first <- chunk{b[:n], err}
+	}()
+	var c chunk
+	select {
+	case c = <-first:
+	case <-time.After(stdinHint):
+		if hint != nil {
+			fmt.Fprint(hint, display.Muted("waiting for piped input… (--no-stdin to skip)"))
+		}
+		c = <-first
+		if hint != nil {
+			fmt.Fprint(hint, "\r\x1b[2K")
+		}
+	}
+	if c.err != nil && c.err != io.EOF {
+		return "", fmt.Errorf("read stdin: %w", c.err)
+	}
+	b, err := io.ReadAll(io.LimitReader(io.MultiReader(bytes.NewReader(c.b), f), maxStdin+1))
 	if err != nil {
 		return "", fmt.Errorf("read stdin: %w", err)
 	}
