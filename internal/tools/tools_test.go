@@ -35,6 +35,14 @@ func TestAlwaysKey(t *testing.T) {
 		"git -P diff":                    "git diff",
 		"npm -s test":                    "npm test",
 
+		// Paths leaving the working directory always ask.
+		"cat ~/.ssh/id_rsa":          "",
+		"cat /etc/passwd":            "",
+		"head -n 5 ../secrets.txt":   "",
+		"grep -r key src/../../etc":  "",
+		"grep --file=/etc/x pattern": "",
+		"cat docs/notes..md":         "cat",
+
 		// Options before the subcommand: one may take the next word as
 		// its value, so the subcommand is unknown.
 		"git --namespace status push --force":         "",

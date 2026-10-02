@@ -20,6 +20,8 @@ import (
 //   - not a program that runs other programs or code (runsCode);
 //   - no argument that makes a program run code or change what it works
 //     on (riskyArg), such as git -c, -C or --upload-pack;
+//   - no path that leaves the working directory (leavesCwd): "Always
+//     allow cat" must not cover cat ~/.ssh/id_rsa;
 //   - the subcommand is the first word: an option before it may take the
 //     next word as its value (git --namespace status push runs git push),
 //     so only options known to take none may come first (git --no-pager);
@@ -35,7 +37,7 @@ func alwaysKey(command string) string {
 		return ""
 	}
 	for _, w := range words[1:] {
-		if riskyArg(w) {
+		if riskyArg(w) || leavesCwd(w) {
 			return ""
 		}
 	}
@@ -182,6 +184,21 @@ var riskyOptions = []string{
 // -O, -x or -X alone, with a value attached (-ofile) or in a short cluster
 // (-ec), a riskyOptions name after one or two dashes (--exec-path=…,
 // -exec), or rg's --pre.
+// leavesCwd reports whether w, or an option's =value, is a path that may
+// point outside the working directory: absolute, from home, or through "..".
+func leavesCwd(w string) bool {
+	if v, ok := strings.CutPrefix(w, "-"); ok {
+		_, w, _ = strings.Cut(v, "=")
+	}
+	if strings.HasPrefix(w, "/") || strings.HasPrefix(w, "~") || strings.HasPrefix(w, `\`) {
+		return true
+	}
+	if runtime.GOOS == "windows" && len(w) > 1 && w[1] == ':' {
+		return true
+	}
+	return slices.Contains(strings.FieldsFunc(w, func(r rune) bool { return r == '/' || r == '\\' }), "..")
+}
+
 func riskyArg(w string) bool {
 	body, ok := strings.CutPrefix(w, "-")
 	if !ok || body == "" {
