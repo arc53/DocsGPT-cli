@@ -135,9 +135,13 @@ func (m *selectModel) move(s string) bool {
 		return false
 	}
 	switch {
-	case s == "up" || s == "ctrl+p" || s == "shift+tab" || inline && s == "left" || !m.Filter && s == "k":
+	case inline && s == "left": // a row of choices stops at its ends
+		m.cursor = max(m.cursor-1, 0)
+	case inline && s == "right":
+		m.cursor = min(m.cursor+1, n-1)
+	case s == "up" || s == "ctrl+p" || s == "shift+tab" || !m.Filter && s == "k":
 		m.cursor = (m.cursor - 1 + n) % n
-	case s == "down" || s == "ctrl+n" || s == "tab" || inline && s == "right" || !m.Filter && s == "j":
+	case s == "down" || s == "ctrl+n" || s == "tab" || !m.Filter && s == "j":
 		m.cursor = (m.cursor + 1) % n
 	case s == "home" && !m.Filter, s == "pgup" && m.cursor < m.maxRows:
 		m.cursor = 0

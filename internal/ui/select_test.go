@@ -256,3 +256,16 @@ func TestNotInteractive(t *testing.T) {
 		t.Fatalf("Input err = %v", err)
 	}
 }
+
+func TestInlineChoiceStopsAtEnds(t *testing.T) {
+	m := newSelectModel(confirmSelect("Remove?", false))
+	m.setSize(80, 24)
+	send(m, key(tea.KeyRight))
+	if m.cursor != 1 {
+		t.Fatalf("right on the last choice moved to %d", m.cursor)
+	}
+	send(m, key(tea.KeyLeft), key(tea.KeyLeft))
+	if m.cursor != 0 {
+		t.Fatalf("left past the first choice moved to %d", m.cursor)
+	}
+}
