@@ -15,27 +15,130 @@ import (
 )
 
 func TestAlwaysKey(t *testing.T) {
-	for cmd, want := range map[string]string{
-		"git status":            "git",
-		"  ls -la src ":         "ls",
-		"git log | head":        "",
-		"make && make install":  "",
-		"echo hi > out.txt":     "",
-		"cat < in.txt":          "",
-		"echo $(whoami)":        "",
-		"echo `whoami`":         "",
-		"echo ${HOME}":          "",
-		"ls; rm -rf x":          "",
-		"git status\nrm -rf x":  "",
-		"sleep 5 &":             "",
-		"sudo ls":               "",
-		"bash -c 'ls'":          "",
-		"env FOO=1 ls":          "",
-		"":                      "",
-		"grep shutdown app.log": "grep",
-	} {
+	cases := map[string]string{
+		// Offered: the program and a subcommand word, else the program.
+		"git status":                     "git status",
+		"git log --oneline -5":           "git log",
+		"git commit -m 'fix: a b'":       "git commit",
+		"npm test":                       "npm test",
+		"go test -race -count=1 ./...":   "", // -count starts with c: asks
+		"go test -race -run TestX ./...": "go test",
+		"  ls -la src ":                  "ls",
+		"ls":                             "ls",
+		"grep -rn foo internal":          "grep",
+		"grep shutdown app.log":          "grep shutdown",
+		"cargo build --release":          "cargo build",
+
+		// Shell syntax.
+		"":                     "",
+		"git log | head":       "",
+		"make && make install": "",
+		"echo hi > out.txt":    "",
+		"cat < in.txt":         "",
+		"echo $(whoami)":       "",
+		"echo `whoami`":        "",
+		"echo ${HOME}":         "",
+		"echo \"$HOME\"":       "",
+		"ls; rm -rf x":         "",
+		"git status\nrm -rf x": "",
+		"git status\rrm":       "",
+		"sleep 5 &":            "",
+		"ls *.go":              "",
+		"git {-c,x} status":    "",
+		"echo 'unterminated":   "",
+		"git status # x":       "",
+		"echo a\\ b":           "",
+		"git\xc2\xa0status":    "", // a no-break space is not a separator
+
+		// Environment assignments and paths.
+		"CI=1 npm test":                 "",
+		"CI=1 rm -rf ~":                 "",
+		"/usr/bin/env ls":               "",
+		"/bin/sh -c 'touch /tmp/p'":     "",
+		"./script.sh":                   "",
+		"..\\evil.exe":                  "",
+		"C:\\Windows\\System32\\cmd /c": "",
+
+		// Programs that run code.
+		"sudo ls":        "",
+		"bash -c 'ls'":   "",
+		"Bash -c ls":     "",
+		"env FOO=1 ls":   "",
+		"sed 1e /tmp/x":  "",
+		"sed -n 1p file": "",
+		"tar --checkpoint=1 --checkpoint-action=exec=sh x": "",
+		"tar xf a.tar":              "",
+		"perl -e 'print 1'":         "",
+		"python3.12 -m http.server": "",
+		"python script.py":          "",
+		"node app.js":               "",
+		"make":                      "",
+		"make build":                "",
+		"find . -name x":            "",
+		"awk '{print}' f":           "",
+		"xargs rm":                  "",
+		"ssh host":                  "",
+		"cmd /c dir":                "",
+		"powershell -Command ls":    "",
+		"pwsh.exe -c ls":            "",
+		"start notepad":             "",
+		"npx cowsay":                "",
+		"vim +q f":                  "",
+
+		// Risky arguments and subcommands.
+		"git -c alias.x='!touch /tmp/p' x":       "",
+		"git -C /tmp/evil status":                "",
+		"git --git-dir=/tmp/evil/.git status":    "",
+		"git --exec-path=/tmp status":            "",
+		"git fetch --upload-pack='touch /tmp/p'": "",
+		"git push --receive-pack=x origin":       "",
+		"git rebase -x 'touch /tmp/p' HEAD~1":    "",
+		"git rebase --exec 'touch p' HEAD~1":     "",
+		"git config core.fsmonitor 'touch p'":    "",
+		"git submodule foreach 'rm -rf ~'":       "",
+		"git bisect run ./x":                     "",
+		"git init --template=/tmp/hooks":         "",
+		"git log --output=/tmp/x":                "",
+		"rg --pre ./x foo":                       "",
+		"rg --pre=./x foo":                       "",
+		"go test -exec ./x":                      "",
+		"mysql -esystem":                         "",
+		"curl -o ~/.bashrc http://x":             "",
+		"wget -e robots=off http://x":            "",
+		"npm exec cowsay":                        "",
+		"npm x cowsay":                           "",
+		"yarn dlx cowsay":                        "",
+		"zip -T -TT 'sh -c x' a.zip f":           "",
+	}
+	if runtime.GOOS == "windows" {
+		cases["git commit -m 'fix: a b'"] = "" // cmd.exe has no single quotes
+	}
+	for cmd, want := range cases {
 		if got := alwaysKey(cmd); got != want {
 			t.Errorf("alwaysKey(%q) = %q, want %q", cmd, got, want)
+		}
+	}
+}
+
+// TestAlwaysAllowMatching: an allowed key lets through later commands with
+// the same key only, and never ones that fail the checks.
+func TestAlwaysAllowMatching(t *testing.T) {
+	s := &Session{allowed: map[string]bool{alwaysKey("git status"): true, alwaysKey("ls -la"): true}}
+	for cmd, want := range map[string]bool{
+		"git status --short":         true,
+		"git status -c x":            false,
+		"git -C /tmp/evil status":    false,
+		"git push":                   false,
+		"ls src":                     false, // key "ls src"
+		"ls -R":                      true,
+		"ls -la; rm -rf ~":           false,
+		"CI=1 git status":            false,
+		"/usr/bin/git status":        false,
+		"git status && touch /tmp/p": false,
+	} {
+		key := alwaysKey(cmd)
+		if got := key != "" && s.allowed[key]; got != want {
+			t.Errorf("%q (key %q) allowed = %v, want %v", cmd, key, got, want)
 		}
 	}
 }

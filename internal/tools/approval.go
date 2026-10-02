@@ -332,21 +332,3 @@ func (s *Session) ask(cancel context.CancelFunc, items []ui.Item) (choice, refus
 	}
 	return choice, ""
 }
-
-// alwaysKey returns what "Always allow" covers for command: its first
-// word, for a simple command only. Shell operators, substitutions,
-// redirections or several lines always ask, and so do shells and wrappers
-// that run arbitrary commands themselves. "" when it cannot be allowed.
-func alwaysKey(command string) string {
-	command = strings.TrimSpace(command)
-	if command == "" || strings.ContainsAny(command, ";&|<>`$()\n\r\\") {
-		return ""
-	}
-	first := strings.Fields(command)[0]
-	switch first {
-	case "sh", "bash", "zsh", "fish", "dash", "ksh", "env", "sudo", "doas", "su", "xargs", "eval",
-		"exec", "nohup", "time", "timeout", "nice", "command", "builtin", "watch", "ssh", "find":
-		return ""
-	}
-	return first
-}
