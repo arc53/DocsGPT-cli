@@ -1,7 +1,8 @@
 # Development rules
 
 The architecture and behaviour reference (layout, command contracts, config,
-release flow) is `CLAUDE.md`. These are the rules for changing the code.
+release flow) is `CLAUDE.md`; user docs are `README.md` (short) and `docs/`.
+These are the rules for changing the code.
 
 ## Code
 
@@ -16,6 +17,8 @@ release flow) is `CLAUDE.md`. These are the rules for changing the code.
 - Comments are short and only where the code is not obvious.
 - Errors go to stderr; stdout is the answer or the data (tables, JSON, YAML),
   so it stays pipeable. Exit codes: 0 ok, 1 failure, 2 usage.
+- A user-facing change updates its page in `docs/` (and `CLAUDE.md` when a
+  contract or the layout changes).
 - Never print secrets: tokens are redacted (`config.RedactToken`), webhook
   URLs render as `.../api/webhooks/agents/...`.
 

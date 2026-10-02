@@ -1,6 +1,9 @@
 # DocsGPT-cli
 
-Go CLI tool for interacting with the DocsGPT API from the terminal (v1.0.0).
+Go CLI for DocsGPT: chat with agents from the terminal, one-shot questions in
+pipelines, agents and sources as code, bench, host mode. User docs: `README.md`
+(short) and `docs/` (one page per area; update the page when behaviour changes).
+Development rules: `AGENTS.md`.
 
 ## Project structure
 
@@ -14,8 +17,8 @@ cmd/docsgpt-cli/     → Entry point (package main), calls cmd.Execute(). Lives 
                        first by import-path order, checked by main_test.go
 sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, package
                        docsgpt: the public chat client (Client, Send, SendStream,
-                       RunWithTools + RunOptions/RunResult, StreamHandler, Source,
-                       APIError) — OpenAI-compatible types and the tool-call loop;
+                       RunWithTools + RunOptions/RunResult, Models, StreamHandler,
+                       Source, APIError) — OpenAI-compatible types and the tool-call loop;
                        results carry conversation id, sources, model and usage. A stream
                        without [DONE] and without a finish_reason is an error, and so is a
                        tool_calls index outside 0-63. Stdlib-only, tagged sdk/vX.Y.Z
@@ -23,7 +26,14 @@ sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, pa
                        on it through a pinned require in go.mod (imported as
                        `docsgpt "…/sdk"`, since the package name is not the last
                        path element); go.work points local builds at ./sdk, and
-                       release builds set GOWORK=off to use the pinned version
+                       release builds set GOWORK=off to use the pinned version.
+                       sdk/README.md is the module's user doc
+docs/                → user docs: install (+ updating), quickstart, chat, tools,
+                       configuration, agents-as-code, sources, bench, host, ci;
+                       docs/README.md is the index
+examples/            → agents/ (sample definition), bench/ (suite, one case per
+                       feature), ci/github-actions.yml
+deployment/          → install.sh / install.ps1 (attached to every release)
 cmd/
   root.go            → Root command = the entry point (chat on a TTY, else one-shot ask), typo guard + questionArgs (extra words after a command: exit 2 with `To ask it as a question: docsgpt-cli -- "…"`), global flags (--url, --key, --token), chat flags, help groups + usage template, Execute (startup config, update gate)
   ask.go             → Single-shot Q&A with streaming + tool support (hidden alias; the root runs it)
@@ -39,6 +49,7 @@ cmd/
   sources.go         → sources list / upload / delete, agents prompts / agents tools (old `prompts list` / `tools list` hidden)
   utils.go           → printError, codeBlocks/extractCommand, copyToClipboard
 internal/
+  earlytheme/        → pins lipgloss's background before bubbletea's init (see cmd/docsgpt-cli)
   config/
     config.go        → Unified config load/save/migrate from ~/.docsgpt/config.json; key/token/URL resolution (flag > env > config, ErrNoKey), key and token redaction
   install/           → PATH install of the running binary (profiles, Windows user PATH), IsWritable
@@ -60,9 +71,10 @@ internal/
     documents.go     → -f expansion: files / directories / stdin, verbatim multi-document YAML splitting, kind: Agent validation
     resolve.go       → --resolve parsing, mapping onto the server `resolution` object, missing/unavailable gating
   host/
-    daemon.go        → RunDaemon: poll/SSE loop, idle heartbeat, idle-only auto-update + restart (revoke → ErrRevoked, exit 0)
+    config.go        → ~/.docsgpt/host.yml (device id, base URL, poll interval, log file; flat YAML, 0600); identity.go: Ed25519 host.key + request signing
+    daemon.go        → RunDaemon: poll/SSE loop, idle heartbeat, idle-only auto-update + restart (revoke → ErrRevoked, exit 0); banner.go startup lines, servicemode.go + console_*.go: Windows task logging to host.log
     install.go       → InstallService / UninstallService over systemd (service.go), launchd (launchd.go), Task Scheduler (wintask.go)
-    transport.go     → Signed polling + SSE session transport; invocation.go runs and streams tool calls; pairing.go, device.go, revoke.go
+    transport.go     → Signed polling + SSE session transport; invocation.go runs and streams commands (approval decided server-side; its own denylist floor); pairing.go, device.go, revoke.go
   context/
     enricher.go      → the <context> block: cwd, capped listing, AGENTS.md/CLAUDE.md (git root → cwd, 12KB), shell history (opt-in)
   session/
@@ -83,6 +95,7 @@ internal/
                        tokens colored from the palette)
     chrome.go        → one dim header line (docsgpt · key · host · cwd) for ask; chat
                        welcome line, footer text, the user-message block, Ago
+    style.go         → Accent/Muted/Dim/Success/Warn helpers, ErrorMsg (stderr)
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
                        (live last-5-lines region), DiffPreview for writes
     safe.go          → Safe: every model/server string in tool blocks and sources is
@@ -100,7 +113,8 @@ internal/
                        shortcuts), Confirm, Input (mask, validate), Spinner (stderr);
                        Stderr option for prompts drawn while stdout carries an answer.
                        editor.go: the chat input (Editor); history.go: prompt history
-                       file; hold_*.go: echo off while an answer streams, DiscardInput
+                       file; fuzzy.go: popup/filter matching; hold_*.go: echo off while
+                       an answer streams, DiscardInput
   tools/
     definitions.go   → Tool schemas: run_command, read_file (offset/limit), write_file
     approval.go      → Session: per chat session / ask run; title, approval, execution,
@@ -111,6 +125,8 @@ internal/
                        controlling terminal, whole group killed; Windows: hidden console,
                        taskkill /T), regularFile + readFile (regular files only, chunked,
                        ctx-aware line ranges), writeFile (creates parents)
+    shell.go         → RunShell: the chat's `!cmd` (no approval, no time limit)
+    procgroup_*.go   → own process group / session, whole-tree kill (Unix), taskkill (Windows)
     truncate.go      → model-bound output: last 2000 lines / 50KB, line/rune safe, with
                        a note about the dropped head; tailBuffer bounds the capture
   update/
@@ -162,7 +178,7 @@ removing the default promotes the first remaining key. `whoami`: active key
 3. Unless `--no-context`, prepends the `<context>` block (see chat)
 4. Sends to `POST {base_url}/v1/chat/completions` with streaming
 5. Handles tool calls (run_command, read_file, write_file) with user approval loop; tools are only offered when stdin is a TTY or `--auto-approve` is set. Tool UI (titles, approval prompt, command output, status) goes to stderr
-6. stdout not a TTY: stdout carries only the raw answer (no header, sources, clipboard). On a TTY: header, rendered answer, dim `Sources` block, first bash/sh block copied to the clipboard (with a dim note)
+6. stdout not a TTY: stdout carries only the answer, control sequences stripped (no header, sources, clipboard). On a TTY: header, rendered answer, dim `Sources` block, first bash/sh block copied to the clipboard (with a dim note)
 
 Errors (every command) go to stderr; a missing question or a bad flag is a usage error (exit 2, flags with a `--help` pointer); Ctrl+C exits `ask` with 130.
 
@@ -282,9 +298,11 @@ Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on fi
 ## Key dependencies
 
 - `spf13/cobra` — CLI framework
-- `charmbracelet/glamour` + `lipgloss` — markdown rendering and styling
-- `atotto/clipboard` — clipboard access
+- `charmbracelet/glamour` + `lipgloss` — markdown rendering and styling (our own style, no auto-style query)
+- `alecthomas/chroma` — code block highlighting, colored from the palette
 - `charmbracelet/bubbletea` — every interactive prompt, the chat editor included
+- `charmbracelet/x/ansi`, `muesli/termenv`, `mattn/go-isatty`, `x/term`, `x/sys` — widths and wrapping, color profile, TTY checks, raw mode / echo off
+- `atotto/clipboard` — clipboard access
 - `minio/selfupdate` — atomic binary replacement for the update command
 - `golang.org/x/mod/semver` — version comparison
 - `gopkg.in/yaml.v3` — bench suite/case files
@@ -293,8 +311,8 @@ Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on fi
 ## Build & run
 
 ```bash
-go build -o docsgpt-cli ./cmd/docsgpt-cli
-./docsgpt-cli --help
+go build -o /tmp/dg ./cmd/docsgpt-cli && /tmp/dg --help   # outside the repo
+make build                                                # ./docsgpt-cli (gitignored), version stamped
 ```
 
 ## Notes
@@ -303,6 +321,6 @@ go build -o docsgpt-cli ./cmd/docsgpt-cli
 - `cmd.Version` is stamped by ldflags for release and `make build`; `resolveVersion` in root.go recovers it from `debug.ReadBuildInfo` for `go install` builds, which carry no ldflags and would otherwise report "dev" and disable their own update checks
 - Releases: `.github/workflows/release.yml` (dispatch, or a hand-pushed `v*` tag) → GoReleaser builds linux/darwin/windows (amd64+arm64) archives + checksums.txt with stable asset names, attaches `deployment/install.sh`/`install.ps1`, and commits a Homebrew **cask** to `arc53/homebrew-DocsGPT-cli` with `HOMEBREW_TAP_TOKEN` (`skip_upload: auto` keeps prereleases out of brew; the job only runs on `arc53/DocsGPT-cli`). Cut from Actions → Release → Run workflow (a `cli`/`sdk` bump input; one run tags the sdk, pushes the `go.mod` pin bump, then tags and releases the CLI in that order) — there is no local release target; see `RELEASING.md`
 - Install script: `docs.ac/install-cli` redirects to `releases/latest/download/install.sh`, so the live installer is whatever the newest release carries — a fix lands only on the next tag. Both installers verify the archive against `checksums.txt`, then hand off to `docsgpt-cli install`, which owns the PATH logic for every platform
-- SSE streaming parsed with stdlib bufio.Scanner (no external SSE lib)
+- SSE parsed with stdlib bufio (no external SSE lib), separately in sdk/client.go, bench/target and host/transport
 - Shell history (opt-in context): zsh, bash, fish
 - Cross-platform: Unix + Windows
