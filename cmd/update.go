@@ -69,7 +69,7 @@ var updateCmd = &cobra.Command{
 			return nil
 		}
 
-		exePath, err := resolveExecutable()
+		exePath, err := update.ExecutablePath()
 		if err != nil {
 			return err
 		}
@@ -107,7 +107,7 @@ var updateCmd = &cobra.Command{
 }
 
 func runRollback() error {
-	exePath, err := resolveExecutable()
+	exePath, err := update.ExecutablePath()
 	if err != nil {
 		return err
 	}
@@ -129,18 +129,6 @@ func runRollback() error {
 	fmt.Println(display.Success("Rolled back to " + rolledTo))
 	fmt.Println(display.Muted("Auto-update will skip " + Version + ". Run 'docsgpt-cli update' to reinstall it."))
 	return nil
-}
-
-func resolveExecutable() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("could not determine the executable path: %w", err)
-	}
-	realPath, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		return "", fmt.Errorf("could not resolve the executable path: %w", err)
-	}
-	return realPath, nil
 }
 
 func init() {
