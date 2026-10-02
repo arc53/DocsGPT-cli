@@ -25,10 +25,11 @@ func RequestApproval(toolName string, rawArgs string) (ApprovalResult, string, e
 	detail, preview := extractToolDetail(toolName, rawArgs)
 	risk := display.ToolRisk(toolName)
 
+	// The prompt goes to stderr: stdout may be carrying the answer to a file.
 	card := display.RenderApprovalCard(toolName, detail, preview, risk)
-	fmt.Println()
-	fmt.Println(card)
-	fmt.Print("  > ")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, card)
+	fmt.Fprint(os.Stderr, "  > ")
 
 	input, err := readLine(bufio.NewReader(os.Stdin))
 	if err != nil {
@@ -44,7 +45,7 @@ func RequestApproval(toolName string, rawArgs string) (ApprovalResult, string, e
 	case "3", "e", "edit":
 		return editArgs(toolName, rawArgs)
 	default:
-		fmt.Println(display.Muted("  Invalid choice, denying."))
+		fmt.Fprintln(os.Stderr, display.Muted("  Invalid choice, denying."))
 		return Denied, rawArgs, nil
 	}
 }
@@ -100,8 +101,8 @@ func editArgs(toolName string, rawArgs string) (ApprovalResult, string, error) {
 		}
 		json.Unmarshal([]byte(rawArgs), &args)
 
-		fmt.Printf("  Edit command (current: %s)\n", args.Command)
-		fmt.Print("  $ ")
+		fmt.Fprintf(os.Stderr, "  Edit command (current: %s)\n", args.Command)
+		fmt.Fprint(os.Stderr, "  $ ")
 		newCmd, err := readLine(reader)
 		if err != nil {
 			return Denied, rawArgs, err
@@ -112,8 +113,8 @@ func editArgs(toolName string, rawArgs string) (ApprovalResult, string, error) {
 	}
 
 	// For other tools, let user edit raw JSON
-	fmt.Printf("  Edit arguments JSON (current: %s)\n", rawArgs)
-	fmt.Print("  > ")
+	fmt.Fprintf(os.Stderr, "  Edit arguments JSON (current: %s)\n", rawArgs)
+	fmt.Fprint(os.Stderr, "  > ")
 	newArgs, err := readLine(reader)
 	if err != nil {
 		return Denied, rawArgs, err

@@ -146,6 +146,14 @@ docsgpt-cli [command]
 
 You can use `docsgpt-cli [command] --help` to get more information about each command.
 
+`ask` works in pipelines: piped input is sent along with the question, and
+when stdout is not a terminal it receives only the answer, as plain text:
+
+```bash
+tail -n 50 app.log | docsgpt-cli ask "Why does this fail?"
+docsgpt-cli ask "Summarize the README" > summary.md
+```
+
 ---
 
 ## Updating

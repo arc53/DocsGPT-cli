@@ -77,12 +77,12 @@ internal/
 ## How it works
 
 ### ask command
-1. Loads config from `~/.docsgpt/config.json`
-2. Resolves API key (Bearer auth) and base URL
+1. Reads piped/redirected stdin (pipes and files only, never a TTY or /dev/null): alone it is the question, with args it is appended as `<stdin>…</stdin>`
+2. Loads config from `~/.docsgpt/config.json`, resolves API key (Bearer auth) and base URL
 3. Optionally enriches question with context (cwd, dir listing, shell history)
 4. Sends to `POST {base_url}/v1/chat/completions` with streaming
-5. Handles tool calls (run_command, read_file, write_file) with user approval loop
-6. Extracts bash/sh code blocks and copies to clipboard
+5. Handles tool calls (run_command, read_file, write_file) with user approval loop; tools are only offered when stdin is a TTY or `--auto-approve` is set. Tool UI (approval card, command output) goes to stderr
+6. stdout not a TTY: stdout carries only the raw answer (no header, sources, clipboard). On a TTY: header, rendered answer, dim `Sources:` line, first bash/sh block copied to the clipboard (with a dim note)
 
 ### chat command
 Interactive REPL with multi-turn conversation history. Same API + tool support.

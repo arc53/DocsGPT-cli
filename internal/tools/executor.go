@@ -81,9 +81,8 @@ func executeRunCommand(rawArgs string, timeout time.Duration) ToolResult {
 	output, err := cmd.CombinedOutput()
 	outStr := TruncateOutput(string(output), maxOutputBytes)
 
-	// Print output in real-time style
 	if len(output) > 0 {
-		fmt.Print(display.Muted(string(output)))
+		fmt.Fprint(os.Stderr, display.Muted(string(output)))
 	}
 
 	if err != nil {

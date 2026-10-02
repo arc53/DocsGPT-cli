@@ -159,6 +159,9 @@ func (s *chatSession) executor(input string) {
 		return
 	}
 
+	if line := sourcesLine(res.Sources); line != "" {
+		fmt.Println(display.Muted(line))
+	}
 	s.history = res.Messages
 	s.lastAnswer = renderer.Content()
 
@@ -234,7 +237,7 @@ func handleToolCall(ctx context.Context, tc docsgpt.ToolCall, timeout time.Durat
 	if normalizedName == "run_command" {
 		safe, reason := tools.IsSafe(tc.Function.Arguments)
 		if !safe {
-			fmt.Printf("\n%s Command blocked: %s\n", display.Danger("✗"), reason)
+			fmt.Fprintf(os.Stderr, "\n%s Command blocked: %s\n", display.Danger("✗"), reason)
 			return fmt.Sprintf("Command was blocked for safety: %s", reason)
 		}
 	}
