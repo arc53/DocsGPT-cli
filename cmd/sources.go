@@ -41,7 +41,9 @@ upload or delete.`,
 var sourcesListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List your sources",
-	Args:  usageArgs(cobra.NoArgs),
+	Example: `  docsgpt-cli sources list
+  docsgpt-cli sources list --json | jq -r '.[] | select(.name == "Product docs") | .id'`,
+	Args: usageArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withClient(func(ctx context.Context, c *manage.Client) error {
 			return runSourcesList(ctx, c, sourcesListJSON, os.Stdout)
@@ -85,7 +87,10 @@ Exit codes: 0 ok, 1 upload/ingestion failed or timed out, 2 usage error.`,
 var sourcesDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
 	Short: "Delete a source and its index",
-	Args:  usageArgs(cobra.ExactArgs(1)),
+	Long:  "Delete a source and its index. It asks first; without a terminal it needs --yes.",
+	Example: `  docsgpt-cli sources delete <id>
+  docsgpt-cli sources delete <id> --yes   # in CI`,
+	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withClient(func(ctx context.Context, c *manage.Client) error {
 			if !sourcesDeleteYes {

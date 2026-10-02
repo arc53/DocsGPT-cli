@@ -33,8 +33,13 @@ var (
 var hostCmd = &cobra.Command{
 	Use:   "host",
 	Short: "Run docsgpt-cli as a long-lived daemon paired to a DocsGPT account",
-	Long: "Run docsgpt-cli as a long-lived daemon paired to a DocsGPT account.\n\n" +
-		"Pair a device in DocsGPT under Settings → Devices, where its approval mode is set too.",
+	Long: `Run docsgpt-cli as a long-lived daemon paired to a DocsGPT account, so its
+agents can run commands on this machine. Pair it first with a code from
+DocsGPT → Settings → Devices, where its approval mode is set too.`,
+	Example: `  docsgpt-cli host pair               # pair with a code from DocsGPT
+  docsgpt-cli host                    # run the daemon in the foreground
+  docsgpt-cli host install-service    # or as a service, started at boot or logon
+  docsgpt-cli host status`,
 	Args: subcommandArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runHostDaemon()
@@ -212,7 +217,7 @@ func formatPaired(d *host.DeviceMe) string {
 
 var hostStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show the host pairing status (hits the server for live state)",
+	Short: "Show this device and whether it is online",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := host.LoadHostConfig()
 		if err != nil && !os.IsNotExist(err) {
@@ -337,6 +342,8 @@ var hostInstallServiceCmd = &cobra.Command{
 		"otherwise it uses $SUDO_USER, falling back to root.\n\n" +
 		"Pass --system to force system mode explicitly (requires root;\n" +
 		"Linux/macOS only).",
+	Example: `  docsgpt-cli host install-service
+  sudo docsgpt-cli host install-service --system --user docsgpt`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if !host.ServiceInstallSupported() {
 			return host.ErrUnsupportedOS

@@ -109,7 +109,13 @@ to invalidate them.`,
 var whoamiCmd = &cobra.Command{
 	Use:   "whoami",
 	Short: "Show the active API key and access token",
-	Args:  usageArgs(cobra.NoArgs),
+	Long: `Show the agent API key that chat and questions use, with the agent it
+belongs to, and the access token's user, scopes and restrictions. Exits 1 when
+neither is configured.`,
+	Example: `  docsgpt-cli whoami
+  docsgpt-cli whoami --key support
+  docsgpt-cli whoami --json | jq -r '.token.scopes[]'`,
+	Args: usageArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()

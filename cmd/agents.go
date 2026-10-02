@@ -62,7 +62,9 @@ plan, apply and delete, and agents:keys to trigger an agent by id.`,
 var agentsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List your agents",
-	Args:  usageArgs(cobra.NoArgs),
+	Example: `  docsgpt-cli agents list
+  docsgpt-cli agents list --json | jq -r '.[] | select(.status == "published") | .id'`,
+	Args: usageArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withClient(func(ctx context.Context, c *manage.Client) error {
 			return runAgentsList(ctx, c, agentsListJSON, os.Stdout)
@@ -127,7 +129,10 @@ Exit codes: 0 applied, 1 blocked or failed, 2 usage error.`,
 var agentsDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
 	Short: "Delete an agent",
-	Args:  usageArgs(cobra.ExactArgs(1)),
+	Long:  "Delete an agent. It asks first; without a terminal it needs --yes.",
+	Example: `  docsgpt-cli agents delete <id>
+  docsgpt-cli agents delete <id> --yes   # in CI`,
+	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withClient(func(ctx context.Context, c *manage.Client) error {
 			if !agentsDeleteYes {
