@@ -119,13 +119,7 @@ func Execute() {
 	}
 
 	if err != nil {
-		// Account-level commands keep stdout for data (tables, JSON, YAML),
-		// so their errors go to stderr.
-		if c, _, findErr := rootCmd.Find(os.Args[1:]); findErr == nil && hasNoBanner(c) {
-			fmt.Fprintln(os.Stderr, display.Danger("Error:"), err.Error())
-		} else {
-			display.ErrorMsg(err.Error())
-		}
+		display.ErrorMsg(err.Error())
 		os.Exit(exitCodeFor(err))
 	}
 }
@@ -189,6 +183,15 @@ func init() {
 	rootCmd.PersistentFlags().IntVar(&globalTimeout, "timeout", 30, "Command execution timeout in seconds")
 	rootCmd.PersistentFlags().StringVar(&globalTheme, "theme", "", "Color theme: auto, dark, light")
 	rootCmd.PersistentFlags().BoolVar(&globalNoMotion, "no-motion", false, "Disable banner animation")
+
+	// Runtime errors of the chat commands print no usage; flag errors exit 2
+	// with a pointer to --help.
+	for _, c := range []*cobra.Command{askCmd, chatCmd, keysCmd} {
+		c.SilenceUsage = true
+		c.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+			return usageErrf("%w\nRun '%s --help' for usage.", err, c.CommandPath())
+		})
+	}
 
 	rootCmd.AddCommand(askCmd)
 	rootCmd.AddCommand(keysCmd)

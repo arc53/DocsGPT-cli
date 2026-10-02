@@ -89,6 +89,8 @@ internal/
 5. Handles tool calls (run_command, read_file, write_file) with user approval loop; tools are only offered when stdin is a TTY or `--auto-approve` is set. Tool UI (approval card, command output) goes to stderr
 6. stdout not a TTY: stdout carries only the raw answer (no header, sources, clipboard). On a TTY: header, rendered answer, dim `Sources:` line, first bash/sh block copied to the clipboard (with a dim note)
 
+Errors (every command) go to stderr. `ask`/`chat`/`keys` print no usage on runtime errors (exit 1); a missing question or a bad flag is a usage error (exit 2, flags with a `--help` pointer); Ctrl+C exits `ask` with 130.
+
 ### chat command
 Interactive REPL with multi-turn conversation history. Same API + tool support.
 Special commands: `/quit`, `/clear`, `/copy`, `/think`. Ctrl+C cancels the in-flight

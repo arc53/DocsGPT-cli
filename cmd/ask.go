@@ -49,7 +49,7 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 			question += "\n\n<stdin>\n" + piped + "\n</stdin>"
 		}
 		if strings.TrimSpace(question) == "" {
-			return fmt.Errorf("please provide a question (as arguments or on stdin)")
+			return usageErrf("please provide a question (as arguments or on stdin)")
 		}
 
 		cfg, err := config.Load()

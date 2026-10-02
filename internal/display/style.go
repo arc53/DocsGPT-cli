@@ -1,6 +1,9 @@
 package display
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 // Accent renders text in the accent color (prompts, headings).
 func Accent(s string) string {
@@ -32,9 +35,9 @@ func Info(s string) string {
 	return T.Info.Render(s)
 }
 
-// ErrorMsg prints a formatted error message.
+// ErrorMsg prints a formatted error message to stderr.
 func ErrorMsg(message string) {
-	fmt.Printf("%s %s\n", Danger("Error:"), message)
+	fmt.Fprintf(os.Stderr, "%s %s\n", Danger("Error:"), message)
 }
 
 // Prompt renders a prompt symbol in accent color.
