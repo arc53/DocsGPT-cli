@@ -81,6 +81,10 @@ type chatSession struct {
 	showReasoning bool
 	toolDefs      []docsgpt.Tool
 	timeout       time.Duration
+	// conversationID continues the server-side conversation, which then
+	// supplies the history (the messages are still sent, for servers that
+	// ignore the id).
+	conversationID string
 }
 
 func (s *chatSession) executor(input string) {
@@ -100,6 +104,7 @@ func (s *chatSession) executor(input string) {
 		}
 		s.history = newHistory
 		s.lastAnswer = ""
+		s.conversationID = ""
 		fmt.Println("History cleared.")
 		return
 	case "/copy":
@@ -145,17 +150,21 @@ func (s *chatSession) executor(input string) {
 	}
 
 	res, err := s.client.RunWithTools(ctx, s.history, docsgpt.RunOptions{
-		Tools: s.toolDefs, Stream: !globalNoStream, OnDelta: onDelta, OnToolCall: onToolCall,
+		Tools: s.toolDefs, Stream: !globalNoStream, ConversationID: s.conversationID,
+		OnDelta: onDelta, OnToolCall: onToolCall,
 	})
 	renderer.Flush()
 	if err != nil {
+		// Drop the user turn that never got an answer so the next
+		// message doesn't carry a dangling question.
+		s.history = s.history[:len(s.history)-1]
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-			// Drop the user turn that never got an answer so the next
-			// message doesn't carry a dangling question.
-			s.history = s.history[:len(s.history)-1]
 			fmt.Println(display.Muted("Interrupted."))
 			return
 		}
+		// The server may have refused the conversation (deleted, say):
+		// the next turn starts a new one from the messages.
+		s.conversationID = ""
 		printError(err.Error())
 		return
 	}
@@ -164,6 +173,7 @@ func (s *chatSession) executor(input string) {
 		fmt.Println(display.Muted(line))
 	}
 	s.history = res.Messages
+	s.conversationID = res.ConversationID
 	s.lastAnswer = renderer.Content()
 
 	fmt.Println()

@@ -93,6 +93,12 @@ Errors (every command) go to stderr. `ask`/`chat`/`keys` print no usage on runti
 
 ### chat command
 Interactive REPL with multi-turn conversation history. Same API + tool support.
+Each turn sends the full messages plus the `conversation_id` the server returned
+for the previous turn; a current server then takes the history from that stored
+conversation (no duplication, the messages are ignored except the last question
+and a system message), an older one falls back to the messages. `/clear` and a
+failed turn start a new conversation; a failed or interrupted turn is dropped
+from the local history.
 Special commands: `/quit`, `/clear`, `/copy`, `/think`. Ctrl+C cancels the in-flight
 request (signal.NotifyContext in the executor; the prompt library restores cooked mode
 around the executor so it is a real SIGINT) or clears the input line; Ctrl+D exits.
