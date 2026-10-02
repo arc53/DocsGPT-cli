@@ -127,7 +127,7 @@ func TestEditorCtrlC(t *testing.T) {
 func TestEditorHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "history")
 	h := LoadHistory(path)
-	for _, s := range []string{"first", "multi\nline", "my key is 00000000-0000-4000-8000-000000000000", "dgpt_pat_abc", "last"} {
+	for _, s := range []string{"first", "multi\nline", "my key is 0b6e2c1a-7d4f-4e8a-9c3b-5f1d2e3a4b5c", "dgpt_pat_abc", "last"} {
 		h.Add(s)
 	}
 	h = LoadHistory(path)
