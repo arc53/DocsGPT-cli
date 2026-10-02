@@ -290,7 +290,7 @@ func (s *chatSession) send(text, shown string) {
 	}
 	added[0].Text = text
 	added[len(added)-1].Sources = res.Sources
-	if err := s.sess.Record(s.keyName, res.ConversationID, added...); err != nil {
+	if err := s.sess.Record(s.baseURL, s.keyName, res.ConversationID, added...); err != nil {
 		printError("Could not save the chat: " + err.Error())
 		fmt.Println()
 	}

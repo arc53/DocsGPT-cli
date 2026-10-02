@@ -22,14 +22,15 @@ func TestRecordAndLoad(t *testing.T) {
 	}
 	user := docsgpt.Message{Role: "user", Content: "<context>\n…\n</context>\n\nhello"}
 	answer := docsgpt.Message{Role: "assistant", Content: "Hi!"}
-	if err := s.Record("test", "conv-1", Entry{Message: &user, Text: "hello"}, Entry{Message: &answer, Sources: []docsgpt.Source{{Title: "Doc"}}}); err != nil {
+	if err := s.Record("https://example.com", "test", "conv-1", Entry{Message: &user, Text: "hello"}, Entry{Message: &answer, Sources: []docsgpt.Source{{Title: "Doc"}}}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond)
 	second := New(cwd, "https://example.com", "other")
 	q2 := docsgpt.Message{Role: "user", Content: "second chat"}
-	second.Record("other", "conv-2", Entry{Message: &q2, Text: "second chat"})
-	s.Record("other", "conv-3", Entry{Message: &q2, Text: "again"})
+	second.Record("https://example.com", "other", "conv-2", Entry{Message: &q2, Text: "second chat"})
+	// Resumed on another server: the state line records it.
+	s.Record("https://other.example", "other", "conv-3", Entry{Message: &q2, Text: "again"})
 
 	if fi, err := os.Stat(s.Path); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("session file mode: %v %v", fi, err)
@@ -42,7 +43,7 @@ func TestRecordAndLoad(t *testing.T) {
 		t.Fatalf("List: %d sessions, %v", len(list), err)
 	}
 	got := list[0] // updated last
-	if got.Path != s.Path || got.Key != "other" || got.ConversationID != "conv-3" || got.Server != "https://example.com" {
+	if got.Path != s.Path || got.Key != "other" || got.ConversationID != "conv-3" || got.Server != "https://other.example" {
 		t.Fatalf("latest = %+v", got)
 	}
 	turns := got.Turns()
@@ -72,7 +73,7 @@ func TestDirsDoNotCollide(t *testing.T) {
 	q := docsgpt.Message{Role: "user", Content: "hi"}
 	other := New("/x/a/b", "https://example.com", "k")
 	other.Path = filepath.Join(Dir("/x/a-b"), filepath.Base(other.Path)) // as the old encoding did
-	if err := other.Record("k", "conv", Entry{Message: &q}); err != nil {
+	if err := other.Record("https://example.com", "k", "conv", Entry{Message: &q}); err != nil {
 		t.Fatal(err)
 	}
 	if list, _ := List("/x/a-b"); len(list) != 0 {

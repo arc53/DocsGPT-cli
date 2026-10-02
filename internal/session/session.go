@@ -21,16 +21,16 @@ import (
 )
 
 // Entry is one line of a session file: the "session" header first, then
-// "message" lines and "state" lines (the key or server conversation
-// changed).
+// "message" lines and "state" lines (the server, key or server
+// conversation changed).
 type Entry struct {
 	Type string    `json:"type"`
 	Time time.Time `json:"time"`
 
-	ID     string `json:"id,omitempty"`     // header
-	Cwd    string `json:"cwd,omitempty"`    // header
-	Server string `json:"server,omitempty"` // header
+	ID  string `json:"id,omitempty"`  // header
+	Cwd string `json:"cwd,omitempty"` // header
 
+	Server         string `json:"server,omitempty"`          // header, state
 	Key            string `json:"key,omitempty"`             // header, state
 	ConversationID string `json:"conversation_id,omitempty"` // header, state
 
@@ -42,7 +42,8 @@ type Entry struct {
 // Session is one saved chat.
 type Session struct {
 	Path           string
-	Cwd, Server    string
+	Cwd            string
+	Server         string // the latest
 	Key            string // the latest
 	ConversationID string // the latest
 	Created        time.Time
@@ -74,17 +75,17 @@ func New(cwd, server, key string) *Session {
 	return &Session{Path: filepath.Join(Dir(cwd), name), Cwd: cwd, Server: server, Key: key, Created: now, Updated: now}
 }
 
-// Record appends messages, noting first whether the key or the server
-// conversation changed. The first call writes the header.
-func (s *Session) Record(key, conversationID string, msgs ...Entry) error {
+// Record appends messages, noting first whether the server, the key or the
+// server conversation changed. The first call writes the header.
+func (s *Session) Record(server, key, conversationID string, msgs ...Entry) error {
 	now := time.Now().UTC()
 	var lines []Entry
 	if _, err := os.Stat(s.Path); err != nil {
 		id := strings.TrimSuffix(filepath.Base(s.Path), ".jsonl")
 		id = id[strings.LastIndexByte(id, '_')+1:]
-		lines = append(lines, Entry{Type: "session", Time: s.Created, ID: id, Cwd: s.Cwd, Server: s.Server, Key: key, ConversationID: conversationID})
-	} else if key != s.Key || conversationID != s.ConversationID {
-		lines = append(lines, Entry{Type: "state", Time: now, Key: key, ConversationID: conversationID})
+		lines = append(lines, Entry{Type: "session", Time: s.Created, ID: id, Cwd: s.Cwd, Server: server, Key: key, ConversationID: conversationID})
+	} else if server != s.Server || key != s.Key || conversationID != s.ConversationID {
+		lines = append(lines, Entry{Type: "state", Time: now, Server: server, Key: key, ConversationID: conversationID})
 	}
 	for _, m := range msgs {
 		m.Type, m.Time = "message", now
@@ -104,7 +105,7 @@ func (s *Session) Record(key, conversationID string, msgs ...Entry) error {
 			return err
 		}
 	}
-	s.Key, s.ConversationID, s.Updated = key, conversationID, now
+	s.Server, s.Key, s.ConversationID, s.Updated = server, key, conversationID, now
 	s.Messages = append(s.Messages, lines[len(lines)-len(msgs):]...)
 	return nil
 }
@@ -135,7 +136,7 @@ func Load(path string) (*Session, error) {
 			s.Cwd, s.Server, s.Created = e.Cwd, e.Server, e.Time
 			s.Key, s.ConversationID = e.Key, e.ConversationID
 		case "state":
-			s.Key, s.ConversationID = e.Key, e.ConversationID
+			s.Server, s.Key, s.ConversationID = e.Server, e.Key, e.ConversationID
 		case "message":
 			if e.Message != nil {
 				s.Messages = append(s.Messages, e)
