@@ -16,6 +16,7 @@ import (
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	ctxenrich "github.com/arc53/DocsGPT-cli/internal/context"
 	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/session"
 	"github.com/arc53/DocsGPT-cli/internal/tools"
 	"github.com/arc53/DocsGPT-cli/internal/ui"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
@@ -56,19 +57,13 @@ type chatSession struct {
 	sentContext string
 	// shellOutput holds the output of !commands for the next message.
 	shellOutput []string
-	turns       []chatTurn // for /export
+	sess        *session.Session
 	lastAnswer  string
 
 	showReasoning bool
 	toolDefs      []docsgpt.Tool
 	tools         *tools.Session
 	quit          bool
-}
-
-// chatTurn is one question and its answer.
-type chatTurn struct {
-	question, answer string
-	sources          []docsgpt.Source
 }
 
 // chatCommand is a slash command of the chat.
@@ -85,6 +80,7 @@ var chatCommands []chatCommand
 func init() {
 	chatCommands = []chatCommand{
 		{name: "new", desc: "Start a new conversation", aliases: []string{"clear"}, run: (*chatSession).newConversation},
+		{name: "resume", desc: "Resume an earlier chat in this directory", run: func(s *chatSession, _ string) { s.pickSession() }},
 		{name: "copy", desc: "Copy the last answer, or one of its code blocks", run: (*chatSession).copyAnswer},
 		{name: "export", args: "[file]", desc: "Save the conversation as markdown", run: (*chatSession).export},
 		{name: "think", desc: "Show or hide the model's reasoning", run: (*chatSession).toggleThinking},
@@ -110,6 +106,7 @@ func runChat(first string) error {
 		client: docsgpt.NewClient(baseURL, apiKey),
 		tools:  &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second},
 	}
+	s.reset()
 	if !globalNoTools {
 		s.toolDefs = tools.ToolDefinitions()
 	}
@@ -117,6 +114,19 @@ func runChat(first string) error {
 	display.ShowBanner(cfg.Settings.Banner)
 	fmt.Println(display.ChatWelcome(Version))
 	fmt.Println()
+	switch {
+	case chatResume:
+		if !s.pickSession() {
+			return nil
+		}
+	case chatContinue:
+		cwd, _ := os.Getwd()
+		if list, _ := session.List(cwd); len(list) > 0 {
+			s.resume(list[0])
+		} else {
+			fmt.Println(display.Dim("No earlier chat in this directory; starting a new one.") + "\n")
+		}
+	}
 
 	if first = strings.TrimSpace(first); first != "" {
 		s.send(first, first)
@@ -135,6 +145,9 @@ func runChat(first string) error {
 			return err
 		}
 		s.handle(text, shown)
+	}
+	if s.sess.Saved() {
+		fmt.Println(display.Dim("Continue this chat with: docsgpt-cli -c"))
 	}
 	return nil
 }
@@ -263,16 +276,97 @@ func (s *chatSession) send(text, shown string) {
 	display.PrintSources(res.Sources)
 	fmt.Println()
 
+	var added []session.Entry
+	for i := range res.Messages[len(messages)-1:] {
+		added = append(added, session.Entry{Message: &res.Messages[len(messages)-1+i]})
+	}
+	added[0].Text = text
+	added[len(added)-1].Sources = res.Sources
+	if err := s.sess.Record(s.keyName, res.ConversationID, added...); err != nil {
+		printError("Could not save the chat: " + err.Error())
+		fmt.Println()
+	}
 	s.history, s.conversationID = res.Messages, res.ConversationID
 	s.sentContext, s.shellOutput = block, nil
 	s.lastAnswer = renderer.Content()
-	s.turns = append(s.turns, chatTurn{text, s.lastAnswer, res.Sources})
 }
 
-// reset starts a new conversation.
+// reset starts a new conversation, saved in a new session.
 func (s *chatSession) reset() {
 	s.history, s.conversationID, s.sentContext = nil, "", ""
-	s.shellOutput, s.turns, s.lastAnswer = nil, nil, ""
+	s.shellOutput, s.lastAnswer = nil, ""
+	cwd, _ := os.Getwd()
+	s.sess = session.New(cwd, s.baseURL, s.keyName)
+}
+
+// pickSession asks which earlier chat of this directory to resume and
+// resumes it. It reports whether one was chosen.
+func (s *chatSession) pickSession() bool {
+	cwd, _ := os.Getwd()
+	list, err := session.List(cwd)
+	if err != nil || len(list) == 0 {
+		fmt.Println(display.Dim("No earlier chat in this directory.") + "\n")
+		return false
+	}
+	items := make([]ui.Item, len(list))
+	for i, sess := range list {
+		n := len(sess.Turns())
+		items[i] = ui.Item{
+			Label:       sess.Title(),
+			Value:       strconv.Itoa(i),
+			Description: fmt.Sprintf("%s · %d %s · %s", display.Ago(sess.Updated), n, plural(n, "message", "messages"), sess.Key),
+		}
+	}
+	v, err := ui.Select{Title: "Resume a chat", Items: items, Filter: true, Summary: func(ui.Item) string { return "" }}.Run()
+	if err != nil {
+		return false
+	}
+	i, _ := strconv.Atoi(v)
+	s.resume(list[i])
+	return true
+}
+
+// resume continues sess: its messages become the history, the server
+// conversation goes on when the key and server are the same, and the last
+// exchanges are shown again.
+func (s *chatSession) resume(sess *session.Session) {
+	s.reset()
+	s.sess = sess
+	for _, e := range sess.Messages {
+		s.history = append(s.history, *e.Message)
+		if c := e.Message.Content; e.Message.Role == "user" && strings.HasPrefix(c, "<context>") {
+			if i := strings.Index(c, "</context>"); i > 0 {
+				s.sentContext = c[:i+len("</context>")]
+			}
+		}
+	}
+	s.conversationID = sess.ConversationID
+	if key, ok := s.cfg.Keys[sess.Key]; ok && sess.Key != s.keyName && globalKey == "" && os.Getenv(config.EnvAPIKey) == "" {
+		s.keyName, s.client.APIKey = sess.Key, key
+	}
+	var note string
+	switch {
+	case sess.Server != s.baseURL:
+		note = "This chat was on " + hostOf(sess.Server) + "; it goes on here in a new conversation."
+	case sess.Key != s.keyName:
+		note = "This chat was with key " + sess.Key + "; it goes on with " + s.keyName + " in a new conversation."
+	}
+	if note != "" {
+		s.conversationID = ""
+	}
+
+	turns := sess.Turns()
+	fmt.Println(display.Dim(fmt.Sprintf("── resumed · %s · %d %s ──", display.Ago(sess.Updated), len(turns), plural(len(turns), "message", "messages"))) + "\n")
+	for _, t := range turns[max(0, len(turns)-3):] {
+		display.UserMessage(t.Question)
+		display.PrintMarkdown(t.Answer)
+		display.PrintSources(t.Sources)
+		fmt.Println()
+		s.lastAnswer = t.Answer
+	}
+	if note != "" {
+		fmt.Println(display.Warn("! ") + display.Dim(note) + "\n")
+	}
 }
 
 func (s *chatSession) newConversation(string) {
@@ -334,7 +428,8 @@ func plural(n int, one, many string) string {
 // export writes the conversation as markdown, to file or
 // docsgpt-<date>.md in the working directory.
 func (s *chatSession) export(file string) {
-	if len(s.turns) == 0 {
+	turns := s.sess.Turns()
+	if len(turns) == 0 {
 		printError("Nothing to export yet.")
 		fmt.Println()
 		return
@@ -344,9 +439,9 @@ func (s *chatSession) export(file string) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# DocsGPT chat · %s\n", time.Now().Format("2006-01-02 15:04"))
-	for _, t := range s.turns {
-		b.WriteString("\n## You\n\n" + strings.TrimSpace(t.question) + "\n\n## " + s.keyName + "\n\n" + strings.TrimSpace(t.answer) + "\n")
-		for i, src := range t.sources {
+	for _, t := range turns {
+		b.WriteString("\n## You\n\n" + strings.TrimSpace(t.Question) + "\n\n## DocsGPT\n\n" + strings.TrimSpace(t.Answer) + "\n")
+		for i, src := range t.Sources {
 			if i == 0 {
 				b.WriteString("\nSources:\n\n")
 			}

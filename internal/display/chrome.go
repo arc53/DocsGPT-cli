@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -84,6 +85,22 @@ func UserMessage(text string) {
 		return
 	}
 	fmt.Println(lipgloss.NewStyle().Background(colUserBg).Foreground(colText).Width(width).Padding(1, 1).Render(text) + "\n")
+}
+
+// Ago renders how long ago t was: "just now", "5m ago", "3h ago", "2d ago",
+// or the date after a month.
+func Ago(t time.Time) string {
+	switch d := time.Since(t); {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+	return t.Local().Format("Jan 2, 2006")
 }
 
 // abbreviateHome replaces the home directory prefix with ~.

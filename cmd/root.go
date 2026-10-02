@@ -75,6 +75,8 @@ var (
 	globalNoTools     bool
 	globalAutoApprove bool
 	globalTimeout     int // seconds a tool command may run
+	chatContinue      bool
+	chatResume        bool
 )
 
 // startupConfig is the config as it was when the process started, for the
@@ -92,6 +94,7 @@ var rootCmd = &cobra.Command{
 interactive chat; with a question it answers once and exits. Anything piped in
 is sent along with the question.`,
 	Example: `  docsgpt-cli                                # chat
+  docsgpt-cli -c                             # continue the latest chat here
   docsgpt-cli "how do I rotate the API key?" # ask once
   git diff | docsgpt-cli "review this"       # send piped input along
   docsgpt-cli login                          # add an agent API key`,
@@ -105,6 +108,12 @@ is sent along with the question.`,
 		display.InitTheme(theme)
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if chatContinue || chatResume {
+			if !ui.Interactive() {
+				return usageErrf("--continue and --resume need a terminal")
+			}
+			return chatCmd.RunE(chatCmd, args)
+		}
 		if len(args) == 0 && stdinIsTerminal() && isatty.IsTerminal(os.Stdout.Fd()) {
 			return chatCmd.RunE(chatCmd, nil)
 		}
@@ -273,6 +282,10 @@ func init() {
 		f.IntVar(&globalTimeout, "tool-timeout", 30, "Seconds a command run by the agent may take")
 		f.Bool("no-motion", false, "")
 		f.MarkDeprecated("no-motion", "the banner no longer animates")
+	}
+	for _, c := range []*cobra.Command{rootCmd, chatCmd} {
+		c.Flags().BoolVarP(&chatContinue, "continue", "c", false, "Continue the latest chat in this directory")
+		c.Flags().BoolVarP(&chatResume, "resume", "r", false, "Pick an earlier chat in this directory to resume")
 	}
 	for _, c := range []*cobra.Command{askCmd, chatCmd} {
 		c.Flags().IntVar(&globalTimeout, "timeout", 30, "")
