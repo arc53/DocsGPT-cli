@@ -29,6 +29,9 @@ func (c *Client) endpoint() string {
 	return c.BaseURL + "/v1/chat/completions"
 }
 
+// maxToolCalls bounds the tool call index a stream may use.
+const maxToolCalls = 64
+
 // StreamHandler is called once per SSE chunk as it arrives, with the chunk's
 // delta and its finish_reason — the latter empty on every chunk but the last.
 type StreamHandler func(delta Delta, finishReason string)
@@ -165,6 +168,9 @@ func (c *Client) SendStream(ctx context.Context, req ChatRequest, onDelta Stream
 		accumulated.ReasoningContent += delta.ReasoningContent
 
 		for _, tc := range delta.ToolCalls {
+			if tc.Index < 0 || tc.Index >= maxToolCalls {
+				return nil, fmt.Errorf("invalid tool call index %d in stream", tc.Index)
+			}
 			for tc.Index >= len(accumulated.ToolCalls) {
 				accumulated.ToolCalls = append(accumulated.ToolCalls, ToolCall{})
 			}

@@ -250,6 +250,17 @@ func TestSendStreamErrorFrame(t *testing.T) {
 	}
 }
 
+func TestSendStreamRejectsBadToolCallIndex(t *testing.T) {
+	for _, index := range []string{"-1", "64", "1000000000"} {
+		srv, _ := sseServer(t,
+			`{"choices":[{"delta":{"tool_calls":[{"index":`+index+`,"id":"t","function":{"name":"x"}}]},"finish_reason":"tool_calls"}]}`)
+		_, err := NewClient(srv.URL, "k").SendStream(context.Background(), ChatRequest{}, nil)
+		if err == nil || !strings.Contains(err.Error(), "invalid tool call index") {
+			t.Errorf("index %s: err = %v, want it rejected", index, err)
+		}
+	}
+}
+
 func TestRunWithToolsCarriesConversationAndMetadata(t *testing.T) {
 	var reqs []ChatRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
