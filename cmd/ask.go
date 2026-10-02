@@ -35,12 +35,10 @@ start, so an idle stdin (ssh, CI) or a "while read" loop is left alone. When
 stdout is not a terminal, only the answer is written to it, as plain text
 (terminal control sequences removed, as on a terminal).
 
-Example usage:
-    docsgpt-cli ask "How do I open a file in Python?"
-    tail -n 50 app.log | docsgpt-cli ask "Why does this fail?"
-    docsgpt-cli ask "Summarize the README" > summary.md
-
 On a terminal, the first bash/sh code block of the answer is copied to your clipboard.`,
+	Example: `  docsgpt-cli ask "How do I open a file in Python?"
+  tail -n 50 app.log | docsgpt-cli ask "Why does this fail?"
+  docsgpt-cli ask "Summarize the README" > summary.md`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		question := strings.Join(args, " ")
 		var piped string
