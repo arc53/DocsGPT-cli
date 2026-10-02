@@ -33,6 +33,10 @@ var (
 	colThinking = tone("#96a0a4", "247", "#7c868c", "102", "8")
 	colString   = tone("#de8d5a", "173", "#a45417", "130", "3")
 	colVariable = tone("#5db3ba", "73", "#287a81", "30", "6")
+	colUserBg   = lipgloss.CompleteAdaptiveColor{
+		Dark:  lipgloss.CompleteColor{TrueColor: "#213b49", ANSI256: "236", ANSI: "8"},
+		Light: lipgloss.CompleteColor{TrueColor: "#dfe7ec", ANSI256: "254", ANSI: "7"},
+	}
 )
 
 // Theme holds the semantic styles every UI element draws with.

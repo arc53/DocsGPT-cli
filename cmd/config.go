@@ -190,7 +190,8 @@ var configCmd = &cobra.Command{
 		if !ui.Interactive() {
 			return cmd.Help()
 		}
-		return runConfigMenu(os.Stdout)
+		_, err := runConfigMenu(os.Stdout)
+		return err
 	},
 }
 
@@ -312,11 +313,12 @@ func runConfigShow(cfg config.Config, asJSON bool, out io.Writer) error {
 }
 
 // runConfigMenu shows the settings with their values until Esc: choosing one
-// cycles a fixed set of values or asks for a new one.
-func runConfigMenu(out io.Writer) error {
+// cycles a fixed set of values or asks for a new one. It reports whether
+// anything was saved.
+func runConfigMenu(out io.Writer) (saved bool, err error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return err
+		return false, err
 	}
 	var menu []setting
 	for _, s := range settings {
@@ -324,7 +326,7 @@ func runConfigMenu(out io.Writer) error {
 			menu = append(menu, s)
 		}
 	}
-	cursor, saved := 0, false
+	cursor := 0
 	for {
 		items := make([]ui.Item, len(menu))
 		for i, s := range menu {
@@ -335,7 +337,7 @@ func runConfigMenu(out io.Writer) error {
 			break
 		}
 		if err != nil {
-			return err
+			return saved, err
 		}
 		cursor = slices.IndexFunc(menu, func(s setting) bool { return s.key == key })
 		s := menu[cursor]
@@ -356,18 +358,18 @@ func runConfigMenu(out io.Writer) error {
 				continue
 			}
 			if err != nil {
-				return err
+				return saved, err
 			}
 		}
 		if err := applySetting(&cfg, s, value); err != nil {
-			return err
+			return saved, err
 		}
 		saved = true
 	}
 	if saved {
 		fmt.Fprintln(out, display.Muted("Saved to "+config.Path()))
 	}
-	return nil
+	return saved, nil
 }
 
 func init() {

@@ -1,6 +1,7 @@
 package display
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,14 +38,52 @@ func RenderHeader(version, keyName, baseURL, cwd string) string {
 	return ansi.Truncate(line, width, "…")
 }
 
-// RenderHints renders chat's key hints: keys dim, actions muted.
-func RenderHints() string {
-	pairs := []string{"/", "commands", "ctrl+c", "cancel", "ctrl+d", "quit"}
-	var parts []string
-	for i := 0; i < len(pairs); i += 2 {
-		parts = append(parts, T.Dim.Render(pairs[i])+" "+T.Muted.Render(pairs[i+1]))
+// ChatWelcome is the line that opens a chat: name, version and key hints.
+func ChatWelcome(version string) string {
+	line := T.Accent.Bold(true).Render("docsgpt")
+	if version != "" {
+		line += T.Dim.Render(" " + version)
 	}
-	return strings.Join(parts, T.Dim.Render(" · "))
+	pairs := []string{"/", "commands", "!", "run a command", "ctrl+j", "new line", "ctrl+c twice", "quit"}
+	for i := 0; i < len(pairs); i += 2 {
+		next := line + T.Dim.Render(" · "+pairs[i]+" ") + T.Muted.Render(pairs[i+1])
+		if lipgloss.Width(next) > termWidth() {
+			break
+		}
+		line = next
+	}
+	return line
+}
+
+// ChatFooter is the plain text of the line under the chat input: the
+// working directory, the key and the server.
+func ChatFooter(cwd, keyName, baseURL string) string {
+	host := strings.TrimSuffix(baseURL, "/")
+	for _, scheme := range []string{"https://", "http://"} {
+		host = strings.TrimPrefix(host, scheme)
+	}
+	tail := " · " + keyName + " · " + host
+	return shortenPath(abbreviateHome(cwd), max(8, termWidth()/2-lipgloss.Width(tail))) + tail
+}
+
+// UserMessage prints what the user sent as a block on a subtle background
+// (a "❯" prefix without colors), followed by a blank line.
+func UserMessage(text string) {
+	width := termWidth()
+	text = strings.ReplaceAll(strings.TrimRight(text, "\n"), "\t", "    ")
+	if Colorless() {
+		lines := strings.Split(ansi.Wrap(text, max(width-2, 10), ""), "\n")
+		for i, l := range lines {
+			if i == 0 {
+				lines[i] = T.ToolTitle.Render("❯") + " " + l
+			} else {
+				lines[i] = "  " + l
+			}
+		}
+		fmt.Println(strings.Join(lines, "\n") + "\n")
+		return
+	}
+	fmt.Println(lipgloss.NewStyle().Background(colUserBg).Foreground(colText).Width(width).Padding(1, 1).Render(text) + "\n")
 }
 
 // abbreviateHome replaces the home directory prefix with ~.
