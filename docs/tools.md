@@ -1,0 +1,106 @@
+# Tools and approval
+
+In chats and one-shot answers, the agent can work on your machine through three
+tools:
+
+| Tool | What it does | Asks you |
+|---|---|---|
+| `run_command` | Runs a command with `sh -c` (`cmd /C` on Windows) | Always |
+| `read_file` | Reads a text file, in pages of up to 2000 lines or 50 KB | Only outside the working directory, or for files that may hold secrets |
+| `write_file` | Writes a file, creating missing directories | Always, with a short diff first |
+
+Each call shows as a block: the command or path, the output's last lines while
+it runs, then `✓ exit 0 · 1.2s` or `✗ exit 1 · 0.3s`. The model gets the
+output's last 2000 lines or 50 KB, and the exit code.
+
+## Approving
+
+```
+$ git log --oneline -5
+→ Approve    Always allow git log    Deny    Edit
+←→ choose · enter confirm · esc cancel
+```
+
+| Choice | Key | Effect |
+|---|---|---|
+| Approve | `a`, `y` | Run it once |
+| Always allow | `l` | Run it, and similar calls for the rest of the session, without asking |
+| Deny | `d`, `n` | Don't run it; the model is told you declined |
+| Edit | `e` | Change the command, then decide again (the model is told what ran) |
+
+Ctrl+C or Esc at the prompt stops the whole answer.
+
+Commands run without your terminal: one that asks for a password fails instead
+of waiting. They get `--tool-timeout` seconds (default 30) and are killed with
+their child processes on timeout or Ctrl+C.
+
+## Always allow
+
+"Always allow" lasts until the chat (or the one-shot run) ends.
+
+- **Reads and writes:** covers every later read (or write).
+- **Commands:** covers later commands with the same program and subcommand,
+  such as `git status` or `npm test` (or the program alone, such as `ls`).
+
+A later command runs unasked only when it is a simple one. These always ask, and
+are never offered "Always allow":
+
+- anything with `;`, `&`, `|`, redirections, `$(…)`, backticks, globs, escapes,
+  comments or several lines;
+- a leading `VAR=value`, or the program given as a path;
+- programs that run other programs or code: shells, `sudo`, `env`, `xargs`,
+  interpreters (`python`, `node`, …), `ssh`, `find`, `awk`, `sed`, editors,
+  pagers, `make`, `tar` and the like;
+- options that make a program run code or work elsewhere, such as `git -c`,
+  `git -C`, `--exec`, `--upload-pack`, `--output`;
+- subcommands that do, such as `git config`, `git submodule`, `npm exec`.
+
+## Reads
+
+Reading a file inside the working directory runs right away. These ask first:
+
+- files outside the working directory (a symlink's target counts, and the
+  prompt shows where it leads);
+- any file when the working directory is your home directory or above it;
+- paths that look like they hold secrets: `.env*`, `.ssh`, `.aws`, `.kube`,
+  `.docker`, `.gnupg`, `.docsgpt`, `.netrc`, `.npmrc`, `.pypirc`,
+  `credentials*`, `id_*` keys, `*.pem`, `*.key`, `*.p12`, `*.tfstate`,
+  `*.tfvars`, shell histories and similar.
+
+Devices, pipes and directories are refused, and binary files are not sent.
+
+## Turning tools off or on
+
+| Flag | Effect |
+|---|---|
+| `--no-tools` | Don't offer the tools at all |
+| `--auto-approve` | Run every call without asking |
+| `--tool-timeout <s>` | Time limit for each command |
+
+In a one-shot question, the tools are offered only when someone can approve
+them: stdin is a terminal, or you pass `--auto-approve`. `--no-context` does
+not turn them off.
+
+## Security
+
+Treat what the model asks to run as untrusted. A command runs with your user's
+permissions, and the model can be steered by what it reads: a web page, a
+source document, a file in the repository, a command's output (prompt
+injection).
+
+**Approval is the only safeguard.** There is no sandbox and no blocklist. Read
+what you approve, and prefer Edit or Deny when a command does more than you
+asked for. The prompt shows commands, paths and source titles with control
+characters made visible (`␛`, `␍`, `␊`), so an escape sequence cannot hide part
+of what you approve.
+
+- `--auto-approve` removes the safeguard. Use it only where a wrong command
+  cannot hurt: a container, a VM, a throwaway checkout.
+- "Always allow" is narrow on purpose; it is still trust in the model for the
+  rest of the session.
+- Chats are saved in `~/.docsgpt/sessions/`, with tool arguments and output.
+  Review a session before you share an `/export` of it.
+- Use version control or backups before letting the agent write files.
+
+[Host mode](host.md) is different: there the agent runs commands with no one at
+the machine, and approval is set in the DocsGPT web app.

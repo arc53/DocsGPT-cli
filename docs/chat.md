@@ -1,0 +1,114 @@
+# Chat
+
+```bash
+docsgpt-cli                      # open a chat
+docsgpt-cli chat "first message" # open one with a message
+docsgpt-cli -c                   # continue the latest chat in this directory
+docsgpt-cli -r                   # pick an earlier chat to resume
+```
+
+`docsgpt-cli` with no arguments opens a chat when stdin and stdout are a
+terminal. Answers stream in as markdown, followed by a short **Sources** list
+(linked when the source has a URL). The footer shows the directory, the key and
+the server.
+
+## Editor
+
+| Key | Action |
+|---|---|
+| Enter | Send |
+| Ctrl+J, Alt+Enter, or a line ending in `\` | New line |
+| ↑ / ↓ | Move between lines; on the first or last line, browse earlier messages |
+| Ctrl+G | Edit the message in `$VISUAL` / `$EDITOR` (vi by default) |
+| Ctrl+A / Ctrl+E, Home / End | Start / end of the line |
+| Alt+← / Alt+→ (Ctrl+← / Ctrl+→) | Previous / next word |
+| Ctrl+W, Alt+Backspace | Delete the previous word |
+| Ctrl+U / Ctrl+K | Delete to the start / end of the line |
+| Ctrl+C | Stop the answer, or clear the input; twice on an empty input quits |
+| Ctrl+D | Quit |
+
+A long paste (over 10 lines or 1000 characters) shows as
+`[paste #1 +200 lines]` until it is sent. Your messages are kept in
+`~/.docsgpt/history` for ↑; lines that look like keys or tokens are left out.
+
+## Slash commands
+
+Type `/` to see them, filtered as you type. Tab completes, Enter runs.
+
+| Command | Action |
+|---|---|
+| `/new` (`/clear`) | Start a new conversation |
+| `/resume` | Pick an earlier chat in this directory |
+| `/copy` | Copy the last answer, or one of its code blocks |
+| `/export [file]` | Save the conversation as markdown (default `docsgpt-<date>.md`) |
+| `/think` | Show or hide the model's reasoning |
+| `/key` | Switch to another stored key, or add one |
+| `/settings` | Open the settings menu |
+| `/help` | Show commands and keys |
+| `/quit` (`/exit`) | Leave |
+
+A line starting with `/` that is not a command, such as a path
+(`/etc/hosts is empty, why?`), is sent as a message.
+
+## Shell commands
+
+`!command` runs a command on your machine, shows its output, and sends that
+output along with your next message. `!!command` runs it without sending
+anything. These run without approval and without a time limit, since you typed
+them.
+
+## Sessions
+
+Every chat is saved under `~/.docsgpt/sessions/<directory>/`, one JSONL file
+per chat (readable only by you). Sessions belong to the directory you started
+them in.
+
+- `docsgpt-cli -c` continues the latest chat of this directory.
+- `docsgpt-cli -r` or `/resume` lists them (type to filter) with age, length and
+  key; the last few exchanges are shown again.
+- A resumed chat goes on in the same server conversation when the key and
+  server are the same. Otherwise it continues in a new conversation, with the
+  saved messages as history.
+- When you leave, the CLI reminds you of `docsgpt-cli -c`.
+
+## Context
+
+The first message of a conversation carries a short `<context>` block, so the
+agent knows where you are:
+
+| What | Setting | Default |
+|---|---|---|
+| The working directory | `send_current_directory` | on |
+| Its first 50 entries | `send_directory_contents` | on |
+| `AGENTS.md` (else `CLAUDE.md`) of every directory from the repository root down to the working directory, 12 KB in all | `send_project_instructions` | on |
+| Your last shell commands (zsh, bash, fish) | `send_last_commands`, `number_of_last_commands` | off, 3 |
+
+The block is sent again only when it changes. `--no-context` sends none of it
+(the tools stay available). Change the settings with `/settings`,
+`docsgpt-cli config`, or see [Configuration](configuration.md).
+
+## Flags
+
+| Flag | Effect |
+|---|---|
+| `-c`, `--continue` | Continue the latest chat in this directory |
+| `-r`, `--resume` | Pick a chat to resume |
+| `--no-stream` | Print each answer once it is complete |
+| `--no-context` | Don't send the context block |
+| `--no-tools` | Don't let the agent run commands or read and write files |
+| `--auto-approve` | Run the agent's tool calls without asking |
+| `--tool-timeout <s>` | Seconds a command run by the agent may take (default 30; formerly `--timeout`) |
+| `--key <name>` | Chat with this stored key |
+| `--url <url>` | Use this server |
+
+The same flags (except `-c` and `-r`) work for one-shot questions.
+
+## Display
+
+- The dino banner shows in interactive chats only: `once` by default,
+  `config set banner always|once|never`.
+- Colours follow the terminal background (`config set theme auto|dark|light`);
+  `NO_COLOR` turns them off.
+- Answers are cleaned of terminal control sequences before they are drawn, so
+  a model cannot recolour, retitle or clear your terminal or write to your
+  clipboard. The same goes for resumed chats and `/export` files.
