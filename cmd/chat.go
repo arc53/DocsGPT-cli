@@ -195,7 +195,9 @@ func (s *chatSession) shell(line string) {
 	defer stop()
 	// The tool block opens with a blank line, which the input already left.
 	fmt.Fprint(os.Stderr, "\x1b[1A")
+	restore := ui.HoldInput()
 	out := tools.RunShell(ctx, command)
+	restore()
 	if keep {
 		s.shellOutput = append(s.shellOutput, fmt.Sprintf("I ran `%s`:\n```\n%s\n```", command, strings.TrimRight(out, "\n")))
 	}
@@ -228,16 +230,20 @@ func (s *chatSession) send(text, shown string) {
 	renderer := display.NewStreamRenderer()
 	renderer.ShowReasoning = s.showReasoning
 	renderer.Wait()
+	restore := ui.HoldInput() // what is typed meanwhile waits for the editor
+	defer restore()
 	res, err := s.client.RunWithTools(ctx, messages, docsgpt.RunOptions{
 		Tools: s.toolDefs, Stream: !globalNoStream, ConversationID: s.conversationID,
 		OnDelta: func(delta docsgpt.Delta, _ string) { renderer.Delta(delta) },
 		OnToolCall: func(tc docsgpt.ToolCall) string {
 			renderer.Flush()
 			defer renderer.Wait()
+			ui.DiscardInput() // typed ahead, it would answer the approval
 			return s.tools.Handle(ctx, cancel, tc)
 		},
 	})
 	renderer.Flush()
+	restore()
 	if err != nil {
 		if ctx.Err() != nil {
 			gap := "" // after a partial answer

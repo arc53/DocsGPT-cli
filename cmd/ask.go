@@ -14,6 +14,7 @@ import (
 	ctxenrich "github.com/arc53/DocsGPT-cli/internal/context"
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/tools"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 
 	"github.com/mattn/go-isatty"
@@ -101,10 +102,15 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 		onToolCall := func(tc docsgpt.ToolCall) string {
 			renderer.Flush()
 			defer renderer.Wait()
+			ui.DiscardInput() // typed ahead, it would answer the approval
 			return toolSession.Handle(ctx, cancel, tc)
 		}
 
 		renderer.Wait()
+		if tty {
+			// Echoed typing would shift the cursor under the redraws.
+			defer ui.HoldInput()()
+		}
 		res, err := client.RunWithTools(ctx, messages, docsgpt.RunOptions{
 			Tools: toolDefs, Stream: !globalNoStream, OnDelta: onDelta, OnToolCall: onToolCall,
 		})

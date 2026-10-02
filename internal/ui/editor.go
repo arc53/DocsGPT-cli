@@ -52,7 +52,8 @@ func (e *Editor) Run() (text, shown string, err error) {
 	if m.quit {
 		return "", "", io.EOF
 	}
-	return m.expanded(), m.text(), nil
+	// Text typed ahead during an answer arrives with its line end.
+	return strings.TrimRight(m.expanded(), "\n"), strings.TrimRight(m.text(), "\n"), nil
 }
 
 type editorModel struct {
