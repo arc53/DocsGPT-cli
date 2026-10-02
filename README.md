@@ -217,16 +217,21 @@ Keys: `url`, `default_key`, `auto_update` (on/notify/off), `banner`
 ### Local tools
 
 In chats and one-shot answers the agent can run commands, read files and write files on
-your machine. Reads run right away; every command and write is shown first
-(writes as a short diff) and waits for your answer: **Approve** (`a`),
-**Always allow** (`l`), **Deny** (`d`) or **Edit** the command (`e`). Ctrl+C
-at the prompt stops the answer.
+your machine. Reads of files in the working directory run right away; reads
+elsewhere (or of files that may hold secrets, such as `.env` or SSH keys) and
+every command and write are shown first (writes as a short diff) and wait for
+your answer: **Approve** (`a`), **Always allow** (`l`), **Deny** (`d`) or
+**Edit** the command (`e`). Ctrl+C at the prompt stops the answer. Commands run
+without your terminal, so one that prompts for a password fails instead of
+waiting.
 
-Always allow lasts until the session ends: for writes it covers every later
-write; for a command it covers later commands with the same first word (for
-example `git`), as long as they are simple ones: anything with `;`, `&`, `|`,
-redirections or substitutions always asks. Approval is the only safeguard,
-so read what you approve. `--auto-approve` skips the prompts entirely.
+Always allow lasts until the session ends: for reads and writes it covers every
+later one; for a command it covers later commands with the same program and
+subcommand (for example `git status`), as long as they are simple ones: anything
+with `;`, `&`, `|`, redirections, substitutions or options that run other
+commands always asks, and shells, interpreters and wrappers such as `sudo` are
+never offered it. Approval is the only safeguard, so read what you approve.
+`--auto-approve` skips the prompts entirely.
 
 ---
 

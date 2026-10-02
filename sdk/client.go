@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +29,9 @@ func NewClient(baseURL, apiKey string) *Client {
 func (c *Client) endpoint() string {
 	return c.BaseURL + "/v1/chat/completions"
 }
+
+// maxToolCalls bounds the tool call index a stream may use.
+const maxToolCalls = 64
 
 // StreamHandler is called once per SSE chunk as it arrives, with the chunk's
 // delta and its finish_reason — the latter empty on every chunk but the last.
@@ -100,6 +104,7 @@ func (c *Client) SendStream(ctx context.Context, req ChatRequest, onDelta Stream
 		out          ChatResponse
 		accumulated  Delta
 		finishReason string
+		done         bool
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -113,6 +118,7 @@ func (c *Client) SendStream(ctx context.Context, req ChatRequest, onDelta Stream
 		}
 		data = strings.TrimSpace(data)
 		if data == "[DONE]" {
+			done = true
 			break
 		}
 
@@ -165,6 +171,9 @@ func (c *Client) SendStream(ctx context.Context, req ChatRequest, onDelta Stream
 		accumulated.ReasoningContent += delta.ReasoningContent
 
 		for _, tc := range delta.ToolCalls {
+			if tc.Index < 0 || tc.Index >= maxToolCalls {
+				return nil, fmt.Errorf("invalid tool call index %d in stream", tc.Index)
+			}
 			for tc.Index >= len(accumulated.ToolCalls) {
 				accumulated.ToolCalls = append(accumulated.ToolCalls, ToolCall{})
 			}
@@ -188,6 +197,11 @@ func (c *Client) SendStream(ctx context.Context, req ChatRequest, onDelta Stream
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("reading stream: %w", err)
+	}
+	// Some servers omit [DONE] after the finish_reason; without either the
+	// connection was cut and the answer is incomplete.
+	if !done && finishReason == "" {
+		return nil, errors.New("stream ended unexpectedly")
 	}
 
 	out.Choices = []Choice{{Message: accumulated, FinishReason: finishReason}}

@@ -51,3 +51,17 @@ func TestRunCommandTimeout(t *testing.T) {
 		t.Errorf("err = %v, want the timeout", err)
 	}
 }
+
+// TestRunCommandHasNoTerminal: a command cannot read the user's terminal,
+// so a prompt for a password fails at once instead of waiting.
+func TestRunCommandHasNoTerminal(t *testing.T) {
+	var out strings.Builder
+	start := time.Now()
+	err := runCommand(context.Background(), "read line </dev/tty && echo got-tty; read line; echo stdin=$?", "", 10*time.Second, &out)
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("took %v, want an immediate failure", took)
+	}
+	if err != nil || strings.Contains(out.String(), "got-tty") || !strings.Contains(out.String(), "stdin=1") {
+		t.Errorf("err %v, output %q: want /dev/tty unavailable and stdin empty", err, out.String())
+	}
+}

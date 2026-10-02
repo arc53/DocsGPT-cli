@@ -26,6 +26,7 @@ var (
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update docsgpt-cli to the latest release",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if updateWorker {
 			update.RunWorker(Version)

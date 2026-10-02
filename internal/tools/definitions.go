@@ -34,7 +34,7 @@ func ToolDefinitions() []docsgpt.Tool {
 			Type: "function",
 			Function: docsgpt.ToolFunction{
 				Name:        "read_file",
-				Description: "Read a text file on the user's local machine. Output is truncated to 2000 lines or 50KB; use offset/limit for large files, and continue with offset until complete.",
+				Description: "Read a text file on the user's local machine. Files outside the working directory, or that may hold secrets, need the user's approval. Output is truncated to 2000 lines or 50KB; use offset/limit for large files, and continue with offset until complete.",
 				Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {

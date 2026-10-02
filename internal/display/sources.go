@@ -27,7 +27,7 @@ func PrintSources(sources []docsgpt.Source) {
 	seen := map[string]bool{}
 	for _, s := range sources {
 		e := entry{title: s.Title}
-		if strings.HasPrefix(s.Source, "http://") || strings.HasPrefix(s.Source, "https://") {
+		if linkable(s.Source) {
 			e.url = s.Source
 		}
 		if e.title == "" {
@@ -37,6 +37,7 @@ func PrintSources(sources []docsgpt.Source) {
 			e.title = path.Base(strings.TrimRight(s.Source, "/"))
 		}
 		e.title, _, _ = strings.Cut(strings.TrimSpace(e.title), "\n")
+		e.title = Safe(e.title)
 		key := e.url + "\x00" + e.title
 		if e.title == "" || seen[key] {
 			continue
@@ -61,4 +62,19 @@ func PrintSources(sources []docsgpt.Source) {
 		b.WriteString("  " + T.Dim.Render(fmt.Sprintf("+%d more", more)) + "\n")
 	}
 	fmt.Print(b.String())
+}
+
+// linkable reports whether a source URL can go into an OSC 8 hyperlink: an
+// http(s) URL of printable ASCII only, so it cannot end the sequence early
+// and inject its own.
+func linkable(u string) bool {
+	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		return false
+	}
+	for i := 0; i < len(u); i++ {
+		if u[i] <= ' ' || u[i] >= 0x7f {
+			return false
+		}
+	}
+	return true
 }

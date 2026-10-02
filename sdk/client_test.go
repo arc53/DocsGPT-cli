@@ -250,6 +250,38 @@ func TestSendStreamErrorFrame(t *testing.T) {
 	}
 }
 
+func TestSendStreamTruncated(t *testing.T) {
+	// Cut off: no finish_reason and no [DONE].
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
+	}))
+	defer srv.Close()
+	if _, err := NewClient(srv.URL, "k").SendStream(context.Background(), ChatRequest{}, nil); err == nil || !strings.Contains(err.Error(), "stream ended unexpectedly") {
+		t.Errorf("err = %v, want the stream reported as cut off", err)
+	}
+
+	// A finish_reason without [DONE] is a complete answer.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"all\"},\"finish_reason\":\"stop\"}]}\n\n")
+	}))
+	defer srv2.Close()
+	resp, err := NewClient(srv2.URL, "k").SendStream(context.Background(), ChatRequest{}, nil)
+	if err != nil || resp.Choices[0].Message.Content != "all" {
+		t.Errorf("finish_reason without [DONE]: err %v", err)
+	}
+}
+
+func TestSendStreamRejectsBadToolCallIndex(t *testing.T) {
+	for _, index := range []string{"-1", "64", "1000000000"} {
+		srv, _ := sseServer(t,
+			`{"choices":[{"delta":{"tool_calls":[{"index":`+index+`,"id":"t","function":{"name":"x"}}]},"finish_reason":"tool_calls"}]}`)
+		_, err := NewClient(srv.URL, "k").SendStream(context.Background(), ChatRequest{}, nil)
+		if err == nil || !strings.Contains(err.Error(), "invalid tool call index") {
+			t.Errorf("index %s: err = %v, want it rejected", index, err)
+		}
+	}
+}
+
 func TestRunWithToolsCarriesConversationAndMetadata(t *testing.T) {
 	var reqs []ChatRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

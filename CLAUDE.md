@@ -8,19 +8,24 @@ Go CLI tool for interacting with the DocsGPT API from the terminal (v1.0.0).
 cmd/docsgpt-cli/     → Entry point (package main), calls cmd.Execute(). Lives here
                        so `go install .../cmd/docsgpt-cli@latest` names the binary
                        docsgpt-cli rather than DocsGPT-cli (the module path's last
-                       element)
+                       element). Blank-imports internal/earlytheme, which pins
+                       lipgloss's background before bubbletea's init would query
+                       the terminal (5s stall where it never answers); it runs
+                       first by import-path order, checked by main_test.go
 sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, package
                        docsgpt: the public chat client (Client, Send, SendStream,
                        RunWithTools + RunOptions/RunResult, StreamHandler, Source,
                        APIError) — OpenAI-compatible types and the tool-call loop;
-                       results carry conversation id, sources, model and usage. Stdlib-only, tagged sdk/vX.Y.Z
+                       results carry conversation id, sources, model and usage. A stream
+                       without [DONE] and without a finish_reason is an error, and so is a
+                       tool_calls index outside 0-63. Stdlib-only, tagged sdk/vX.Y.Z
                        independently of the CLI, currently pre-v1. The CLI depends
                        on it through a pinned require in go.mod (imported as
                        `docsgpt "…/sdk"`, since the package name is not the last
                        path element); go.work points local builds at ./sdk, and
                        release builds set GOWORK=off to use the pinned version
 cmd/
-  root.go            → Root command = the entry point (chat on a TTY, else one-shot ask), typo guard, global flags (--url, --key, --token), chat flags, help groups + usage template, Execute (startup config, update gate)
+  root.go            → Root command = the entry point (chat on a TTY, else one-shot ask), typo guard + questionArgs (extra words after a command: exit 2 with `To ask it as a question: docsgpt-cli -- "…"`), global flags (--url, --key, --token), chat flags, help groups + usage template, Execute (startup config, update gate)
   ask.go             → Single-shot Q&A with streaming + tool support (hidden alias; the root runs it)
   chat.go            → Interactive chat (hidden alias; optional first message): editor loop, the slash command table, !cmd, sessions (-c/-r//resume)
   config.go          → config get / set / show / path + the settings menu; one `settings` table drives all of them
@@ -78,7 +83,11 @@ internal/
                        welcome line, footer text, the user-message block, Ago
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
                        (live last-5-lines region), DiffPreview for writes
-    sources.go       → dim numbered "Sources" block, OSC 8 links, TTY only
+    safe.go          → Safe: every model/server string in tool blocks and sources is
+                       printed through it (control chars as ␛ ␍ ␊, format runes as
+                       \uXXXX), so an escape sequence cannot hide part of a command
+    sources.go       → dim numbered "Sources" block, OSC 8 links (printable-ASCII
+                       http(s) URLs only), TTY only
     background*.go   → auto theme: COLORFGBG, else one OSC 11 query (stdout TTY only,
                        150ms max); the answer also feeds glamour and lipgloss
     banner.go        → dino banner, interactive chat only, default "once", no animation
@@ -90,9 +99,13 @@ internal/
   tools/
     definitions.go   → Tool schemas: run_command, read_file (offset/limit), write_file
     approval.go      → Session: per chat session / ask run; title, approval, execution,
-                       status per call. Inline Approve / Always allow / Deny / Edit
-    executor.go      → runCommand (caller's ctx + timeout, own process group killed as
-                       a whole), readFile (line ranges), writeFile (creates parents)
+                       status per call. Inline Approve / Always allow / Deny / Edit;
+                       readReason (when a read asks)
+    allow.go         → alwaysKey: what "Always allow" covers, and when it is never offered
+    executor.go      → runCommand (caller's ctx + timeout; own session without a
+                       controlling terminal, whole group killed; Windows: hidden console,
+                       taskkill /T), regularFile + readFile (regular files only, chunked,
+                       ctx-aware line ranges), writeFile (creates parents)
     truncate.go      → model-bound output: last 2000 lines / 50KB, line/rune safe, with
                        a note about the dropped head; tailBuffer bounds the capture
   update/
@@ -219,7 +232,7 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set a
 
 ### Personal access tokens (account-level commands)
 1. A PAT (`dgpt_pat_…`) is created in the web app; the CLI only consumes one (`/api/user/tokens` is closed to tokens). Resolution: `--token` > `DOCSGPT_TOKEN` > `config.json` `token`; base URL: `--url` > `DOCSGPT_URL` > config. Tokens are only ever printed redacted (`config.RedactToken`, first 15 chars + `…`)
-2. `login` takes the token from `--token`, piped stdin, or the TTY prompt (see Credentials above), validates it with `GET /api/user/me` and stores it together with the base URL that validated it, whether that came from `--url`, `DOCSGPT_URL` or the config (config stays 0600). `whoami` prints user, token name, scopes and resource restrictions; `logout --token` removes the stored token
+2. `login` takes the token from `--token`, piped stdin, or the TTY prompt (see Credentials above), validates it with `GET /api/user/me` and stores it together with the base URL that validated it, whether that came from `--url`, `DOCSGPT_URL` or the config (config stays 0600); when agent keys are stored and the server changes, it asks first (off a terminal: exit 2), as saving a key does for the token. `whoami` prints user, token name, scopes and resource restrictions; `logout --token` removes the stored token
 3. `internal/manage` sends `Authorization: Bearer <PAT>`; server failures become `*manage.APIError` — `{success:false,message}`, 401 `invalid_token`, 403 `insufficient_scope` (+ `required_scope`), `resource_not_allowed`, `not_available_to_tokens`
 4. `agents plan|apply -f`: files, directories (`*.yaml`/`*.yml`, sorted, not recursive) and `-`; multi-document files are split textually (the server gets each document verbatim); non-`Agent` kinds are rejected before any request. ALL documents are planned first (`POST /api/import_agent/plan {"yaml"}`, scope `agents:write`); if any reference is `missing`/`unavailable` and not covered by `--resolve`, nothing is applied and the exit code is 1. Then `POST /api/import_agent {"yaml","resolution"}` per document, stopping at the first failure. `plan` = `apply --dry-run`
 5. `--resolve <kind>:<selector>=<value>` → server `resolution`: `source:<name>=<id>` → `sources[name]`; `tool:<sel>=reuse:<id>|create|skip` and `tool:<sel>.secret.<field>=<v>` → `tools["tool-N"] = {decision, tool_id, secrets}`; `model:<display_name>=<api_key>` → `models[name] = {api_key}`. `source:…=skip` / `model:…=skip` are CLI-side acknowledgements (the server has no such decision; it just leaves the reference off) and are never sent. `<sel>` = `tool-N` or an unambiguous tool name/type; positional keys are refused across several documents; an entry matching nothing is a usage error
@@ -232,7 +245,7 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set a
 2. If model returns `finish_reason: "tool_calls"`, CLI shows the call's title (`$ cmd`, `read path`, `write path (+N −M)` with a short diff) and asks: Approve (a), Always allow (l), Deny (d), Edit (e, commands only: prefilled input, then asked again). Ctrl+C/Esc at the prompt cancels the whole run
 3. On approve: executes locally (command output in a live 5-line tail, then `✓ exit 0 · 1.2s` / `✗ …`), sends result back as `role: "tool"` message
 4. Model continues with tool results — loop repeats until `finish_reason: "stop"`
-5. Security stance (like pi): approval is the only gate, there is no command blocklist. `read_file` never asks. "Always allow" lasts for the session: all writes, or later commands with the same first word, and only simple ones (no `; & | < > $ ( ) \` or newlines, not shells/wrappers such as `sh`, `sudo`, `env`, `xargs`). `--auto-approve` skips every prompt but still prints each title and status. Host mode (no person at the device) keeps its own denylist in `internal/host/invocation.go`
+5. Security stance (like pi): approval is the only gate, there is no command blocklist. `read_file` asks only for files outside the working directory (symlinks resolved), when the working directory is the home directory or above it, or for secret-looking names on the way (`.env*`, `*.pem`, `*.key`, `id_*`, `.ssh`, `.aws`, `.docsgpt`, `*_history`, …); devices, FIFOs and directories are refused. "Always allow" lasts for the session: all writes, all reads, or later commands with the same key — the program plus its subcommand word (`git status`, `npm test`), else the program — and is never offered for shell syntax beyond quotes, `VAR=value` prefixes, programs given as a path, code runners (shells, wrappers, interpreters, `find`, `make`, `tar`, editors, `cmd`/`powershell`/`start`), risky options (`-c`, `-C`, `-e`, `-o`, `-x`, `--exec*`, `--upload-pack`, `--git-dir`, …) or subcommands (`git config`, `npm exec`); see `allow.go`. Commands run without the terminal, so password prompts fail at once. `--auto-approve` skips every prompt but still prints each title and status. Host mode (no person at the device) keeps its own denylist in `internal/host/invocation.go`
 
 ## Config
 

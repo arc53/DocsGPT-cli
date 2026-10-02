@@ -28,6 +28,7 @@ const cmdTestToken = "dgpt_pat_AbCdEfSECRETSECRETSECRETSECRET"
 
 func TestMain(m *testing.M) {
 	display.InitTheme("auto")
+	questionArgs()
 	os.Exit(m.Run())
 }
 
@@ -114,8 +115,27 @@ func TestRootUsageErrors(t *testing.T) {
 	}
 	// A typo hint names the command and how to ask anyway.
 	err := runRoot(t, "agnets")
-	if err == nil || !strings.Contains(err.Error(), `"agents"`) || !strings.Contains(err.Error(), "-- agnets") {
+	if err == nil || !strings.Contains(err.Error(), `"agents"`) || !strings.Contains(err.Error(), `docsgpt-cli -- "agnets"`) {
 		t.Errorf("typo hint = %v", err)
+	}
+}
+
+// TestQuestionArgs: words after a command that takes none are a usage
+// error pointing at how to ask them instead, and nothing runs.
+func TestQuestionArgs(t *testing.T) {
+	isolateConfig(t)
+	for _, args := range [][]string{
+		{"update", "my", "nginx", "config"},
+		{"install", "my", "thing"},
+		{"host", "my", "files"},
+		{"bench", "press", "form", "tips"},
+		{"login", "to", "my", "server"},
+		{"config", "my", "nginx"},
+	} {
+		err := runRoot(t, args...)
+		if hint := `docsgpt-cli -- "` + strings.Join(args, " ") + `"`; exitCodeFor(err) != exitUsage || !strings.Contains(err.Error(), hint) {
+			t.Errorf("%q: err = %v, want a usage error with %s", args, err, hint)
+		}
 	}
 }
 
@@ -253,6 +273,37 @@ func TestLoginWhoamiLogout(t *testing.T) {
 	}
 	if _, err := newManageClient(); exitCodeFor(err) != exitUsage {
 		t.Errorf("newManageClient without a token: %v", err)
+	}
+}
+
+// TestLoginTokenKeepsKeysOnTheirServer: logging in to another server off a
+// terminal must not silently move the stored agent keys there.
+func TestLoginTokenKeepsKeysOnTheirServer(t *testing.T) {
+	isolateConfig(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonReply(w, 200, meBody)
+	}))
+	defer srv.Close()
+	cfg := config.DefaultConfig()
+	cfg.BaseURL = "https://docs.example.com"
+	cfg.Keys["support"] = "0123abcd-0000-1111-2222-333344445555"
+	cfg.DefaultKey = "support"
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err := runLogin(context.Background(), cmdTestToken, srv.URL, &out)
+	if exitCodeFor(err) != exitUsage || !strings.Contains(err.Error(), "support") {
+		t.Fatalf("login to another server: err = %v, want a usage error naming the keys", err)
+	}
+	if cfg, _ := config.Load(); cfg.BaseURL != "https://docs.example.com" || cfg.Token != "" {
+		t.Errorf("config changed: base %q, token stored %v", cfg.BaseURL, cfg.Token != "")
+	}
+
+	cfg.BaseURL = srv.URL + "/" // the same server: fine
+	cfg.Save()
+	if err := runLogin(context.Background(), cmdTestToken, srv.URL, &out); err != nil {
+		t.Fatalf("login to the keys' server: %v", err)
 	}
 }
 

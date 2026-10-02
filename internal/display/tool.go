@@ -44,29 +44,33 @@ func stderrWidth() int {
 }
 
 // ToolTitle opens a tool block: a blank line, then title in bold. Further
-// lines of a multi-line title are indented under the first.
+// lines of a multi-line title are indented under the first. Title and note
+// are printed through Safe.
 func ToolTitle(title, note string) {
 	lines := strings.Split(strings.TrimRight(title, "\n"), "\n")
 	for i := range lines {
+		lines[i] = Safe(lines[i])
 		if i > 0 {
 			lines[i] = "  " + lines[i]
 		}
 		lines[i] = T.ToolTitle.Render(lines[i])
 	}
 	if note != "" {
-		lines[len(lines)-1] += " " + T.Dim.Render(note)
+		lines[len(lines)-1] += " " + T.Dim.Render(Safe(note))
 	}
 	fmt.Fprintf(os.Stderr, "\n%s\n", strings.Join(lines, "\n"))
 }
 
-// ToolLines prints lines of a tool block (a preview), indented.
+// ToolLines prints lines of a tool block (a preview), indented. They are
+// printed as they are, so must already be safe (DiffPreview's are).
 func ToolLines(lines []string) {
 	for _, l := range lines {
 		fmt.Fprintln(os.Stderr, "  "+l)
 	}
 }
 
-// ToolStatus closes a tool block: "✓ msg" or "✗ msg", the message dim.
+// ToolStatus closes a tool block: "✓ msg" or "✗ msg", the message dim and
+// printed through Safe.
 func ToolStatus(ok bool, msg string) {
 	glyph := T.Success.Render("✓")
 	if !ok {
@@ -76,7 +80,7 @@ func ToolStatus(ok bool, msg string) {
 	if term.IsTerminal(os.Stderr.Fd()) {
 		clear = "\r\x1b[2K"
 	}
-	fmt.Fprintf(os.Stderr, "%s  %s %s\n", clear, glyph, T.Dim.Render(msg))
+	fmt.Fprintf(os.Stderr, "%s  %s %s\n", clear, glyph, T.Dim.Render(Safe(msg)))
 }
 
 // Duration formats d like "0.3s", "1m 5s".
@@ -199,21 +203,15 @@ func (v *TailView) draw() {
 	}
 }
 
-// cleanLine makes a line of command output safe to draw on one row: no
-// escape sequences or control characters, only what follows a carriage
-// return (progress bars redraw that way), tabs expanded.
+// cleanLine makes a line of command output safe and readable on one row:
+// escape sequences (colours) dropped, only what follows a carriage return
+// kept (progress bars redraw that way), the rest through Safe.
 func cleanLine(s string) string {
-	s = ansi.Strip(s)
-	if i := strings.LastIndexByte(strings.TrimRight(s, "\r"), '\r'); i >= 0 {
+	s = strings.TrimRight(ansi.Strip(s), "\r")
+	if i := strings.LastIndexByte(s, '\r'); i >= 0 {
 		s = s[i+1:]
 	}
-	s = strings.ReplaceAll(s, "\t", "    ")
-	return strings.Map(func(r rune) rune {
-		if r < ' ' || r == 0x7f {
-			return -1
-		}
-		return r
-	}, s)
+	return Safe(s)
 }
 
 func plural(n int, word string) string {
@@ -294,7 +292,7 @@ func DiffPreview(before, after string, limit int) (preview []string, added, remo
 			sign, style = "+ ", T.Success
 		}
 		num := fmt.Sprintf("%*d", numW, o.line)
-		preview = append(preview, T.Dim.Render(num)+" "+style.Render(sign+ansi.Truncate(cleanLine(o.text), width, "…")))
+		preview = append(preview, T.Dim.Render(num)+" "+style.Render(sign+ansi.Truncate(Safe(o.text), width, "…")))
 	}
 	if more := len(ops) - limit; more > 0 {
 		preview = append(preview, T.Dim.Render(fmt.Sprintf("… %d more changed %s", more, plural(more, "line"))))
