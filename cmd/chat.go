@@ -85,6 +85,7 @@ func init() {
 		{name: "copy", desc: "Copy the last answer, or one of its code blocks", run: (*chatSession).copyAnswer},
 		{name: "export", args: "[file]", desc: "Save the conversation as markdown", run: (*chatSession).export},
 		{name: "think", desc: "Show or hide the model's reasoning", run: (*chatSession).toggleThinking},
+		{name: "approve", desc: "Run tool calls without asking, or ask again", run: (*chatSession).toggleApprove},
 		{name: "key", desc: "Switch to another agent API key", run: (*chatSession).switchKey},
 		{name: "settings", desc: "Change settings", run: (*chatSession).settings},
 		{name: "help", desc: "Show commands and keys", run: (*chatSession).help},
@@ -165,6 +166,9 @@ func (s *chatSession) footer() (left, right string) {
 	}
 	if s.showReasoning {
 		status = append(status, "think on")
+	}
+	if s.tools.AutoApprove { // last: the footer is dim up to it
+		status = append(status, display.Warn("auto-approve"))
 	}
 	return display.ChatFooter(cwd, s.keyName, s.baseURL), strings.Join(status, " · ")
 }
@@ -393,6 +397,15 @@ func (s *chatSession) toggleThinking(string) {
 		state = "shown"
 	}
 	fmt.Println(display.Dim("Reasoning will be "+state+".") + "\n")
+}
+
+func (s *chatSession) toggleApprove(string) {
+	s.tools.AutoApprove = !s.tools.AutoApprove
+	msg := "Tool calls now need approval."
+	if s.tools.AutoApprove {
+		msg = "Tool calls run without asking."
+	}
+	fmt.Println(display.Dim(msg) + "\n")
 }
 
 // copyAnswer copies the last answer, or one of its code blocks.

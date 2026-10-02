@@ -17,7 +17,8 @@ output's last 2000 lines or 50 KB, and the exit code.
 
 ```
 $ git log --oneline -5
-→ Approve    Always allow git log    Deny    Edit
+→ Approve    Always allow git log    Always approve    Deny    Edit
+run once
 ←→ choose · enter confirm · esc cancel
 ```
 
@@ -25,10 +26,13 @@ $ git log --oneline -5
 |---|---|---|
 | Approve | `a`, `y` | Run it once |
 | Always allow | `l` | Run it, and similar calls for the rest of the session, without asking |
+| Always approve | `p` | Run it, and every later tool call of the session, without asking |
 | Deny | `d`, `n` | Don't run it; the model is told you declined |
 | Edit | `e` | Change the command, then decide again (the model is told what ran) |
 
-Ctrl+C or Esc at the prompt stops the whole answer.
+Always allow is offered only when there is a safe narrow scope (see below);
+the line under the choices says what the highlighted one does. Ctrl+C or Esc at
+the prompt stops the whole answer.
 
 Commands run without your terminal: one that asks for a password fails instead
 of waiting. They get `--tool-timeout` seconds (default 30) and are killed with
@@ -71,6 +75,14 @@ same key and passes the same checks. These always ask, and are never offered
 `git branch` also allows `git branch -D main`, and allowing `git stash` allows
 `git stash drop`. Allow a subcommand only when you are fine with all of its
 forms for the rest of the session.
+
+## Always approve
+
+"Always approve" runs every later call without asking: commands of any kind,
+writes and reads, until the chat (or the one-shot run) ends. It is
+`--auto-approve` switched on mid-session. In a chat the footer then shows
+`auto-approve`, and `/approve` switches it off (or on). Earlier "Always allow"
+choices still hold after it is switched off. Each call still shows its block.
 
 ## Reads
 
@@ -115,8 +127,9 @@ asked for. The prompt shows commands, paths and source titles with control
 characters made visible (`␛`, `␍`, `␊`), so an escape sequence cannot hide part
 of what you approve.
 
-- `--auto-approve` removes the safeguard. Use it only where a wrong command
-  cannot hurt: a container, a VM, a throwaway checkout.
+- `--auto-approve`, "Always approve" and `/approve` remove the safeguard. Use
+  them only where a wrong command cannot hurt: a container, a VM, a throwaway
+  checkout.
 - "Always allow" is narrow on purpose; it is still trust in the model for the
   rest of the session.
 - Chats are saved in `~/.docsgpt/sessions/`, with tool arguments and output.

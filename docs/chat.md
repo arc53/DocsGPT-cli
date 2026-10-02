@@ -45,6 +45,7 @@ Type `/` to see them, filtered as you type. Tab completes, Enter runs.
 | `/copy` | Copy the last answer, or one of its code blocks |
 | `/export [file]` | Save the conversation as markdown (default `docsgpt-<date>.md`; `~/` is your home directory; asks before overwriting a file, No by default) |
 | `/think` | Show or hide the model's reasoning |
+| `/approve` | Run tool calls without asking (the footer then shows `auto-approve`), or ask again; see [Tools](tools.md#always-approve) |
 | `/key` | Switch to another stored key, or add one |
 | `/settings` | Open the settings menu |
 | `/help` | Show commands and keys |
