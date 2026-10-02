@@ -7,7 +7,10 @@ package ui
 import (
 	"errors"
 	"os"
+	"os/signal"
 	"strings"
+	"sync/atomic"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -22,6 +25,24 @@ var (
 	// callers fall back to flags or environment variables.
 	ErrNotInteractive = errors.New("not an interactive terminal")
 )
+
+// Signal is the error of a prompt that a TERM or HUP signal ended (kill,
+// timeout, a closed terminal): the caller stops too, and exits with 128 +
+// the signal.
+type Signal struct{ os.Signal }
+
+func (s Signal) Error() string { return s.String() }
+
+var stopped atomic.Value // the Signal that ended a prompt
+
+// Stopped returns the Signal that ended a prompt of this process, or nil:
+// for callers that go on after a cancelled prompt.
+func Stopped() error {
+	if s, ok := stopped.Load().(Signal); ok {
+		return s
+	}
+	return nil
+}
 
 // Palette holds the colours every component draws with. Set Colors to
 // restyle them; lipgloss already honours NO_COLOR.
@@ -80,7 +101,32 @@ func run(m interface {
 	if w, h, err := term.GetSize(out.Fd()); err == nil {
 		m.setSize(w, h)
 	}
-	final, err := tea.NewProgram(m, tea.WithOutput(out)).Run()
+	// bubbletea would end on TERM as if the prompt were answered, and leave
+	// HUP to kill the process in raw mode; both stop the prompt instead.
+	p := tea.NewProgram(m, tea.WithOutput(out), tea.WithoutSignalHandler())
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigs)
+	got, done := make(chan os.Signal, 1), make(chan struct{})
+	go func() {
+		select {
+		case sig := <-sigs:
+			got <- sig
+			p.Kill()
+		case <-done:
+		}
+	}()
+	final, err := p.Run()
+	close(done)
+	select {
+	case sig := <-got:
+		if sig != os.Interrupt {
+			stopped.Store(Signal{sig})
+			return nil, Signal{sig}
+		}
+		return nil, ErrCancelled
+	default:
+	}
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, tea.ErrProgramKilled) {
 		return nil, ErrCancelled
 	}

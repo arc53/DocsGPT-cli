@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/display"
@@ -58,6 +59,13 @@ func exitCodeFor(err error) int {
 	var ue *manage.UsageError
 	if errors.As(err, &ue) {
 		return exitUsage
+	}
+	// Ended by TERM or HUP: 128 + the signal, as a shell reports it.
+	var sig ui.Signal
+	if errors.As(err, &sig) {
+		if n, ok := sig.Signal.(syscall.Signal); ok {
+			return 128 + int(n)
+		}
 	}
 	return exitFailure
 }

@@ -14,12 +14,14 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/manage"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -70,6 +72,8 @@ func TestExitCodeFor(t *testing.T) {
 		{"wrapped usage", fmt.Errorf("context: %w", usageErrf("bad")), 2},
 		{"explicit failure", &exitError{code: exitFailure, err: errors.New("blocked")}, 1},
 		{"api error", &manage.APIError{Status: 403, Code: manage.CodeInsufficientScope}, 1},
+		{"TERM", ui.Signal{Signal: syscall.SIGTERM}, 143},
+		{"HUP at a prompt", fmt.Errorf("pick: %w", ui.Signal{Signal: syscall.SIGHUP}), 129},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

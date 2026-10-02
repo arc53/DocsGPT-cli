@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -141,10 +142,13 @@ func runChat(first string) error {
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		if err != nil {
+		if err == nil {
+			s.handle(text, shown)
+		} else if !errors.As(err, new(ui.Signal)) {
 			return err
 		}
-		s.handle(text, shown)
+		// TERM or HUP at a prompt: this one, or a command's picker.
+		s.stopped = cmp.Or(s.stopped, ui.Stopped())
 	}
 	if s.sess.Saved() {
 		fmt.Println(display.Dim("Continue this chat with: docsgpt-cli -c"))

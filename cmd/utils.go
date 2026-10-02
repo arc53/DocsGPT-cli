@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
 
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
@@ -70,25 +71,19 @@ func signalContext() (context.Context, context.CancelFunc) {
 	go func() {
 		select {
 		case sig := <-ch:
-			cancel(stopSignal{sig})
+			cancel(ui.Signal{Signal: sig})
 		case <-ctx.Done():
 		}
 	}()
 	return ctx, func() { signal.Stop(ch); cancel(context.Canceled) }
 }
 
-// stopSignal is the cause of a signalContext a signal cancelled.
-type stopSignal struct{ os.Signal }
-
-func (s stopSignal) Error() string { return s.String() }
-
 // terminated returns the error to exit with when TERM or HUP cancelled
-// ctx (128 + the signal, as a shell reports it), else nil.
+// ctx (a ui.Signal, see exitCodeFor), else nil.
 func terminated(ctx context.Context) error {
-	var sig stopSignal
+	var sig ui.Signal
 	if !errors.As(context.Cause(ctx), &sig) || sig.Signal == os.Interrupt {
 		return nil
 	}
-	n, _ := sig.Signal.(syscall.Signal)
-	return &exitError{code: 128 + int(n), err: sig}
+	return sig
 }
