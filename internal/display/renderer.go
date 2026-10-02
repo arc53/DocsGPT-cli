@@ -94,7 +94,8 @@ func (r *StreamRenderer) Delta(delta docsgpt.Delta) {
 		r.midLine = !strings.HasSuffix(delta.Content, "\n")
 		return
 	}
-	r.pending += delta.Content
+	// CRLF line ends would keep fences and blank lines from being seen.
+	r.pending = strings.ReplaceAll(r.pending+delta.Content, "\r\n", "\n")
 	if wait := frameInterval - time.Since(r.lastDraw); wait > 0 {
 		if r.timer == nil {
 			var t *time.Timer
@@ -275,6 +276,6 @@ func opensFence(line string) string {
 
 // closesFence reports whether line closes the fence opened with marker.
 func closesFence(line, marker string) bool {
-	line = strings.TrimRight(line, " \t")
+	line = strings.TrimRight(line, " \t\r")
 	return len(line) >= len(marker) && strings.Trim(line, marker[:1]) == ""
 }

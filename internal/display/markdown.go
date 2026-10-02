@@ -88,6 +88,7 @@ func PrintMarkdown(md string) {
 // lines around or doubled, wrapped list items indented under their text.
 // Unindented code fences are drawn by codeBlock, between dim fence lines.
 func renderMarkdown(r *glamour.TermRenderer, width int, md string) string {
+	md = strings.ReplaceAll(md, "\r\n", "\n")
 	var parts []string
 	flush := func(text string) {
 		if strings.TrimSpace(text) == "" {

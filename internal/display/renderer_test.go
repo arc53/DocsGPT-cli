@@ -176,3 +176,24 @@ func TestHangLists(t *testing.T) {
 		t.Errorf("tidy kept doubled blank lines: %q", got)
 	}
 }
+
+// TestStreamRendererCRLF checks an answer with CRLF line ends renders like
+// the LF one, even with each CR and LF in a chunk of its own.
+func TestStreamRendererCRLF(t *testing.T) {
+	render := func(text string, size int) string {
+		var out bytes.Buffer
+		r := &StreamRenderer{out: &out, tty: true, width: 40, height: 40, md: newMarkdown(40)}
+		for i := 0; i < len(text); i += size {
+			r.Delta(docsgpt.Delta{Content: text[i:min(i+size, len(text))]})
+			r.lastDraw = r.lastDraw.Add(-frameInterval)
+		}
+		r.Flush()
+		return emulate(t, out.String(), 40, 40)
+	}
+	want := render(sample, len(sample))
+	for _, size := range []int{1, 5} {
+		if got := render(strings.ReplaceAll(sample, "\n", "\r\n"), size); got != want {
+			t.Errorf("CRLF in chunks of %d:\n--- got\n%s\n--- want\n%s", size, got, want)
+		}
+	}
+}
