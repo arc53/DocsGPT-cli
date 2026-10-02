@@ -4,27 +4,20 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
 
 // newMarkdown returns a markdown renderer for the active theme that wraps at
-// width and leaves no document margin. Nil when glamour refuses the options.
+// width. Nil when glamour refuses the options.
 func newMarkdown(width int) *glamour.TermRenderer {
-	style := styles.LightStyleConfig
-	switch {
-	case colorless():
-		style = styles.NoTTYStyleConfig
-	case darkBackground:
-		style = styles.DarkStyleConfig
-	}
-	margin := uint(0)
-	style.Document.Margin = &margin
-
 	r, err := glamour.NewTermRenderer(
-		glamour.WithStyles(style),
+		glamour.WithStyles(markdownStyle(width)),
 		glamour.WithWordWrap(width),
 		glamour.WithColorProfile(termenv.ColorProfile()),
 	)
@@ -34,15 +27,97 @@ func newMarkdown(width int) *glamour.TermRenderer {
 	return r
 }
 
+// markdownStyle builds the glamour style from the palette: no margins or
+// background fills, headings in bold accent, dim rules, muted list markers.
+func markdownStyle(width int) ansi.StyleConfig {
+	if colorless() {
+		s := styles.NoTTYStyleConfig
+		s.Document = ansi.StyleBlock{}
+		s.HorizontalRule.Format = "\n" + strings.Repeat("─", min(width, 80)) + "\n"
+		return s
+	}
+	color := func(c lipgloss.CompleteAdaptiveColor) *string { s := colorCode(c); return &s }
+	yes, no := ptr(true), ptr(false)
+	return ansi.StyleConfig{
+		Document:      ansi.StyleBlock{},
+		Paragraph:     ansi.StyleBlock{},
+		BlockQuote:    ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: color(colMuted), Italic: yes}, Indent: ptr(uint(1)), IndentToken: ptr("│ ")},
+		List:          ansi.StyleList{LevelIndent: 2},
+		Heading:       ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{BlockSuffix: "\n", Color: color(colAccent), Bold: yes}},
+		H1:            ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Underline: yes}},
+		H3:            ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Prefix: "### "}},
+		H4:            ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Prefix: "#### "}},
+		H5:            ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Prefix: "##### "}},
+		H6:            ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Prefix: "###### ", Bold: no}},
+		Strikethrough: ansi.StylePrimitive{CrossedOut: yes},
+		Emph:          ansi.StylePrimitive{Italic: yes},
+		Strong:        ansi.StylePrimitive{Bold: yes},
+		HorizontalRule: ansi.StylePrimitive{
+			Color:  color(colDim),
+			Format: "\n" + strings.Repeat("─", min(width, 80)) + "\n",
+		},
+		Item:        ansi.StylePrimitive{Prefix: "• ", Color: color(colMuted)},
+		Enumeration: ansi.StylePrimitive{BlockPrefix: ". ", Color: color(colMuted)},
+		Task:        ansi.StyleTask{Ticked: "[✓] ", Unticked: "[ ] "},
+		Link:        ansi.StylePrimitive{Color: color(colLink)},
+		LinkText:    ansi.StylePrimitive{Color: color(colLink), Underline: yes},
+		Image:       ansi.StylePrimitive{Color: color(colLink)},
+		ImageText:   ansi.StylePrimitive{Color: color(colDim), Format: "Image: {{.text}} →"},
+		Code:        ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: color(colAccent)}},
+		// Fences inside list items; the top-level ones are drawn by codeBlock.
+		CodeBlock:             ansi.StyleCodeBlock{StyleBlock: ansi.StyleBlock{Margin: ptr(uint(2))}},
+		Table:                 ansi.StyleTable{CenterSeparator: ptr("┼"), ColumnSeparator: ptr("│"), RowSeparator: ptr("─")},
+		DefinitionDescription: ansi.StylePrimitive{BlockPrefix: "\n→ "},
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
 // renderMarkdown renders md with r (raw md when r is nil or fails) and tidies
 // glamour's output: no padding at the end of a line, no blank lines around.
+// Unindented code fences are drawn by codeBlock, between dim fence lines.
 func renderMarkdown(r *glamour.TermRenderer, md string) string {
-	out := md
-	if r != nil {
-		if s, err := r.Render(md); err == nil {
-			out = s
+	var parts []string
+	flush := func(text string) {
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		out := text
+		if r != nil {
+			if s, err := r.Render(text); err == nil {
+				out = s
+			}
+		}
+		if out = tidy(out); out != "" {
+			parts = append(parts, out)
 		}
 	}
+
+	lines := strings.SplitAfter(md, "\n")
+	start := 0 // first line of the pending markdown
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], "\n")
+		fence := opensFence(line)
+		if fence == "" || strings.TrimLeft(line, " \t") != line {
+			continue
+		}
+		end := i + 1
+		for end < len(lines) && !closesFence(strings.TrimLeft(strings.TrimRight(lines[end], "\n"), " \t"), fence) {
+			end++
+		}
+		flush(strings.Join(lines[start:i], ""))
+		code := strings.TrimSuffix(strings.Join(lines[i+1:min(end, len(lines))], ""), "\n")
+		parts = append(parts, codeBlock(strings.TrimSpace(line[len(fence):]), code, end < len(lines)))
+		start, i = end+1, end
+	}
+	if start < len(lines) {
+		flush(strings.Join(lines[start:], ""))
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// tidy drops glamour's line padding and the blank lines around its output.
+func tidy(out string) string {
 	lines := strings.Split(out, "\n")
 	for i, line := range lines {
 		lines[i] = trimPadding(line)
@@ -54,6 +129,74 @@ func renderMarkdown(r *glamour.TermRenderer, md string) string {
 		lines = lines[:len(lines)-1]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// codeBlock draws a fenced code block like pi: dim fence lines around the
+// code, which is indented by two spaces and highlighted when the language
+// is known. closed is false while the closing fence has not streamed in.
+func codeBlock(lang, code string, closed bool) string {
+	var b strings.Builder
+	b.WriteString(T.Dim.Render("```" + lang))
+	for _, line := range strings.Split(highlight(lang, code), "\n") {
+		b.WriteString("\n")
+		if line != "" {
+			b.WriteString("  " + line)
+		}
+	}
+	if closed {
+		b.WriteString("\n" + T.Dim.Render("```"))
+	}
+	return b.String()
+}
+
+// highlight colors code with the palette's syntax tones, by token.
+func highlight(lang, code string) string {
+	lexer := lexers.Get(lang)
+	if lexer == nil || lang == "" || colorless() {
+		return strings.ReplaceAll(code, "\t", "    ")
+	}
+	it, err := chroma.Coalesce(lexer).Tokenise(nil, code)
+	if err != nil {
+		return code
+	}
+	var b strings.Builder
+	for tok := it(); tok != chroma.EOF; tok = it() {
+		style, styled := syntaxStyle(tok.Type)
+		for i, piece := range strings.Split(strings.ReplaceAll(tok.Value, "\t", "    "), "\n") {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			if styled && piece != "" {
+				piece = style.Render(piece)
+			}
+			b.WriteString(piece)
+		}
+	}
+	return b.String()
+}
+
+// syntaxStyle maps a token type to its tone (pi's syntax colors).
+func syntaxStyle(t chroma.TokenType) (lipgloss.Style, bool) {
+	fg := func(c lipgloss.TerminalColor) lipgloss.Style { return lipgloss.NewStyle().Foreground(c) }
+	switch {
+	case t.InCategory(chroma.Comment):
+		return fg(colMuted).Italic(true), true
+	case t == chroma.KeywordType || t == chroma.NameClass:
+		return fg(colAccent), true
+	case t.InCategory(chroma.Keyword):
+		return fg(colLink), true
+	case t.InSubCategory(chroma.LiteralString):
+		return fg(colString), true
+	case t.InSubCategory(chroma.LiteralNumber):
+		return fg(colSuccess), true
+	case t == chroma.NameFunction || t == chroma.NameBuiltin || t == chroma.NameDecorator:
+		return fg(colWarning), true
+	case t == chroma.NameVariable || t == chroma.NameAttribute || t == chroma.NameTag:
+		return fg(colVariable), true
+	case t.InCategory(chroma.Operator) || t == chroma.Punctuation:
+		return fg(colMuted), true
+	}
+	return lipgloss.Style{}, false
 }
 
 var trailingPadding = regexp.MustCompile(`(?:\x1b\[[0-9;]*m| )+$`)
