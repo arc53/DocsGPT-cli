@@ -143,6 +143,13 @@ func (r *StreamRenderer) Flush() {
 	r.started = true // what follows (a tool block) came after something
 }
 
+// Started reports whether anything was streamed, shown or not yet.
+func (r *StreamRenderer) Started() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.started || r.content.Len() > 0
+}
+
 // Content returns the answer so far, without control sequences.
 func (r *StreamRenderer) Content() string {
 	r.mu.Lock()

@@ -278,7 +278,13 @@ func (s *chatSession) send(text, shown string) {
 		Tools: s.toolDefs, Stream: !globalNoStream, ConversationID: s.conversationID,
 		OnDelta: func(delta docsgpt.Delta, _ string) { renderer.Delta(delta) },
 		OnToolCall: func(tc docsgpt.ToolCall) string {
+			// The tool block opens with a blank line; right after the
+			// message, the message's own does.
+			first := !renderer.Started()
 			renderer.Flush()
+			if first {
+				fmt.Fprint(os.Stderr, "\x1b[1A")
+			}
 			defer renderer.Wait()
 			ui.DiscardInput() // typed ahead, it would answer the approval
 			return s.tools.Handle(ctx, cancel, tc)
