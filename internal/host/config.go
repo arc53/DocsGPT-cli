@@ -46,6 +46,31 @@ func HostConfigPath() string {
 	return filepath.Join(hostConfigDir(), "host.yml")
 }
 
+// HasLocalState reports whether host.yml or host.key exists.
+func HasLocalState() bool {
+	for _, p := range []string{HostConfigPath(), keyPath()} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			return true
+		}
+	}
+	return false
+}
+
+// ClearLocalState deletes host.yml and host.key without contacting the
+// server and returns the names of the files it removed.
+func ClearLocalState() ([]string, error) {
+	removed := []string{}
+	for _, p := range []string{HostConfigPath(), keyPath()} {
+		name := filepath.Base(p)
+		if err := os.Remove(p); err == nil {
+			removed = append(removed, name)
+		} else if !os.IsNotExist(err) {
+			return removed, fmt.Errorf("remove %s: %w", name, err)
+		}
+	}
+	return removed, nil
+}
+
 // LoadHostConfig reads host.yml; returns the defaults + os.IsNotExist if missing.
 func LoadHostConfig() (HostConfig, error) {
 	cfg := DefaultHostConfig()

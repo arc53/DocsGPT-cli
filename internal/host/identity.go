@@ -21,8 +21,7 @@ type HostKey struct {
 }
 
 func keyPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".docsgpt", "host.key")
+	return filepath.Join(hostConfigDir(), "host.key")
 }
 
 // LoadOrCreateKey returns the persisted key, generating + persisting one on
