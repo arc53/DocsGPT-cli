@@ -3,22 +3,27 @@ package tools
 import (
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"unicode"
 )
 
 // alwaysKey returns what "Always allow" covers for command, or "" when it
-// must not be offered: the program and its first argument when that is a
-// subcommand word ("git status", "npm test"), else the program alone
-// ("ls"). Every command is checked, so a later one runs unasked only when
-// it has the same key and passes the same checks:
+// must not be offered: the program and its subcommand ("git status", "npm
+// test"), or the program alone when it has no subcommands ("ls", "grep")
+// or no other words than options ("git --version"). Every command is
+// checked, so a later one runs unasked only when it has the same key and
+// passes the same checks:
 //   - a simple command: no shell operators, substitutions, globs, escapes,
 //     comments or several lines (quotes are fine, except on Windows);
 //   - no leading VAR=value, and the program not given as a path;
 //   - not a program that runs other programs or code (runsCode);
 //   - no argument that makes a program run code or change what it works
 //     on (riskyArg), such as git -c, -C or --upload-pack;
-//   - not a subcommand that does (git config, npm exec).
+//   - the subcommand is the first word: an option before it may take the
+//     next word as its value (git --namespace status push runs git push),
+//     so only options known to take none may come first (git --no-pager);
+//   - not a subcommand that runs code (git config, npm exec).
 func alwaysKey(command string) string {
 	words := simpleWords(command)
 	if len(words) == 0 {
@@ -34,13 +39,36 @@ func alwaysKey(command string) string {
 			return ""
 		}
 	}
-	if len(words) == 1 || !subcommandRe.MatchString(words[1]) {
-		return prog
+	rest := words[1:]
+	for len(rest) > 0 && bareOptions[name+" "+rest[0]] {
+		rest = rest[1:]
 	}
-	if riskySubcommands[name+" "+words[1]] {
+	switch {
+	case plainPrograms[name] || !slices.ContainsFunc(rest, func(w string) bool { return !strings.HasPrefix(w, "-") }):
+		return prog
+	case !subcommandRe.MatchString(rest[0]) || riskySubcommands[name+" "+rest[0]]:
 		return ""
 	}
-	return prog + " " + words[1]
+	return prog + " " + rest[0]
+}
+
+// plainPrograms have no subcommands and only read, so their key is the
+// program whatever its arguments.
+var plainPrograms = setOf(`ls cat head tail wc grep egrep fgrep rg ag ack tree du df stat file
+	diff cmp nl cut column jq pwd echo printf which whoami uname id date ps
+	realpath readlink basename dirname md5sum sha1sum sha256sum shasum cksum od hexdump strings`)
+
+// bareOptions take no value and change nothing the key is about, so they
+// may come before the subcommand.
+var bareOptions = setOf(`git|--no-pager git|-P git|--no-optional-locks
+	npm|-s npm|--silent npm|-q npm|--quiet`)
+
+func setOf(words string) map[string]bool {
+	m := map[string]bool{}
+	for _, w := range strings.Fields(words) {
+		m[strings.ReplaceAll(w, "|", " ")] = true
+	}
+	return m
 }
 
 var subcommandRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)

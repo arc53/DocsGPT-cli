@@ -26,8 +26,29 @@ func TestAlwaysKey(t *testing.T) {
 		"  ls -la src ":                  "ls",
 		"ls":                             "ls",
 		"grep -rn foo internal":          "grep",
-		"grep shutdown app.log":          "grep shutdown",
+		"grep shutdown app.log":          "grep", // no subcommands
+		"ls -la src":                     "ls",
+		"head -n 50 main.go":             "head",
 		"cargo build --release":          "cargo build",
+		"git --version":                  "git",
+		"git --no-pager log -5":          "git log",
+		"git -P diff":                    "git diff",
+		"npm -s test":                    "npm test",
+
+		// Options before the subcommand: one may take the next word as
+		// its value, so the subcommand is unknown.
+		"git --namespace status push --force":         "",
+		"git --no-pager --namespace status push":      "",
+		"git --no-pager config core.fsmonitor 'x'":    "",
+		"git -P submodule foreach 'rm -rf ~'":         "",
+		"git --no-optional-locks config alias.x '!x'": "",
+		"npm -s exec -- cowsay":                       "",
+		"npm --prefix /tmp/x test":                    "",
+		"npm --loglevel silent exec cowsay":           "",
+		"docker -H tcp://x run alpine":                "",
+		"kubectl -n prod delete ns prod":              "",
+		"cargo +nightly install evil":                 "",
+		"curl http://example.com":                     "",
 
 		// Shell syntax.
 		"":                     "",
@@ -123,18 +144,21 @@ func TestAlwaysKey(t *testing.T) {
 // TestAlwaysAllowMatching: an allowed key lets through later commands with
 // the same key only, and never ones that fail the checks.
 func TestAlwaysAllowMatching(t *testing.T) {
-	s := &Session{allowed: map[string]bool{alwaysKey("git status"): true, alwaysKey("ls -la"): true}}
+	s := &Session{allowed: map[string]bool{alwaysKey("git status"): true, alwaysKey("ls -la"): true, alwaysKey("git --version"): true}}
 	for cmd, want := range map[string]bool{
-		"git status --short":         true,
-		"git status -c x":            false,
-		"git -C /tmp/evil status":    false,
-		"git push":                   false,
-		"ls src":                     false, // key "ls src"
-		"ls -R":                      true,
-		"ls -la; rm -rf ~":           false,
-		"CI=1 git status":            false,
-		"/usr/bin/git status":        false,
-		"git status && touch /tmp/p": false,
+		"git status --short":          true,
+		"git status -c x":             false,
+		"git -C /tmp/evil status":     false,
+		"git push":                    false,
+		"ls src":                      true, // ls has no subcommands
+		"ls -R":                       true,
+		"git --no-pager status":       true,
+		"git --no-pager config x y":   false,
+		"git --namespace status push": false,
+		"ls -la; rm -rf ~":            false,
+		"CI=1 git status":             false,
+		"/usr/bin/git status":         false,
+		"git status && touch /tmp/p":  false,
 	} {
 		key := alwaysKey(cmd)
 		if got := key != "" && s.allowed[key]; got != want {
