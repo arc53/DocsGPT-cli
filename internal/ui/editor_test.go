@@ -72,6 +72,61 @@ func TestEditorPasteMarker(t *testing.T) {
 	}
 }
 
+// TestEditorPasteMarkerIsAtomic: no deletion or cursor move leaves part of
+// a marker behind, and a deleted marker's paste is gone with it.
+func TestEditorPasteMarkerIsAtomic(t *testing.T) {
+	big := strings.Repeat("line\n", 15) + "end"
+	paste := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(big), Paste: true}
+	alt := func(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t, Alt: true} }
+	for name, keys := range map[string][]tea.KeyMsg{
+		"ctrl+w":        {key(tea.KeyCtrlW)},
+		"alt+backspace": {alt(tea.KeyBackspace)},
+		"ctrl+u":        {key(tea.KeyCtrlU)},
+		"ctrl+k":        {key(tea.KeyCtrlA), runes(" "), key(tea.KeyCtrlA), key(tea.KeyCtrlK)},
+		"delete":        {key(tea.KeyCtrlA), key(tea.KeyRight), key(tea.KeyDelete)},
+	} {
+		m := testEditor()
+		press(m, runes("x"), paste)
+		press(m, keys...)
+		if got := m.text(); strings.Contains(got, "paste") || strings.Contains(got, "lines]") {
+			t.Errorf("%s left %q", name, got)
+		}
+		if len(m.pastes) != 0 {
+			t.Errorf("%s kept the paste", name)
+		}
+		if press(m, runes("[paste #1 +16 lines]")); m.expanded() != m.text() {
+			t.Errorf("%s: typing the marker brought the paste back", name)
+		}
+	}
+
+	m := testEditor()
+	press(m, runes("a "), paste, runes(" b"))
+	end := m.col
+	press(m, key(tea.KeyLeft), key(tea.KeyLeft), alt(tea.KeyLeft))
+	if m.col != 2 {
+		t.Errorf("alt+left stopped at %d, want 2 (the marker's start)", m.col)
+	}
+	press(m, alt(tea.KeyRight))
+	if m.col != end-2 {
+		t.Errorf("alt+right stopped at %d, want %d (the marker's end)", m.col, end-2)
+	}
+
+	// Markers wrapped over rows, between lines: no move rests inside one.
+	m = testEditor()
+	m.setSize(14, 20)
+	press(m, runes("0123456789"), key(tea.KeyCtrlJ), runes("abcd"), paste, runes(" efgh"), key(tea.KeyCtrlJ), runes("0123456789"))
+	moves := []tea.KeyMsg{key(tea.KeyUp), key(tea.KeyDown), key(tea.KeyLeft), key(tea.KeyRight), alt(tea.KeyLeft), alt(tea.KeyRight)}
+	for i := range 400 {
+		k := moves[(i*7+i/5)%len(moves)]
+		press(m, k)
+		for _, r := range m.markers() {
+			if r[0] < m.col && m.col < r[1] {
+				t.Fatalf("move %d (%s) left the cursor at %d:%d, inside %v", i, k, m.row, m.col, r)
+			}
+		}
+	}
+}
+
 func TestEditorSlashPopup(t *testing.T) {
 	m := testEditor("new", "copy", "quit", "export")
 	press(m, runes("/"))
