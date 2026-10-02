@@ -158,6 +158,14 @@ func TestCommandTypo(t *testing.T) {
 	}
 }
 
+func TestSuggestionsClosestFirst(t *testing.T) {
+	for typed, want := range map[string]string{"sett": "set", "gte": "get", "shwo": "show"} {
+		if got := suggestions(configCmd, typed); len(got) == 0 || got[0] != want {
+			t.Errorf("suggestions(config, %q) = %q, want %q first", typed, got, want)
+		}
+	}
+}
+
 func TestLoginWhoamiLogout(t *testing.T) {
 	home := isolateConfig(t)
 	var gotAuth string

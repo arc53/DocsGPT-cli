@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
@@ -185,12 +186,36 @@ func subcommandArgs(cmd *cobra.Command, args []string) error {
 }
 
 // suggestions lists the subcommands of cmd that typed is a prefix or a
-// near miss (2 edits) of, like cobra's own "did you mean" hints.
+// near miss (2 edits) of, like cobra's own "did you mean" hints, closest
+// first ("sett" is set, not get).
 func suggestions(cmd *cobra.Command, typed string) []string {
 	if cmd.SuggestionsMinimumDistance <= 0 {
 		cmd.SuggestionsMinimumDistance = 2
 	}
-	return cmd.SuggestionsFor(typed)
+	s := cmd.SuggestionsFor(typed)
+	typed = strings.ToLower(typed)
+	slices.SortStableFunc(s, func(a, b string) int { return editDistance(typed, a) - editDistance(typed, b) })
+	return s
+}
+
+// editDistance is the Levenshtein distance of a and b, in bytes.
+func editDistance(a, b string) int {
+	row := make([]int, len(b)+1)
+	for j := range row {
+		row[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		prev := row[0]
+		row[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			prev, row[j] = row[j], min(row[j]+1, row[j-1]+1, prev+cost)
+		}
+	}
+	return row[len(b)]
 }
 
 // groupCommand makes c, which only holds subcommands, print its help when run
