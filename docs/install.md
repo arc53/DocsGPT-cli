@@ -101,7 +101,7 @@ Manual controls:
 ```bash
 docsgpt-cli update              # check, confirm, install now
 docsgpt-cli update --check      # only check
-docsgpt-cli update --yes        # no confirmation
+docsgpt-cli update --yes        # no confirmation (needed without a terminal)
 docsgpt-cli update --rollback   # restore the binary from before the last update
 ```
 

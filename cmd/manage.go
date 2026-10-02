@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/manage"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -102,32 +102,34 @@ func writeJSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
-// confirmDestructive asks for a y/N confirmation on a terminal. Without a
-// terminal (CI) it refuses and asks for --yes, so a pipeline never hangs on a
-// prompt and never deletes by accident.
-func confirmDestructive(in io.Reader, out io.Writer, interactive bool, question string) error {
-	if !interactive {
-		return usageErrf("%s — refusing without confirmation: pass --yes", question)
+// confirmDestructive asks before a destructive action. Without a terminal
+// (CI) it refuses and asks for --yes, so a pipeline never hangs on a prompt
+// and never deletes by accident.
+func confirmDestructive(question string) error {
+	if !ui.Interactive() {
+		return usageErrf("%s refusing without confirmation: pass --yes", question)
 	}
-	fmt.Fprintf(out, "%s [y/N]: ", question)
-	line, _ := bufio.NewReader(in).ReadString('\n')
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return nil
+	ok, err := ui.Confirm(question, false)
+	if err != nil {
+		return err
 	}
-	return &exitError{code: exitFailure, err: errors.New("aborted")}
+	if !ok {
+		return &exitError{code: exitFailure, err: errors.New("aborted")}
+	}
+	return nil
 }
 
 func stdinIsTerminal() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
 }
 
-// textOrDash renders empty table cells.
+// textOrDash renders a table cell or a value in a human line: "-" when
+// empty, control characters made visible (servers supply most of them).
 func textOrDash(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "-"
 	}
-	return s
+	return display.Safe(s)
 }
 
 // anyText renders loosely typed server fields (dates, token counts).

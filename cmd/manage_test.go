@@ -250,8 +250,8 @@ func TestLoginWhoamiLogout(t *testing.T) {
 	globalToken = ""
 
 	// Without a terminal, logout needs --yes.
-	logoutToken = true
-	t.Cleanup(func() { logoutToken, logoutYes = false, false })
+	logoutToken = tokenSwitch{on: true}
+	t.Cleanup(func() { logoutToken, logoutYes = tokenSwitch{}, false })
 	if err := runLogout(nil, &out); exitCodeFor(err) != exitUsage {
 		t.Fatalf("logout without --yes: %v", err)
 	}
@@ -268,8 +268,11 @@ func TestLoginWhoamiLogout(t *testing.T) {
 		t.Errorf("after logout: %+v", cfg)
 	}
 	t.Setenv(config.EnvToken, "")
-	if err := runWhoami(ctx, false, &out); exitCodeFor(err) != exitUsage {
-		t.Errorf("whoami without a token should be a usage error, got %v", err)
+	if err := runWhoami(ctx, false, &out); exitCodeFor(err) != exitFailure || !strings.Contains(err.Error(), "not logged in") {
+		t.Errorf("whoami when logged out should exit 1, got %v", err)
+	}
+	if err := runWhoami(ctx, true, &out); exitCodeFor(err) != exitFailure {
+		t.Errorf("whoami --json without a token should exit 1, got %v", err)
 	}
 	if _, err := newManageClient(); exitCodeFor(err) != exitUsage {
 		t.Errorf("newManageClient without a token: %v", err)
@@ -373,6 +376,42 @@ func TestLoginAgentKey(t *testing.T) {
 	}
 	if err := runLogout([]string{"nope"}, &out); exitCodeFor(err) != exitUsage {
 		t.Errorf("unknown key: %v", err)
+	}
+}
+
+// logout --token shadows the global --token <pat>: a token given to it, or
+// alone, names the stored token and is never looked up as a key name.
+func TestLogoutByToken(t *testing.T) {
+	isolateConfig(t)
+	cfg := config.DefaultConfig()
+	cfg.Keys["support"] = "k-1"
+	cfg.Token = cmdTestToken
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	logoutYes = true
+	t.Cleanup(func() { logoutToken, logoutYes = tokenSwitch{}, false })
+
+	var out bytes.Buffer
+	other := "dgpt_pat_OtherOtherOTHERSECRET"
+	err := runLogout([]string{other}, &out)
+	if exitCodeFor(err) != exitUsage || strings.Contains(err.Error(), "OTHERSECRET") || !strings.Contains(err.Error(), "not the stored access token") {
+		t.Fatalf("other token: %v", err)
+	}
+
+	var sw tokenSwitch
+	if err := sw.Set(cmdTestToken); err != nil || !sw.on || sw.value != cmdTestToken {
+		t.Fatalf("--token=<pat>: %+v %v", sw, err)
+	}
+	if err := sw.Set("maybe"); err == nil {
+		t.Error("--token=maybe should not parse")
+	}
+	logoutToken = tokenSwitch{on: true}
+	if err := runLogout([]string{cmdTestToken}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ = config.Load(); cfg.Token != "" || cfg.Keys["support"] != "k-1" {
+		t.Errorf("after logout --token <pat>: token %q, keys %v", cfg.Token, cfg.Keys)
 	}
 }
 
@@ -770,7 +809,7 @@ func TestListCommandsOutput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/get_agents":
-			jsonReply(w, 200, `[{"id":"a1","name":"Support","slug":"support","agent_type":"classic","status":"published","ownership":"user"}]`)
+			jsonReply(w, 200, `[{"id":"a1","name":"Sup\u001b[2Jport","slug":"support","agent_type":"classic","status":"published","ownership":"user"}]`)
 		case "/api/sources":
 			jsonReply(w, 200, `[{"id":"s1","name":"Docs","tokens":1234,"type":"file","date":"2026-01-01","ownership":"user"}]`)
 		case "/api/get_prompts":
@@ -788,7 +827,7 @@ func TestListCommandsOutput(t *testing.T) {
 		run  func(io.Writer, bool) error
 		want []string
 	}{
-		{"agents", func(w io.Writer, j bool) error { return runAgentsList(ctx, client, j, w) }, []string{"a1", "Support", "published", "support"}},
+		{"agents", func(w io.Writer, j bool) error { return runAgentsList(ctx, client, j, w) }, []string{"a1", "Sup␛[2Jport", "published", "support"}},
 		{"sources", func(w io.Writer, j bool) error { return runSourcesList(ctx, client, j, w) }, []string{"s1", "Docs", "1234"}},
 		{"prompts", func(w io.Writer, j bool) error { return runPromptsList(ctx, client, j, w) }, []string{"default", "public"}},
 	}
@@ -802,6 +841,9 @@ func TestListCommandsOutput(t *testing.T) {
 				if !strings.Contains(table.String(), want) {
 					t.Errorf("table lacks %q:\n%s", want, table.String())
 				}
+			}
+			if strings.Contains(table.String(), "\x1b") {
+				t.Errorf("table carries a raw escape:\n%q", table.String())
 			}
 			if err := tt.run(&doc, true); err != nil {
 				t.Fatal(err)
@@ -841,26 +883,10 @@ func TestAgentsExportToFile(t *testing.T) {
 	}
 }
 
+// Off a terminal (as under go test), a destructive action needs --yes.
 func TestConfirmDestructive(t *testing.T) {
-	tests := []struct {
-		name        string
-		input       string
-		interactive bool
-		wantExit    int
-	}{
-		{"yes", "y\n", true, 0},
-		{"full yes", "YES\n", true, 0},
-		{"default is no", "\n", true, 1},
-		{"no", "n\n", true, 1},
-		{"non-interactive refuses", "y\n", false, 2},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := confirmDestructive(strings.NewReader(tt.input), io.Discard, tt.interactive, "Delete?")
-			if got := exitCodeFor(err); got != tt.wantExit {
-				t.Errorf("exit = %d (%v), want %d", got, err, tt.wantExit)
-			}
-		})
+	if err := confirmDestructive("Delete?"); exitCodeFor(err) != exitUsage || !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("err = %v, want a usage error asking for --yes", err)
 	}
 }
 

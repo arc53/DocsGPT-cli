@@ -40,8 +40,8 @@ cmd/
   chat.go            → Interactive chat (hidden alias; optional first message): editor loop, the slash command table, !cmd, sessions (-c/-r//resume)
   config.go          → config get / set / show / path + the settings menu; one `settings` table drives all of them
   install.go         → Hidden `install` (run by the install scripts), wiring over internal/install
-  update.go          → Self-update to latest GitHub release (--check, --yes, --rollback, hidden --worker)
-  host.go            → host daemon commands (pair + post-pair menu, status, revoke, reset, install-/uninstall-service); wiring over internal/host
+  update.go          → Self-update to latest GitHub release (--check, --yes/-y: needed off a terminal, else ui.Confirm; --rollback, hidden --worker)
+  host.go            → host daemon commands (pair [code]: ui.Input validated by the redeem call, then a ui.Select of start / install / nothing on a TTY, first stdin line otherwise; status, revoke, reset, install-/uninstall-service); wiring over internal/host
   bench.go           → Benchmark suites vs agents (bench / bench record / bench init; --model, --matrix, --run-tag, --agent-id)
   manage.go          → Exit codes (0/1/2, exitError/usageErr), PAT client construction, confirmations
   login.go           → login / logout / whoami / hidden keys: agent API keys + the PAT, the key picker, first-run key prompt (chatKey)
@@ -98,9 +98,11 @@ internal/
     style.go         → Accent/Muted/Dim/Success/Warn helpers, ErrorMsg (stderr)
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
                        (live last-5-lines region), DiffPreview for writes
-    safe.go          → Safe: every model/server string in tool blocks and sources is
-                       printed through it (control chars as ␛ ␍ ␊, format runes as
-                       \uXXXX), so an escape sequence cannot hide part of a command.
+    safe.go          → Safe: control chars as ␛ ␍ ␊, format runes as \uXXXX, so an
+                       escape sequence cannot hide part of a command. Every model/server
+                       string in tool blocks, sources, agents/sources lists, whoami, host
+                       pair/status and bench errors goes through it (cmd's textOrDash for
+                       table cells; --json stays raw).
                        StripControls: removes ESC/OSC/DCS/C1 sequences whole and other
                        controls but \n \t, for text read as text (answers, resumed
                        chats, the user-message block, /export, error messages)
@@ -167,9 +169,12 @@ stdin (no TTY): key or token on the first line, `--name`, a new key becomes the
 default. A key login also stores the base URL, unless a PAT is stored for another
 server (warning instead). With no key, ask/chat on a TTY run the same prompt inline
 (`chatKey`, keys only) and continue; off a TTY: "No API key…" exit 1. `logout
-[name] | --token | --all` (picker on a TTY; `ui.Confirm`, or `--yes` off a TTY);
+[name] | --token | --all` (picker on a TTY; `ui.Confirm`, or `--yes` off a TTY;
+`--token` shadows the global one, so a `dgpt_pat_…` given to it, `=` or as the
+argument, names the stored token and must match it — `tokenSwitch`);
 removing the default promotes the first remaining key. `whoami`: active key
-(name, redacted, server, agent via /v1/models) + PAT identity; `--json` = PAT doc only.
+(name, redacted, server, agent via /v1/models) + PAT identity; `--json` = PAT doc only;
+neither configured (`--json`: no PAT) = exit 1, not a usage error.
 `keys` is a hidden alias of the TTY picker (the old add/set/delete flags are gone).
 
 ### ask command
@@ -259,7 +264,7 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set a
 5. `--resolve <kind>:<selector>=<value>` → server `resolution`: `source:<name>=<id>` → `sources[name]`; `tool:<sel>=reuse:<id>|create|skip` and `tool:<sel>.secret.<field>=<v>` → `tools["tool-N"] = {decision, tool_id, secrets}`; `model:<display_name>=<api_key>` → `models[name] = {api_key}`. `source:…=skip` / `model:…=skip` are CLI-side acknowledgements (the server has no such decision; it just leaves the reference off) and are never sent. `<sel>` = `tool-N` or an unambiguous tool name/type; positional keys are refused across several documents; an entry matching nothing is a usage error
 6. `sources upload`: multipart `user` (legacy, required by the server), `name`, repeated `file`, with an explicit Content-Length and streamed file bodies. Default `Idempotency-Key` = `docsgpt-cli-upload-` + sha256(name + sorted (basename, file sha256)), so CI retries dedupe; `--wait` polls `/api/task_status` (1s → 10s backoff, 503 = transient, progress on stderr) until SUCCESS / FAILURE / `--timeout`; the `deduplicated` task id sentinel is not polled. `--replace` (needs `--wait`) then deletes the caller's older same-named sources (never the new one, never team-shared, never without a reported `source_id`, and never unless that id is in the current listing: a content revert repeats the Idempotency-Key, and the deduplicated reply then names the earlier, already deleted source; the command fails with exit 1 instead of deleting the only live one): the server resolves an agent's source name to the OLDEST match, so without it agents stay pinned to the first upload; `agents apply` must run after
 7. `agents trigger`: payload from `-f <file|->`, validated as JSON (not null) before any request. Target = `--webhook-url` (else `DOCSGPT_WEBHOOK_URL` when no agent id is given; no PAT needed) XOR `<agent-id>` (PAT, scope `agents:keys`, `GET /api/agent_webhook?id=`; the returned token is re-rooted on the configured base URL, since the server builds the URL from its `API_URL`). The webhook POST never carries the PAT (the server denies tokens on that route). `--wait` polls `/api/task_status` anonymously (the server does not require auth there) and falls back to the PAT on 401/403 only when the PAT's base URL has the webhook's origin; SUCCESS whose result is not `status: success` (`quota_exceeded`, idempotency guard) is a failure. The webhook token is never printed (`Webhook.String` redacts; errors pass through `Webhook.Redact`)
-8. Exit codes mirror bench: 0 ok, 1 failure/blocked/timeout, 2 usage or validation (`exitError` in cmd/manage.go, mapped in `Execute`). These commands print errors to stderr and refuse destructive actions without `--yes` when stdin is not a terminal
+8. Exit codes mirror bench: 0 ok, 1 failure/blocked/timeout, 2 usage or validation (`exitError` in cmd/manage.go, mapped in `Execute`). These commands print errors to stderr; destructive ones (`agents/sources delete`, `logout`, `host reset`) ask with `ui.Confirm` via `confirmDestructive`, and refuse without `--yes` off a terminal
 
 ### Tool call flow
 1. CLI sends `tools` array in request

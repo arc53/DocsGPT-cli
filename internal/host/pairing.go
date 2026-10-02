@@ -2,6 +2,8 @@ package host
 
 import (
 	"bytes"
+	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,7 +33,7 @@ type PairResponse struct {
 
 // Pair performs a single redeem call against the server, persisting the
 // result to host.yml on success. Returns the redeemed pairing response.
-func Pair(baseURL, userCode, cliVersion string) (*PairResponse, error) {
+func Pair(ctx context.Context, baseURL, userCode, cliVersion string) (*PairResponse, error) {
 	key, err := LoadOrCreateKey()
 	if err != nil {
 		return nil, err
@@ -50,7 +52,7 @@ func Pair(baseURL, userCode, cliVersion string) (*PairResponse, error) {
 	}
 
 	endpoint := strings.TrimRight(baseURL, "/") + "/api/devices/pairings/redeem"
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +65,12 @@ func Pair(baseURL, userCode, cliVersion string) (*PairResponse, error) {
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("pair failed: HTTP %d %s", resp.StatusCode, string(respBody))
+		msg := strings.TrimSpace(string(respBody))
+		var e struct{ Message, Error string }
+		if json.Unmarshal(respBody, &e) == nil && cmp.Or(e.Message, e.Error) != "" {
+			msg = cmp.Or(e.Message, e.Error)
+		}
+		return nil, fmt.Errorf("pairing failed (HTTP %d): %s", resp.StatusCode, msg)
 	}
 	var pr PairResponse
 	if err := json.Unmarshal(respBody, &pr); err != nil {

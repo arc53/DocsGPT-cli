@@ -1,16 +1,14 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/install"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
 	"github.com/arc53/DocsGPT-cli/internal/update"
 
 	"github.com/spf13/cobra"
@@ -26,7 +24,18 @@ var (
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update docsgpt-cli to the latest release",
-	Args:  cobra.NoArgs,
+	Long: `Update docsgpt-cli to the latest release now. --rollback restores the
+version before the last update.
+
+Updates also happen on their own, as the auto_update setting says:
+  on      download in the background, install on the next run (default)
+  notify  only say when a new release is out
+  off     no checks in the background (DOCSGPT_NO_UPDATE_CHECK=1 does the same)`,
+	Example: `  docsgpt-cli update
+  docsgpt-cli update --check
+  docsgpt-cli update --rollback
+  docsgpt-cli config set auto_update notify`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if updateWorker {
 			update.RunWorker(Version)
@@ -83,13 +92,14 @@ var updateCmd = &cobra.Command{
 		}
 
 		if !updateYes {
-			fmt.Print("Proceed? [Y/n] ")
-			input, err := bufio.NewReader(os.Stdin).ReadString('\n')
+			if !ui.Interactive() {
+				return usageErrf("pass --yes to install it without a terminal")
+			}
+			ok, err := ui.Confirm("Install "+rel.TagName+"?", true)
 			if err != nil {
 				return err
 			}
-			input = strings.TrimSpace(strings.ToLower(input))
-			if input != "" && input != "y" && input != "yes" {
+			if !ok {
 				fmt.Println(display.Muted("Update cancelled."))
 				return nil
 			}
@@ -134,7 +144,7 @@ func runRollback() error {
 
 func init() {
 	updateCmd.Flags().BoolVar(&updateCheckOnly, "check", false, "Only check for a new version, don't install")
-	updateCmd.Flags().BoolVar(&updateYes, "yes", false, "Skip the confirmation prompt")
+	updateCmd.Flags().BoolVarP(&updateYes, "yes", "y", false, "Do not ask for confirmation")
 	updateCmd.Flags().BoolVar(&updateRollback, "rollback", false, "Restore the binary from before the last update")
 	updateCmd.Flags().BoolVar(&updateWorker, "worker", false, "Run the background check/stage pass")
 	updateCmd.Flags().MarkHidden("worker")

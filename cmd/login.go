@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +28,7 @@ import (
 var (
 	whoamiJSON  bool
 	loginName   string
-	logoutToken bool
+	logoutToken tokenSwitch
 	logoutAll   bool
 	logoutYes   bool
 )
@@ -108,7 +109,13 @@ to invalidate them.`,
 var whoamiCmd = &cobra.Command{
 	Use:   "whoami",
 	Short: "Show the active API key and access token",
-	Args:  usageArgs(cobra.NoArgs),
+	Long: `Show the agent API key that chat and questions use, with the agent it
+belongs to, and the access token's user, scopes and restrictions. Exits 1 when
+neither is configured.`,
+	Example: `  docsgpt-cli whoami
+  docsgpt-cli whoami --key support
+  docsgpt-cli whoami --json | jq -r '.token.scopes[]'`,
+	Args: usageArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
@@ -118,11 +125,31 @@ var whoamiCmd = &cobra.Command{
 
 func init() {
 	loginCmd.Flags().StringVar(&loginName, "name", "", "Name for a piped agent key (default: the agent's name)")
-	// --token shadows the global flag of the same name, which takes a value.
-	logoutCmd.Flags().BoolVar(&logoutToken, "token", false, "Remove the stored personal access token")
+	logoutCmd.Flags().Var(&logoutToken, "token", "Remove the stored personal access token")
+	logoutCmd.Flags().Lookup("token").NoOptDefVal = "true"
 	logoutCmd.Flags().BoolVar(&logoutAll, "all", false, "Remove every stored key and the token")
 	logoutCmd.Flags().BoolVarP(&logoutYes, "yes", "y", false, "Do not ask for confirmation")
 	whoamiCmd.Flags().BoolVar(&whoamiJSON, "json", false, "Print the access token's /api/user/me document as JSON")
+}
+
+// tokenSwitch is logout's --token. It shadows the global --token <pat>, so
+// it also takes a token as its value (--token=dgpt_pat_…), to be removed if
+// it is the stored one.
+type tokenSwitch struct {
+	on    bool
+	value string
+}
+
+func (t *tokenSwitch) String() string   { return strconv.FormatBool(t.on) }
+func (t *tokenSwitch) Type() string     { return "bool" }
+func (t *tokenSwitch) IsBoolFlag() bool { return true }
+func (t *tokenSwitch) Set(s string) (err error) {
+	if strings.HasPrefix(s, config.TokenPrefix) {
+		t.on, t.value = true, s
+		return nil
+	}
+	t.on, err = strconv.ParseBool(s)
+	return err
 }
 
 // readPipedSecret reads the first line of stdin.
@@ -455,23 +482,36 @@ func runLogout(args []string, out io.Writer) error {
 	if err != nil {
 		return usageErrf("load config: %w", err)
 	}
+	// A token, given alone or after --token (which then takes no value),
+	// names the stored token: key names never look like one.
+	byToken := logoutToken
+	if len(args) == 1 && strings.HasPrefix(args[0], config.TokenPrefix) {
+		byToken, args = tokenSwitch{on: true, value: args[0]}, nil
+	}
+	if byToken.value != "" && byToken.value != cfg.Token {
+		stored := "none is stored"
+		if cfg.Token != "" {
+			stored = "the stored one is " + config.RedactToken(cfg.Token)
+		}
+		return usageErrf("%s is not the stored access token (%s)", config.RedactToken(byToken.value), stored)
+	}
 	var keys []string
 	token := false
 	switch {
 	case logoutAll:
-		if len(args) > 0 || logoutToken {
+		if len(args) > 0 || byToken.on {
 			return usageErrf("--all removes everything; drop the other arguments")
 		}
 		keys, token = sortedNames(cfg.Keys), cfg.Token != ""
-	case len(args) == 1 || logoutToken:
+	case len(args) == 1 || byToken.on:
 		if len(args) == 1 {
 			if _, ok := cfg.Keys[args[0]]; !ok {
 				return usageErrf("no stored key named %q (stored: %s)", args[0], textOrDash(strings.Join(sortedNames(cfg.Keys), ", ")))
 			}
 			keys = args
 		}
-		token = logoutToken && cfg.Token != ""
-		if logoutToken && cfg.Token == "" {
+		token = byToken.on && cfg.Token != ""
+		if byToken.on && cfg.Token == "" {
 			fmt.Fprintln(out, "No stored token.")
 		}
 	case ui.Interactive():
@@ -516,15 +556,8 @@ func runLogout(args []string, out io.Writer) error {
 	}
 	question := "Remove " + strings.Join(what, ", ") + "?"
 	if !logoutYes {
-		if !ui.Interactive() {
-			return usageErrf("%s refusing without confirmation: pass --yes", question)
-		}
-		ok, err := ui.Confirm(question, false)
-		if err != nil {
+		if err := confirmDestructive(question); err != nil {
 			return err
-		}
-		if !ok {
-			return &exitError{code: exitFailure, err: errors.New("aborted")}
 		}
 	}
 
@@ -565,9 +598,10 @@ func runWhoami(ctx context.Context, asJSON bool, out io.Writer) error {
 	}
 	baseURL := cfg.ResolveURL(globalURL)
 	token, source := cfg.ResolveToken(globalToken)
+	// Not being logged in is an answer, not a usage error: exit 1.
 	if asJSON {
 		if token == "" {
-			return usageErrf("no personal access token configured: run 'docsgpt-cli login', set %s, or pass --token", config.EnvToken)
+			return fmt.Errorf("no personal access token configured: run 'docsgpt-cli login', set %s, or pass --token", config.EnvToken)
 		}
 		id, err := manage.New(baseURL, token, userAgent()).Me(ctx)
 		if err != nil {
@@ -581,7 +615,7 @@ func runWhoami(ctx context.Context, asJSON bool, out io.Writer) error {
 		return usageErr(keyErr)
 	}
 	if key == "" && token == "" {
-		return usageErrf("not logged in: run 'docsgpt-cli login', or set %s / %s", config.EnvAPIKey, config.EnvToken)
+		return fmt.Errorf("not logged in: run 'docsgpt-cli login', or set %s / %s", config.EnvAPIKey, config.EnvToken)
 	}
 	row := func(k, v string) { fmt.Fprintf(out, "  %-13s %s\n", k, v) }
 	var failed error
@@ -628,7 +662,7 @@ func runWhoami(ctx context.Context, asJSON bool, out io.Writer) error {
 // printIdentity renders the /api/user/me document. The token is only ever
 // shown redacted.
 func printIdentity(out io.Writer, id *manage.Identity, token, source, baseURL string) {
-	row := func(k, v string) { fmt.Fprintf(out, "  %-13s %s\n", k, v) }
+	row := func(k, v string) { fmt.Fprintf(out, "  %-13s %s\n", k, display.Safe(v)) }
 	row("Server", baseURL)
 	row("User", textOrDash(id.UserID))
 	if id.Email != "" {

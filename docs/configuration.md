@@ -55,8 +55,13 @@ docsgpt-cli logout --token --yes
 docsgpt-cli logout --all --yes
 ```
 
+`whoami` exits 1 when nothing is configured (`--json`: no token), so a CI
+step can check its credentials with it.
+
 `logout` only forgets a credential locally; revoke it in DocsGPT to invalidate
-it. Without a terminal, `logout` needs `--yes`. The CLI never prints a full
+it. Without a terminal, `logout` needs `--yes`. `logout --token` takes no
+value; given one (`logout --token dgpt_pat_…`), it removes the stored token
+only if that is the one. The CLI never prints a full
 token or key: `dgpt_pat_AbCdEf…`, `a1b2…c3d4`.
 
 The config holds one server. Logging in with `--url` moves it, unless a stored
