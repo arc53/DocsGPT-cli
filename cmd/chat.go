@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -64,6 +63,7 @@ type chatSession struct {
 	toolDefs      []docsgpt.Tool
 	tools         *tools.Session
 	quit          bool
+	stopped       error // TERM or HUP ended a request: the chat exits with it
 }
 
 // chatCommand is a slash command of the chat.
@@ -135,7 +135,7 @@ func runChat(first string) error {
 	for _, c := range chatCommands {
 		editor.Commands = append(editor.Commands, ui.Command{Name: c.name, Description: c.desc})
 	}
-	for !s.quit {
+	for !s.quit && s.stopped == nil {
 		editor.Footer, editor.Status = s.footer()
 		text, shown, err := editor.Run()
 		if errors.Is(err, io.EOF) {
@@ -149,7 +149,7 @@ func runChat(first string) error {
 	if s.sess.Saved() {
 		fmt.Println(display.Dim("Continue this chat with: docsgpt-cli -c"))
 	}
-	return nil
+	return s.stopped
 }
 
 // footer returns the text under the input: where, as whom and what is on.
@@ -205,13 +205,17 @@ func (s *chatSession) shell(line string) {
 	if command == "" {
 		return
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signalContext()
 	defer stop()
 	// The tool block opens with a blank line, which the input already left.
 	fmt.Fprint(os.Stderr, "\x1b[1A")
 	restore := ui.HoldInput()
+	defer restore()
 	out := tools.RunShell(ctx, command)
 	restore()
+	if s.stopped = terminated(ctx); s.stopped != nil {
+		return
+	}
 	if keep {
 		s.shellOutput = append(s.shellOutput, fmt.Sprintf("I ran `%s`:\n```\n%s\n```", command, strings.TrimRight(out, "\n")))
 	}
@@ -236,7 +240,7 @@ func (s *chatSession) send(text, shown string) {
 
 	// The editor is not running, so the terminal is in cooked mode and
 	// Ctrl+C is a real SIGINT: it cancels the request, not the chat.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signalContext()
 	defer stop()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -259,6 +263,9 @@ func (s *chatSession) send(text, shown string) {
 	renderer.Flush()
 	restore()
 	if err != nil {
+		if s.stopped = terminated(ctx); s.stopped != nil {
+			return
+		}
 		if ctx.Err() != nil {
 			gap := "" // after a partial answer
 			if renderer.Content() != "" {

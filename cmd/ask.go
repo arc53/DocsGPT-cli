@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"strings"
 	"time"
 
@@ -94,7 +93,7 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 			fmt.Println(display.RenderHeader("", keyName, baseURL, cwd))
 		}
 
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		ctx, stop := signalContext()
 		defer stop()
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -129,6 +128,9 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 		renderer.Flush()
 		if err != nil {
 			if ctx.Err() != nil {
+				if err := terminated(ctx); err != nil {
+					return err
+				}
 				return &exitError{code: 130, err: errors.New("interrupted")}
 			}
 			return err
