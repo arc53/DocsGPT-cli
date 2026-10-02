@@ -14,6 +14,29 @@ import (
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 )
 
+// TestExport: ~/ is the home directory, and an existing file is kept unless
+// the user says to overwrite it (no one can here).
+func TestExport(t *testing.T) {
+	home := isolateConfig(t)
+	t.Chdir(t.TempDir())
+	s := &chatSession{sess: session.New("/w", "https://example.com", "k")}
+	q, a := docsgpt.Message{Role: "user", Content: "q"}, docsgpt.Message{Role: "assistant", Content: "the answer"}
+	s.sess.Record("https://example.com", "k", "c", session.Entry{Message: &q}, session.Entry{Message: &a})
+
+	s.export("~/notes.md")
+	if b, err := os.ReadFile(filepath.Join(home, "notes.md")); err != nil || !strings.Contains(string(b), "the answer") {
+		t.Fatalf("~/notes.md: %q, %v", b, err)
+	}
+	if _, err := os.Stat("~"); err == nil {
+		t.Fatal("exported into a directory named ~")
+	}
+	os.WriteFile("mine.md", []byte("keep"), 0o644)
+	s.export("mine.md")
+	if b, _ := os.ReadFile("mine.md"); string(b) != "keep" {
+		t.Fatalf("overwrote an existing file: %q", b)
+	}
+}
+
 // TestHandleDecidesOnWhatWasShown: a collapsed paste starting with ! or /
 // is a message, never a shell or slash command.
 func TestHandleDecidesOnWhatWasShown(t *testing.T) {

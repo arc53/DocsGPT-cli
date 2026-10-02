@@ -445,6 +445,23 @@ func (s *chatSession) export(file string) {
 	if file == "" {
 		file = "docsgpt-" + time.Now().Format("2006-01-02-150405") + ".md"
 	}
+	shown := file
+	if strings.HasPrefix(file, "~/") || strings.HasPrefix(file, "~"+string(filepath.Separator)) {
+		if home, err := os.UserHomeDir(); err == nil {
+			file = filepath.Join(home, file[2:])
+		}
+	}
+	if fi, err := os.Stat(file); err == nil {
+		if !fi.Mode().IsRegular() {
+			printError(shown + " is not a file.")
+			fmt.Println()
+			return
+		}
+		if ok, _ := ui.Confirm("Overwrite "+shown+"?", false); !ok {
+			fmt.Println(display.Dim("Not exported.") + "\n")
+			return
+		}
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# DocsGPT chat · %s\n", time.Now().Format("2006-01-02 15:04"))
 	for _, t := range turns {
@@ -470,7 +487,7 @@ func (s *chatSession) export(file string) {
 		fmt.Println()
 		return
 	}
-	fmt.Println(display.Success("✓") + " " + display.Dim("Exported to "+file) + "\n")
+	fmt.Println(display.Success("✓") + " " + display.Dim("Exported to "+shown) + "\n")
 }
 
 // switchKey picks another stored key (or adds one) and starts a new
