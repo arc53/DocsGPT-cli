@@ -40,7 +40,7 @@ cmd/
   chat.go            → Interactive chat (hidden alias; optional first message): editor loop, the slash command table, !cmd, sessions (-c/-r//resume)
   config.go          → config get / set / show / path + the settings menu; one `settings` table drives all of them
   install.go         → Hidden `install` (run by the install scripts), wiring over internal/install
-  update.go          → Self-update to latest GitHub release (--check, --yes, --rollback, hidden --worker)
+  update.go          → Self-update to latest GitHub release (--check, --yes/-y: needed off a terminal, else ui.Confirm; --rollback, hidden --worker)
   host.go            → host daemon commands (pair [code]: ui.Input validated by the redeem call, then a ui.Select of start / install / nothing on a TTY, first stdin line otherwise; status, revoke, reset, install-/uninstall-service); wiring over internal/host
   bench.go           → Benchmark suites vs agents (bench / bench record / bench init; --model, --matrix, --run-tag, --agent-id)
   manage.go          → Exit codes (0/1/2, exitError/usageErr), PAT client construction, confirmations
