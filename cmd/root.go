@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/install"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
 	"github.com/arc53/DocsGPT-cli/internal/update"
 
 	"github.com/mattn/go-isatty"
@@ -197,7 +199,10 @@ func Execute() {
 	}
 
 	if err != nil {
-		display.ErrorMsg(err.Error())
+		// A prompt dismissed with Esc or Ctrl+C needs no message.
+		if !errors.Is(err, ui.ErrCancelled) {
+			display.ErrorMsg(err.Error())
+		}
 		os.Exit(exitCodeFor(err))
 	}
 }

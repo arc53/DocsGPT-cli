@@ -513,6 +513,7 @@ func runLogout(args []string, out io.Writer) error {
 	for _, k := range keys {
 		delete(cfg.Keys, k)
 	}
+	oldDefault := cfg.DefaultKey
 	if _, ok := cfg.Keys[cfg.DefaultKey]; !ok {
 		cfg.DefaultKey = ""
 		if names := sortedNames(cfg.Keys); len(names) > 0 {
@@ -525,9 +526,10 @@ func runLogout(args []string, out io.Writer) error {
 	if err := cfg.Save(); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, display.Success("✓ Removed "+strings.Join(what, ", ")+".")+" Revoke it in DocsGPT to invalidate it.")
-	if len(keys) > 0 && cfg.DefaultKey != "" {
-		fmt.Fprintln(out, "Default key: "+cfg.DefaultKey)
+	fmt.Fprintln(out, display.Success("✓ Removed "+strings.Join(what, ", ")+".")+
+		display.Muted(" Only forgotten here; revoke in DocsGPT to invalidate."))
+	if cfg.DefaultKey != oldDefault && cfg.DefaultKey != "" {
+		fmt.Fprintln(out, "The default key is now "+cfg.DefaultKey+".")
 	}
 	if token && os.Getenv(config.EnvToken) != "" {
 		warnLine(out, config.EnvToken+" is still set in this environment and will keep being used")
