@@ -49,10 +49,6 @@ type Client struct {
 
 	Timeout       time.Duration // per JSON request; 0 = DefaultTimeout
 	UploadTimeout time.Duration // per upload; 0 = DefaultUploadTimeout
-
-	// HTTP is the underlying client. It deliberately has no Timeout of its
-	// own: every request is bounded by its context instead.
-	HTTP *http.Client
 }
 
 // New returns a client for baseURL authenticating with token.
@@ -64,7 +60,6 @@ func New(baseURL, token, userAgent string) *Client {
 		BaseURL:   strings.TrimRight(baseURL, "/"),
 		Token:     token,
 		UserAgent: userAgent,
-		HTTP:      &http.Client{},
 	}
 }
 
@@ -177,11 +172,8 @@ func (c *Client) setHeaders(req *http.Request) {
 // *APIError. Transport failures are returned with the token-free URL path.
 func (c *Client) send(req *http.Request, path string) ([]byte, error) {
 	c.setHeaders(req)
-	httpClient := c.HTTP
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-	resp, err := httpClient.Do(req)
+	// No client-level timeout: every request is bounded by its context.
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		var ue *url.Error
 		if errors.As(err, &ue) && ue.Err != nil {
