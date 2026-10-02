@@ -55,6 +55,10 @@ func exitCodeFor(err error) int {
 	if errors.As(err, &ee) && ee.code != 0 {
 		return ee.code
 	}
+	var ue *manage.UsageError
+	if errors.As(err, &ue) {
+		return exitUsage
+	}
 	return exitFailure
 }
 

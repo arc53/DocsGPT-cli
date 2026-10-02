@@ -226,6 +226,10 @@ func runBenchSuite(args []string, record bool) {
 			if !benchJSON {
 				fmt.Fprintf(os.Stderr, "  %s %s\n", liveTag(e.Msg), e.Case)
 			}
+		case runner.EventModel:
+			if !benchJSON {
+				fmt.Fprintf(os.Stderr, "%s %s (%d/%d)\n", display.Accent("model:"), e.Msg, e.Run, len(matrixModels))
+			}
 		}
 	}
 
@@ -361,22 +365,9 @@ func runBenchSuite(args []string, record bool) {
 // or diffed against a baseline. Exit code: 1 when any model has failures or
 // errors, 0 otherwise.
 func runBenchMatrix(ctx context.Context, opts runner.Options, models []string) {
-	var runs []*runner.SuiteResult
-	for i, model := range models {
-		if ctx.Err() != nil {
-			break
-		}
-		if !benchJSON {
-			fmt.Fprintf(os.Stderr, "%s %s (%d/%d)\n", display.Accent("model:"), model, i+1, len(models))
-		}
-		mopts := opts
-		mopts.ModelOverride = model
-		mopts.UpdateGolden = false
-		r, err := runner.Run(ctx, mopts)
-		if err != nil {
-			benchFatal(err.Error())
-		}
-		runs = append(runs, r)
+	runs, err := runner.RunMatrix(ctx, opts, models)
+	if err != nil {
+		benchFatal(err.Error())
 	}
 	matrix := report.NewMatrix(models[:len(runs)], runs)
 

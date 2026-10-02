@@ -588,7 +588,7 @@ func TestSourcesUploadJSONReportsFailure(t *testing.T) {
 	if exitCodeFor(err) != 1 {
 		t.Fatalf("err = %v", err)
 	}
-	var report uploadReport
+	var report manage.UploadReport
 	if jsonErr := json.Unmarshal(stdout.Bytes(), &report); jsonErr != nil {
 		t.Fatalf("stdout is not JSON: %v\n%s", jsonErr, stdout.String())
 	}
@@ -1108,7 +1108,7 @@ func TestAgentsTriggerJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	var report triggerReport
+	var report manage.TriggerReport
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
 	}
@@ -1127,7 +1127,7 @@ func TestAgentsTriggerJSON(t *testing.T) {
 	if exitCodeFor(err) != 1 {
 		t.Fatalf("err = %v", err)
 	}
-	report = triggerReport{}
+	report = manage.TriggerReport{}
 	if jsonErr := json.Unmarshal(stdout.Bytes(), &report); jsonErr != nil || report.Status != "FAILURE" || !strings.Contains(report.Error, "boom") {
 		t.Errorf("report = %+v (%v)", report, jsonErr)
 	}

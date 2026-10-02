@@ -27,10 +27,11 @@ cmd/
   keys.go            → API key management (add/delete/set default)
   install.go         → Cross-platform install to system PATH
   update.go          → Self-update to latest GitHub release (--check, --yes, --rollback, hidden --worker)
+  host.go            → host daemon commands (pair + post-pair menu, status, revoke, reset, install-/uninstall-service); wiring over internal/host
   bench.go           → Benchmark suites vs agents (bench / bench record / bench init; --model, --matrix, --run-tag, --agent-id)
   manage.go          → Shared plumbing of the account-level (PAT) commands: client construction, exit codes (0/1/2), banner/usage suppression, confirmations
   login.go           → login / logout / whoami (personal access token in config.json)
-  agents.go          → agents list / export / plan / apply / delete (agents as code), agents trigger (incoming webhook)
+  agents.go          → agents list / export / plan / apply / delete (agents as code), agents trigger (incoming webhook); flags + output only, the flows live in internal/manage
   sources.go         → sources list / upload / delete, prompts list, tools list
   utils.go           → printError, extractCommand, copyToClipboard
 internal/
@@ -42,16 +43,21 @@ internal/
     target/          → Four wire protocols: v1 (/v1/chat/completions, JSON or SSE, inline file parts), stream (/stream SSE, TTFT + frames), answer (/api/answer), webhook (+ /api/task_status polling); attachment upload; ServerError for negative cases
     judge/           → LLM-as-judge grading via a second agent (model/temperature passthrough)
     pricing/         → Cost table: /api/models pricing (tolerant field reader) + bench.yaml pricing overrides
-    runner/          → Worker pool, repeat/min_pass, fail-fast, golden record, judge wiring, multi-turn loop, model override, cost stamping
+    runner/          → Worker pool, repeat/min_pass, fail-fast, golden record, judge wiring, multi-turn loop, model override, cost stamping, RunMatrix (--matrix)
     report/          → Pretty/JSON(schema 2)/JUnit output, A/B compare, --matrix table + JSON, baselines in ~/.docsgpt/bench/<suite>/
   manage/
     client.go        → PAT HTTP client (Bearer dgpt_pat_…, docsgpt-cli/<ver> User-Agent, context timeouts), typed APIError (message, error code, required_scope)
     agents.go        → /api/user/me, get_agents, export_agent, import_agent/plan + import_agent (Plan, Resolution, ApplyResult), delete_agent
-    sources.go       → /api/sources, /api/upload (multipart, Idempotency-Key, deterministic default key), /api/task_status polling with backoff, delete_old
+    sources.go       → /api/sources, /api/upload (multipart, Idempotency-Key, deterministic default key), /api/task_status polling with backoff, delete_old; Ingest = upload → --wait → --replace
     catalog.go       → get_prompts, get_tools
     webhooks.go      → agent incoming webhooks: URL parsing/redaction (Webhook), /api/agent_webhook lookup, webhook POST (no Authorization, Idempotency-Key), agent run result decoding
+    trigger.go       → agents trigger flow: webhook resolution, anonymous --wait with same-origin PAT fallback, ReadPayload, UsageError (exit 2)
     documents.go     → -f expansion: files / directories / stdin, verbatim multi-document YAML splitting, kind: Agent validation
     resolve.go       → --resolve parsing, mapping onto the server `resolution` object, missing/unavailable gating
+  host/
+    daemon.go        → RunDaemon: poll/SSE loop, idle heartbeat, idle-only auto-update + restart (revoke → ErrRevoked, exit 0)
+    install.go       → InstallService / UninstallService over systemd (service.go), launchd (launchd.go), Task Scheduler (wintask.go)
+    transport.go     → Signed polling + SSE session transport; invocation.go runs and streams tool calls; pairing.go, device.go, revoke.go
   context/
     enricher.go      → Context building: cwd, dir contents, shell history
   display/

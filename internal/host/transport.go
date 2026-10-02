@@ -60,7 +60,7 @@ func (b *Baton) State() State {
 	return b.state
 }
 
-// Transition atomically swaps state if ``from`` matches.
+// Transition atomically swaps state if `from` matches.
 // Returns true on success, false if a different state is currently active.
 func (b *Baton) Transition(from, to State) bool {
 	b.mu.Lock()
@@ -121,11 +121,11 @@ type Invocation struct {
 // Transport carries the cross-cutting state needed by both the polling and
 // SSE loops: config, identity, baton, an HTTP client, and event handlers.
 type Transport struct {
-	Cfg     HostConfig
-	Key     *HostKey
-	Version string
-	Baton   *Baton
-	Client  *http.Client
+	Cfg          HostConfig
+	Key          *HostKey
+	Version      string
+	Baton        *Baton
+	Client       *http.Client
 	OnInvocation func(inv Invocation)
 }
 
@@ -145,7 +145,7 @@ func (t *Transport) authHeader() string {
 }
 
 // signHeaders signs the request over the canonical payload, which includes a
-// hash of ``body`` (the exact bytes sent as the request body; nil for GET).
+// hash of `body` (the exact bytes sent as the request body; nil for GET).
 // The body hash is always included even when the backend has signature
 // verification disabled — it ignores the signature then, so this is harmless
 // and keeps the default off-path working.
@@ -161,8 +161,8 @@ func (t *Transport) signHeaders(req *http.Request, body []byte) {
 	req.Header.Set("X-Device-Timestamp", ts)
 }
 
-// PollOnce sends a single ``GET /api/devices/poll`` request and returns the
-// (ticket, queued?) tuple. ``queued == false`` is the 202-no-work response.
+// PollOnce sends a single `GET /api/devices/poll` request and returns the
+// (ticket, queued?) tuple. `queued == false` is the 202-no-work response.
 func (t *Transport) PollOnce(ctx context.Context) (*PollResponse, bool, error) {
 	endpoint := strings.TrimRight(t.Cfg.BaseURL, "/") + "/api/devices/poll"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -222,12 +222,12 @@ func (b *pollBackoff) recordOK()    { b.errorCount = 0 }
 // from a transient blip would be alarmist; three back-to-back is decisive.
 const authRejectThreshold = 3
 
-// RunPolling runs the polling loop until ``ctx`` is cancelled or a session
+// RunPolling runs the polling loop until `ctx` is cancelled or a session
 // ticket arrives. On ticket, swaps the baton to Streaming and returns the
 // ticket so the caller can upgrade. Returns ErrRevoked when the server
 // rejects the session token with 401 — immediately if no prior poll has
 // succeeded (the token was bad from the start), or after
-// ``authRejectThreshold`` consecutive 401s after at least one success
+// `authRejectThreshold` consecutive 401s after at least one success
 // (the server has revoked the device since the daemon started).
 func (t *Transport) RunPolling(ctx context.Context, fastUntil time.Time) (*PollResponse, error) {
 	bo := newPollBackoff()
@@ -289,10 +289,10 @@ func (t *Transport) RunPolling(ctx context.Context, fastUntil time.Time) (*PollR
 	}
 }
 
-// RunSSE opens the SSE stream for ``sessionID`` and dispatches events to
-// ``t.OnInvocation`` until the server closes or ``ctx`` cancels. Returns
+// RunSSE opens the SSE stream for `sessionID` and dispatches events to
+// `t.OnInvocation` until the server closes or `ctx` cancels. Returns
 // ErrRevoked on a 401 (device revoked while a session was being
-// negotiated) or when an ``event: revoke`` arrives on the open stream.
+// negotiated) or when an `event: revoke` arrives on the open stream.
 func (t *Transport) RunSSE(ctx context.Context, sessionID string, lastEventID string) error {
 	endpoint := strings.TrimRight(t.Cfg.BaseURL, "/") + "/api/devices/sessions/" + sessionID + "/events"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

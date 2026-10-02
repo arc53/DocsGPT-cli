@@ -2,11 +2,9 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -243,26 +241,10 @@ type uploadOptions struct {
 	Key     string
 	KeySet  bool // --idempotency-key was passed explicitly ("" disables the header)
 	JSON    bool
-	// Replace deletes the caller's older sources with the same name once the
-	// new one is ingested, so agents that reference the source by name pick
-	// up the new content on their next apply.
 	Replace bool
 
 	// Poll tunes the --wait backoff; zero values use the client defaults.
 	Poll manage.WaitOptions
-}
-
-// uploadReport is the --json document of `sources upload`.
-type uploadReport struct {
-	Name           string   `json:"name"`
-	TaskID         string   `json:"task_id"`
-	SourceID       string   `json:"source_id,omitempty"`
-	IdempotencyKey string   `json:"idempotency_key,omitempty"`
-	Deduplicated   bool     `json:"deduplicated,omitempty"`
-	Waited         bool     `json:"waited"`
-	Status         string   `json:"status,omitempty"`
-	Replaced       []string `json:"replaced,omitempty"`
-	Error          string   `json:"error,omitempty"`
 }
 
 // runSourcesUpload uploads the files and, with Wait, polls the ingest task.
@@ -299,121 +281,25 @@ func runSourcesUpload(ctx context.Context, c *manage.Client, opts uploadOptions,
 		return usageErrf("--idempotency-key exceeds %d characters", manage.IdempotencyKeyMaxLen)
 	}
 
-	fmt.Fprintf(stderr, "uploading %d file(s) as %q...\n", len(opts.Files), opts.Name)
-	res, err := c.UploadSource(ctx, opts.Name, opts.Files, key)
-	if err != nil {
+	report, err := c.Ingest(ctx, manage.IngestOptions{
+		Name: opts.Name, Files: opts.Files, Key: key, Wait: opts.Wait, Timeout: opts.Timeout,
+		Replace: opts.Replace, Poll: opts.Poll, Log: stderr,
+	})
+	if report == nil {
 		return err
 	}
-	report := uploadReport{Name: opts.Name, TaskID: res.TaskID, SourceID: res.SourceID, IdempotencyKey: key}
-
-	finish := func(runErr error) error {
-		if runErr != nil {
-			report.Error = runErr.Error()
+	if opts.JSON {
+		if jsonErr := writeJSON(stdout, report); jsonErr != nil && err == nil {
+			return jsonErr
 		}
-		if opts.JSON {
-			if err := writeJSON(stdout, report); err != nil && runErr == nil {
-				return err
-			}
-			return runErr
+		return err
+	}
+	if err == nil {
+		fmt.Fprintf(stdout, "%s source %s (task %s", display.Success("ok"), textOrDash(report.SourceID), report.TaskID)
+		if report.Status != "" {
+			fmt.Fprintf(stdout, ", %s", report.Status)
 		}
-		if runErr == nil {
-			fmt.Fprintf(stdout, "%s source %s (task %s", display.Success("ok"), textOrDash(report.SourceID), report.TaskID)
-			if report.Status != "" {
-				fmt.Fprintf(stdout, ", %s", report.Status)
-			}
-			fmt.Fprintln(stdout, ")")
-		}
-		return runErr
+		fmt.Fprintln(stdout, ")")
 	}
-
-	if res.TaskID == manage.DeduplicatedTaskID {
-		// The key matched an earlier request whose task record is gone: that
-		// ingest already ran, there is nothing to poll.
-		report.Deduplicated = true
-		fmt.Fprintln(stderr, "the server deduplicated this upload (same Idempotency-Key as an earlier request); nothing new was ingested")
-		return finish(replaceOlderSources(ctx, c, opts, &report, stderr))
-	}
-	if !opts.Wait {
-		fmt.Fprintf(stderr, "ingestion queued; poll it with --wait or check the web app (task %s)\n", res.TaskID)
-		return finish(nil)
-	}
-
-	waitCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
-	defer cancel()
-	poll := opts.Poll
-	started := time.Now()
-	lastLine := ""
-	poll.OnUpdate = func(status string, task *manage.TaskStatus) {
-		line := status
-		if task != nil {
-			if pct, ok := task.Progress(); ok && status != "SUCCESS" {
-				line = fmt.Sprintf("%s %d%%", status, pct)
-			}
-		}
-		if line == lastLine {
-			return
-		}
-		lastLine = line
-		fmt.Fprintf(stderr, "  [%4.0fs] %s\n", time.Since(started).Seconds(), line)
-	}
-	report.Waited = true
-	st, err := c.WaitTask(waitCtx, res.TaskID, poll)
-	if st != nil {
-		report.Status = st.Status
-	}
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			err = fmt.Errorf("timed out after %s waiting for ingestion (task %s is still running server-side; re-run with the same files to resume waiting): %w", opts.Timeout, res.TaskID, err)
-		}
-		return finish(err)
-	}
-	return finish(replaceOlderSources(ctx, c, opts, &report, stderr))
-}
-
-// replaceOlderSources implements --replace. The server resolves an agent's
-// source by name and picks the oldest match, so without this every upload of
-// changed content leaves agents pinned to the first upload. Only the caller's
-// own sources are touched, never the one just uploaded, and nothing is deleted
-// unless the server said which source that is.
-func replaceOlderSources(ctx context.Context, c *manage.Client, opts uploadOptions, report *uploadReport, stderr io.Writer) error {
-	if !opts.Replace {
-		return nil
-	}
-	if report.SourceID == "" {
-		fmt.Fprintln(stderr, "--replace skipped: the server did not report the new source id")
-		return nil
-	}
-	sources, _, err := c.ListSources(ctx)
-	if err != nil {
-		return fmt.Errorf("--replace: list sources: %w", err)
-	}
-	// The id the server reported must be a source that exists right now. After a
-	// revert to earlier content the Idempotency-Key repeats and, within the
-	// server's dedup window, the cached reply names the source of that earlier
-	// upload, which a later --replace may already have deleted. Deleting "every
-	// other" source would then remove the only live one.
-	live := false
-	for _, src := range sources {
-		if src.ID == report.SourceID {
-			live = true
-			break
-		}
-	}
-	if !live {
-		return fmt.Errorf("--replace: the server reported source %s, which no longer exists (this content was uploaded before and the request was deduplicated); nothing was deleted. Re-run with a fresh --idempotency-key to ingest it again", report.SourceID)
-	}
-	for _, src := range sources {
-		if src.ID == report.SourceID || !strings.EqualFold(src.Name, opts.Name) {
-			continue
-		}
-		if src.Ownership != "" && src.Ownership != "user" {
-			continue
-		}
-		if err := c.DeleteSource(ctx, src.ID); err != nil {
-			return fmt.Errorf("--replace: delete older source %s: %w", src.ID, err)
-		}
-		report.Replaced = append(report.Replaced, src.ID)
-		fmt.Fprintf(stderr, "replaced older source %s\n", src.ID)
-	}
-	return nil
+	return err
 }

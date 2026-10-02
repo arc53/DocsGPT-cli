@@ -177,4 +177,3 @@ func postControlFull(ctx context.Context, t *Transport, sessionID, invocationID 
 	body, _ := json.Marshal(payload)
 	return t.PostOutput(ctx, sessionID, invocationID, append(body, '\n'))
 }
-

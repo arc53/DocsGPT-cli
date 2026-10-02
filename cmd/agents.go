@@ -1,10 +1,8 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -534,30 +532,14 @@ type triggerOptions struct {
 	Token     string // --token > DOCSGPT_TOKEN > config; "" when none
 	UserAgent string
 
-	// Poll tunes the --wait backoff; zero values use triggerPoll.
+	// Poll tunes the --wait backoff; zero values use manage.TriggerPoll.
 	Poll manage.WaitOptions
-}
-
-// triggerPoll is the --wait cadence: agent runs finish in seconds to minutes,
-// so the backoff tops out sooner than an ingest's.
-var triggerPoll = manage.WaitOptions{Initial: time.Second, Max: 5 * time.Second}
-
-// triggerReport is the --json document of `agents trigger`.
-type triggerReport struct {
-	TaskID         string          `json:"task_id"`
-	IdempotencyKey string          `json:"idempotency_key,omitempty"`
-	Deduplicated   bool            `json:"deduplicated,omitempty"`
-	Waited         bool            `json:"waited"`
-	Status         string          `json:"status,omitempty"`
-	Answer         string          `json:"answer,omitempty"`
-	Result         json.RawMessage `json:"result,omitempty"` // the task's result, verbatim
-	Error          string          `json:"error,omitempty"`
 }
 
 // runAgentsTrigger posts the payload to the agent's webhook and, with Wait,
 // polls the run. Progress goes to stderr; stdout carries the task id, the
 // answer, or the JSON report. The webhook URL never reaches either stream.
-func runAgentsTrigger(ctx context.Context, opts triggerOptions, stdin io.Reader, stdout, stderr io.Writer) (err error) {
+func runAgentsTrigger(ctx context.Context, opts triggerOptions, stdin io.Reader, stdout, stderr io.Writer) error {
 	switch {
 	case opts.AgentID != "" && opts.WebhookURL != "":
 		return usageErrf("pass either an agent id or --webhook-url, not both")
@@ -570,184 +552,42 @@ func runAgentsTrigger(ctx context.Context, opts triggerOptions, stdin io.Reader,
 	case len(opts.Key) > manage.IdempotencyKeyMaxLen:
 		return usageErrf("--idempotency-key exceeds %d characters", manage.IdempotencyKeyMaxLen)
 	}
-	payload, err := readTriggerPayload(opts.File, stdin)
+	payload, err := manage.ReadPayload(opts.File, stdin)
 	if err != nil {
 		return usageErr(err)
 	}
 
-	var authed *manage.Client
-	if opts.Token != "" {
-		authed = manage.New(opts.BaseURL, opts.Token, opts.UserAgent)
-	}
-	var hook *manage.Webhook
-	if opts.WebhookURL != "" {
-		if hook, err = manage.ParseWebhookURL(opts.WebhookURL); err != nil {
-			return usageErrf("--webhook-url / %s: %w", config.EnvWebhookURL, err)
-		}
-	} else {
-		if authed == nil {
-			return usageErrf("no personal access token configured: an agent id is looked up with a token "+
-				"(scope agents:keys): run 'docsgpt-cli login', set %s or pass --token — or pass --webhook-url", config.EnvToken)
-		}
-		if hook, err = authed.AgentWebhook(ctx, opts.AgentID); err != nil {
-			return fmt.Errorf("look up the webhook of agent %s: %w", opts.AgentID, err)
-		}
-	}
-	// Belt and braces: whatever a server or transport error echoes, the
-	// token in the webhook URL does not leave this function.
-	defer func() {
-		if err != nil {
-			err = &redactedError{err: err, hook: hook}
-		}
-	}()
-
-	// The webhook and task_status are called without credentials.
-	anon := manage.New(hook.BaseURL(), "", opts.UserAgent)
-	fmt.Fprintf(stderr, "triggering %s (%d-byte payload)...\n", hook, len(payload))
-	res, err := anon.TriggerWebhook(ctx, hook, payload, opts.Key)
-	if err != nil {
+	report, err := manage.Trigger(ctx, manage.TriggerOptions{
+		AgentID: opts.AgentID, WebhookURL: opts.WebhookURL, Payload: payload, Key: opts.Key,
+		Wait: opts.Wait, Timeout: opts.Timeout, Poll: opts.Poll,
+		BaseURL: opts.BaseURL, Token: opts.Token, UserAgent: opts.UserAgent, Log: stderr,
+	})
+	if report == nil {
 		return err
 	}
-	report := triggerReport{TaskID: res.TaskID, IdempotencyKey: opts.Key}
-
-	finish := func(runErr error) error {
-		if runErr != nil {
-			report.Error = hook.Redact(runErr.Error())
+	if err == nil && report.Waited {
+		summary := fmt.Sprintf("done in %.0fs", report.Elapsed.Seconds())
+		if report.ToolCalls > 0 {
+			summary += fmt.Sprintf(", %d tool call(s)", report.ToolCalls)
 		}
-		if opts.JSON {
-			if err := writeJSON(stdout, report); err != nil && runErr == nil {
-				return err
+		fmt.Fprintln(stderr, display.Success("ok"), summary)
+	}
+	if opts.JSON {
+		if jsonErr := writeJSON(stdout, report); jsonErr != nil && err == nil {
+			return jsonErr
+		}
+		return err
+	}
+	if err == nil {
+		switch {
+		case report.Deduplicated:
+		case report.Waited:
+			if answer := strings.TrimRight(report.Answer, "\n"); answer != "" {
+				fmt.Fprintln(stdout, answer)
 			}
-			return runErr
+		default:
+			fmt.Fprintln(stdout, report.TaskID)
 		}
-		if runErr == nil {
-			switch {
-			case report.Deduplicated:
-			case report.Waited:
-				answer := strings.TrimRight(report.Answer, "\n")
-				if answer != "" {
-					fmt.Fprintln(stdout, answer)
-				}
-			default:
-				fmt.Fprintln(stdout, report.TaskID)
-			}
-		}
-		return runErr
 	}
-
-	if res.TaskID == manage.DeduplicatedTaskID {
-		// The key matched an earlier request whose task record is gone: that
-		// run already happened and there is nothing to poll.
-		report.TaskID = ""
-		report.Deduplicated = true
-		fmt.Fprintln(stderr, "the server deduplicated this request (same Idempotency-Key as an earlier one); the agent did not run again")
-		return finish(nil)
-	}
-	if !opts.Wait {
-		fmt.Fprintf(stderr, "agent run queued as task %s; pass --wait to wait for the answer\n", res.TaskID)
-		return finish(nil)
-	}
-
-	waitCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
-	defer cancel()
-	poll := opts.Poll
-	if poll.Initial == 0 && poll.Max == 0 {
-		poll.Initial, poll.Max = triggerPoll.Initial, triggerPoll.Max
-	}
-	started := time.Now()
-	lastLine := ""
-	poll.OnUpdate = func(status string, _ *manage.TaskStatus) {
-		if status == lastLine {
-			return
-		}
-		lastLine = status
-		fmt.Fprintf(stderr, "  [%4.0fs] %s\n", time.Since(started).Seconds(), status)
-	}
-	report.Waited = true
-	st, err := waitForRun(waitCtx, anon, authed, hook, res.TaskID, poll, stderr)
-	if st != nil {
-		report.Status = st.Status
-		report.Result = st.Result
-	}
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			err = fmt.Errorf("timed out after %s waiting for the agent run (task %s is still running server-side): %w", opts.Timeout, res.TaskID, err)
-		}
-		return finish(err)
-	}
-	run, err := manage.AgentRunResult(res.TaskID, st)
-	if err != nil {
-		return finish(err)
-	}
-	report.Answer = run.Answer
-	summary := fmt.Sprintf("done in %.0fs", time.Since(started).Seconds())
-	if run.ToolCalls > 0 {
-		summary += fmt.Sprintf(", %d tool call(s)", run.ToolCalls)
-	}
-	fmt.Fprintln(stderr, display.Success("ok"), summary)
-	return finish(nil)
+	return err
 }
-
-// waitForRun polls the run's task without credentials, as DocsGPT serves
-// /api/task_status. If the server requires them anyway, it polls again with
-// the personal access token, which is only ever sent to the configured base
-// URL: never to a webhook host the token was not configured for.
-func waitForRun(ctx context.Context, anon, authed *manage.Client, hook *manage.Webhook, taskID string, poll manage.WaitOptions, stderr io.Writer) (*manage.TaskStatus, error) {
-	st, err := anon.WaitTask(ctx, taskID, poll)
-	var ae *manage.APIError
-	if err == nil || !errors.As(err, &ae) || (ae.Status != 401 && ae.Status != 403) {
-		return st, err
-	}
-	statusURL := hook.BaseURL() + "/api/task_status"
-	switch {
-	case authed == nil:
-		return nil, usageErrf("the agent run was queued as task %s, but %s requires authentication to report on it: "+
-			"pass --token, set %s or run 'docsgpt-cli login' (the token needs chat:run, sources:read or sources:write)",
-			taskID, statusURL, config.EnvToken)
-	case !hook.SameOrigin(authed.BaseURL):
-		return nil, usageErrf("the agent run was queued as task %s, but %s requires authentication to report on it, "+
-			"and the personal access token is only sent to %s: pass --url %s",
-			taskID, statusURL, authed.BaseURL, hook.BaseURL())
-	}
-	fmt.Fprintln(stderr, "task status requires authentication; polling with the personal access token")
-	return authed.WaitTask(ctx, taskID, poll)
-}
-
-// readTriggerPayload reads the payload from a file or stdin ("-") and checks
-// it is JSON the webhook accepts: the server refuses a missing body and null.
-func readTriggerPayload(file string, stdin io.Reader) ([]byte, error) {
-	label := file
-	var data []byte
-	var err error
-	if file == "-" {
-		label = "stdin"
-		data, err = io.ReadAll(stdin)
-	} else {
-		data, err = os.ReadFile(file)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read payload: %w", err)
-	}
-	data = bytes.TrimSpace(data)
-	if len(data) == 0 {
-		return nil, fmt.Errorf("payload from %s is empty: the webhook needs a JSON value", label)
-	}
-	var v any
-	if err := json.Unmarshal(data, &v); err != nil {
-		return nil, fmt.Errorf("payload from %s is not valid JSON: %v", label, err)
-	}
-	if v == nil {
-		return nil, fmt.Errorf("payload from %s is JSON null: the webhook needs a value (usually an object)", label)
-	}
-	return data, nil
-}
-
-// redactedError keeps the webhook token out of an error message while
-// preserving the chain the exit code is read from.
-type redactedError struct {
-	err  error
-	hook *manage.Webhook
-}
-
-func (e *redactedError) Error() string { return e.hook.Redact(e.err.Error()) }
-func (e *redactedError) Unwrap() error { return e.err }

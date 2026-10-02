@@ -136,7 +136,7 @@ func (c *Client) TriggerWebhook(ctx context.Context, w *Webhook, payload []byte,
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
 	}
-	body, _, err := anon.send(req, path)
+	body, err := anon.send(req, path)
 	if err != nil {
 		return nil, err
 	}
