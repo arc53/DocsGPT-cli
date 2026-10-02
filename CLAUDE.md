@@ -35,7 +35,7 @@ examples/            → agents/ (sample definition), bench/ (suite, one case pe
                        feature), ci/github-actions.yml
 deployment/          → install.sh / install.ps1 (attached to every release)
 cmd/
-  root.go            → Root command = the entry point (chat on a TTY, else one-shot ask), typo guard + questionArgs (extra words after a command: exit 2 with `To ask it as a question: docsgpt-cli -- "…"`), global flags (--url, --key, --token), chat flags, help groups + usage template, Execute (startup config, update gate)
+  root.go            → Root command = the entry point (chat on a TTY, else one-shot ask), typo guard + questionArgs (extra words after a command: exit 2 with `To ask it as a question: docsgpt-cli -- "…"`), global flags (--url, --key, --token), chat flags (+ --no-stdin), help groups + usage template, Execute (startup config, update gate)
   ask.go             → Single-shot Q&A with streaming + tool support (hidden alias; the root runs it)
   chat.go            → Interactive chat (hidden alias; optional first message): editor loop, the slash command table, !cmd, sessions (-c/-r//resume)
   config.go          → config get / set / show / path + the settings menu; one `settings` table drives all of them
@@ -47,7 +47,7 @@ cmd/
   login.go           → login / logout / whoami / hidden keys: agent API keys + the PAT, the key picker, first-run key prompt (chatKey)
   agents.go          → agents list / export / plan / apply / delete (agents as code), agents trigger (incoming webhook); flags + output only, the flows live in internal/manage
   sources.go         → sources list / upload / delete, agents prompts / agents tools (old `prompts list` / `tools list` hidden)
-  utils.go           → printError, codeBlocks/extractCommand, copyToClipboard
+  utils.go           → printError, codeBlocks/extractCommand, copyToClipboard, signalContext (INT/TERM/HUP cancel with a ui.Signal cause) + terminated
 internal/
   earlytheme/        → pins lipgloss's background before bubbletea's init (see cmd/docsgpt-cli)
   config/
@@ -78,7 +78,7 @@ internal/
   context/
     enricher.go      → the <context> block: cwd, capped listing, AGENTS.md/CLAUDE.md (git root → cwd, 12KB), shell history (opt-in)
   session/
-    session.go       → saved chats: ~/.docsgpt/sessions/<encoded cwd>/<time>_<id>.jsonl (0600, dirs 0700); header + message/state lines, List/Load/Turns
+    session.go       → saved chats: ~/.docsgpt/sessions/<slug>-<hash>/<time>_<id>.jsonl (slug = last ≤48 chars of the cwd, non-[A-Za-z0-9_] runs as `-`; hash = 8 hex of sha256(cwd); 0600, dirs 0700); header + message/state lines, each Record one append; List keeps the files whose header cwd is this cwd; Load/Turns
   display/
     theme.go         → semantic palette (pi's OKHSL tones: hex + 256 + 16-color fallbacks,
                        dark/light; plain under NO_COLOR); also sets ui.Colors. InitTheme
@@ -111,8 +111,10 @@ internal/
     background*.go   → auto theme: COLORFGBG, else one OSC 11 query (stdout TTY only,
                        150ms max); the answer also feeds glamour and lipgloss
     banner.go        → dino banner, interactive chat only, default "once", no animation
-  ui/                → inline bubbletea prompts: Select (list / inline row, filter, key
-                       shortcuts), Confirm, Input (mask, validate), Spinner (stderr);
+  ui/                → inline bubbletea prompts: Select (list / inline row that stops at
+                       its ends, filter, key shortcuts), Confirm, Input (mask,
+                       validate), Spinner (stderr); TERM/HUP end a prompt with
+                       ui.Signal (and ui.Stopped reports it);
                        Stderr option for prompts drawn while stdout carries an answer.
                        editor.go: the chat input (Editor); history.go: prompt history
                        file; fuzzy.go: popup/filter matching; hold_*.go: echo off while
@@ -121,11 +123,14 @@ internal/
     definitions.go   → Tool schemas: run_command, read_file (offset/limit), write_file
     approval.go      → Session: per chat session / ask run; title, approval, execution,
                        status per call. Inline Approve / Always allow / Deny / Edit;
-                       readReason (when a read asks)
+                       readReason (when a read asks; home compared with os.SameFile),
+                       secretNames
     allow.go         → alwaysKey: what "Always allow" covers, and when it is never offered
+                       (its doc comment is the source of truth for the rules)
     executor.go      → runCommand (caller's ctx + timeout; own session without a
                        controlling terminal, whole group killed; Windows: hidden console,
-                       taskkill /T), regularFile + readFile (regular files only, chunked,
+                       taskkill /T, NoDefaultCurrentDirectoryInExePath=1 so cmd.exe
+                       never runs a program from the working directory), regularFile + readFile (regular files only, chunked,
                        ctx-aware line ranges), writeFile (creates parents)
     shell.go         → RunShell: the chat's `!cmd` (no approval, no time limit)
     procgroup_*.go   → own process group / session, whole-tree kill (Unix), taskkill (Windows)
@@ -152,7 +157,7 @@ subcommands ("agnets list"); a quoted multi-word question or anything after `--`
 never checked. Group commands (`agents`, `sources`, `config`, `host`) reject unknown
 subcommands the same way (`subcommandArgs`). Only `--url/--key/--token` are global;
 `--no-stream/--no-context/--no-tools/--auto-approve/--tool-timeout` live on the root,
-ask and chat (`--timeout` is a deprecated alias on ask/chat; `--theme`/`--no-motion`
+ask and chat, `--no-stdin` on the root and ask (`--timeout` is a deprecated alias on ask/chat; `--theme`/`--no-motion`
 hidden); `-c/--continue` and `-r/--resume` on the root and chat open the chat (a TTY
 is required; arguments become its first message).
 Root `SilenceUsage` + flag error func: usage errors exit 2 everywhere, runtime errors
@@ -178,14 +183,14 @@ neither configured (`--json`: no PAT) = exit 1, not a usage error.
 `keys` is a hidden alias of the TTY picker (the old add/set/delete flags are gone).
 
 ### ask command
-1. Reads piped/redirected stdin (pipes, sockets and files; never a TTY, mintty included, or a device), at most 1 MB (cut with a note): alone it is the question and is read to EOF; with args it is appended as `<stdin>…</stdin>`, but only a file read from its start (offset 0: a `while read` loop shares the file) or a pipe whose data starts within 1s (`stdinWait`; ssh and CI leave stdin open and idle)
+1. Unless `--no-stdin`, reads stdin to EOF when it is not a character device (a TTY, /dev/null): pipes, sockets, files (`readPipedStdin`), at most 1 MB (cut with a stderr note). Alone it is the question; with args it is appended as `<stdin>…</stdin>`. After 1s without data (`stdinHint`), a TTY stderr shows `waiting for piped input… (--no-stdin to skip)`: ssh without -t, CI runners that keep stdin open and `while read` loops need `--no-stdin` (or `</dev/null`)
 2. Loads config from `~/.docsgpt/config.json`, resolves API key (Bearer auth, first-run prompt via `chatKey`) and base URL
 3. Unless `--no-context`, prepends the `<context>` block (see chat)
 4. Sends to `POST {base_url}/v1/chat/completions` with streaming
 5. Handles tool calls (run_command, read_file, write_file) with user approval loop; tools are only offered when stdin is a TTY or `--auto-approve` is set. Tool UI (titles, approval prompt, command output, status) goes to stderr
 6. stdout not a TTY: stdout carries only the answer, control sequences stripped (no header, sources, clipboard). On a TTY: header, rendered answer, dim `Sources` block, first bash/sh block copied to the clipboard (with a dim note)
 
-Errors (every command) go to stderr; a missing question or a bad flag is a usage error (exit 2, flags with a `--help` pointer); Ctrl+C exits `ask` with 130.
+Errors (every command) go to stderr; a missing question or a bad flag is a usage error (exit 2, flags with a `--help` pointer); Ctrl+C exits `ask` with 130; TERM and HUP cancel ask and chat like Ctrl+C (so the deferred terminal restores run) and exit 128 + the signal (143, 129): `signalContext` cancels with a `ui.Signal` cause, prompts return `ui.Signal` (bubbletea's own handler is off: it would submit the prompt on TERM), and `exitCodeFor` maps it.
 
 ### chat command
 Loop: `ui.Editor.Run` (a fresh inline bubbletea program per message, so it is never
@@ -194,15 +199,17 @@ running while an answer streams) → `handle`: `/command`, `!cmd`, or a message.
   right: `think on`, `+N command outputs`). Enter sends; Ctrl+J / Alt+Enter / a
   trailing `\` insert a newline; ↑/↓ move by visual row, history at the edges
   (`~/.docsgpt/history`, JSON string per line, 0600, 500 entries, entries ≤16KB and
-  not matching `secretLike`); bracketed pastes >10 lines or >1000 chars become
-  `[paste #N +L lines]` markers (atomic for cursor/backspace, expanded on send, shown
+  not matching `secretLike`; trimming writes a temp file and renames it); bracketed pastes >10 lines or >1000 chars become
+  `[paste #N +L lines]` markers (one unit: the cursor never rests inside one, any
+  deletion that reaches into one removes it whole; expanded on send, shown
   collapsed in the scrollback); Ctrl+A/E/K/U/W, Alt+←/→; Ctrl+G opens $VISUAL/$EDITOR;
   Ctrl+C clears, twice within 1s on an empty input quits (dim hint); Ctrl+D on empty
   quits. Typing `/` opens the command popup (prefix then fuzzy matches); Tab
   completes, Enter runs the exact or selected command at once, Esc closes it.
 - Commands (`chatCommands`, one table for popup, /help, dispatch): /new (/clear),
   /resume, /copy (whole answer, or a `ui.Select` of its code blocks), /export [file]
-  (markdown, default `docsgpt-<date>.md`), /think, /key (switch or add a key → new
+  (markdown, default `docsgpt-<date>.md`; `~/` expanded; an existing file only
+  after a `ui.Confirm`, default No), /think, /key (switch or add a key → new
   conversation), /settings (the config menu), /help, /quit (/exit). An unknown
   `/word` is an error; `/path/like …` is a message. `!cmd` runs through
   `tools.RunShell` (no approval, no time limit) and its output is prepended to the
@@ -214,7 +221,7 @@ running while an answer streams) → `handle`: `/command`, `!cmd`, or a message.
   colors), then `RunWithTools` with the messages + `conversation_id`; the server
   then takes the history from the stored conversation, an older one from the
   messages. A failed or interrupted turn is dropped; a failed one also drops the
-  conversation id. Ctrl+C is a real SIGINT (signal.NotifyContext) since the editor
+  conversation id. Ctrl+C is a real SIGINT (signalContext) since the editor
   is not running; `ui.HoldInput` turns the echo off meanwhile (typed text waits for
   the next editor; `DiscardInput` before a tool approval).
 - Context: the server treats `system` messages as a prompt override that agents
@@ -225,8 +232,8 @@ running while an answer streams) → `handle`: `/command`, `!cmd`, or a message.
   `--no-context` keeps the tools; `--no-tools` drops them.
 - Sessions (`internal/session`): created lazily with the first answer; header
   (cwd, server, key, conversation_id), then `message` lines (the sent message, `text`
-  = what was typed, sources on the last assistant message) and `state` lines when the
-  key or conversation changes. `-c` = latest in cwd, `-r`/`/resume` = filterable
+  = what was typed, sources on the last assistant message) and `state` lines (server,
+  key, conversation id) when any of them changes; loading takes the latest. `-c` = latest in cwd, `-r`/`/resume` = filterable
   picker (first message · age · count · key). Resuming reprints the last 3
   exchanges under `── resumed · 3h ago · N messages ──`, restores history, the
   conversation id and the last context block; a chat of another key switches to it
@@ -271,7 +278,7 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set a
 2. If model returns `finish_reason: "tool_calls"`, CLI shows the call's title (`$ cmd`, `read path`, `write path (+N −M)` with a short diff) and asks: Approve (a), Always allow (l), Deny (d), Edit (e, commands only: prefilled input, then asked again). Ctrl+C/Esc at the prompt cancels the whole run
 3. On approve: executes locally (command output in a live 5-line tail, then `✓ exit 0 · 1.2s` / `✗ …`), sends result back as `role: "tool"` message
 4. Model continues with tool results — loop repeats until `finish_reason: "stop"`
-5. Security stance (like pi): approval is the only gate, there is no command blocklist. `read_file` asks only for files outside the working directory (symlinks resolved), when the working directory is the home directory or above it, or for secret-looking names on the way (`.env*`, `*.pem`, `*.key`, `id_*`, `.ssh`, `.aws`, `.docsgpt`, `*_history`, …); devices, FIFOs and directories are refused. "Always allow" lasts for the session: all writes, all reads, or later commands with the same key — the program plus its subcommand word (`git status`, `npm test`), else the program — and is never offered for shell syntax beyond quotes, `VAR=value` prefixes, programs given as a path, code runners (shells, wrappers, interpreters, `find`, `make`, `tar`, editors, `cmd`/`powershell`/`start`), risky options (`-c`, `-C`, `-e`, `-o`, `-x`, `--exec*`, `--upload-pack`, `--git-dir`, …) or subcommands (`git config`, `npm exec`); see `allow.go`. Commands run without the terminal, so password prompts fail at once. `--auto-approve` skips every prompt but still prints each title and status. Host mode (no person at the device) keeps its own denylist in `internal/host/invocation.go`
+5. Security stance (like pi): approval is the only gate, there is no command blocklist. `read_file` asks only for files outside the working directory (symlinks resolved), when the working directory is the home directory or above it (compared as files, so case-insensitive spellings count), or for secret-looking names on the way (`.env*`, `.envrc`, `.netrc`, `*.pem`, `*.key`, `id_*`, `.ssh`, `.aws`, `.docsgpt`, `*_history`, … `secretNames`); devices, FIFOs and directories are refused. "Always allow" lasts for the session: all writes, all reads, or later commands with the same key — the program plus its subcommand word (`git status`, `npm test`), the program alone for plain read-only programs (`ls`, `cat`, `rg`) or option-only calls — and each later command is re-checked. Never offered for shell syntax beyond quotes, `VAR=value` prefixes, programs given as a path, code runners (shells, wrappers, interpreters, `find`, `make`, `tar`, editors, `cmd`/`powershell`/`start`), risky options (`-c`, `-C`, `-e`, `-o`, `-x`, `--exec*`, `--upload-pack`, `--git-dir`, …), risky subcommands (`git config`, `npm exec`, `docker run`), a path argument leaving the cwd (absolute, `~`, `..`), or options before the subcommand other than known value-less ones (`git --no-pager`); the doc comment of `alwaysKey` is the source of truth. Known gap (documented in docs/tools.md): a subcommand key covers its destructive forms (`git branch` → `git branch -D`). Commands run without the terminal, so password prompts fail at once. `--auto-approve` skips every prompt but still prints each title and status. Host mode (no person at the device) keeps its own denylist in `internal/host/invocation.go`
 
 ## Config
 

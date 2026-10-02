@@ -78,9 +78,14 @@ docsgpt-cli < question.txt
 
 - When stdout is not a terminal, only the answer is written, as plain text with
   terminal control sequences removed: `docsgpt-cli "summarize the README" > summary.md`.
-- With a question, a pipe is read only when its data starts within a second,
-  and a redirected file only from its start, so an idle stdin (ssh, CI) or a
-  `while read` loop is left alone. Input over 1 MB is cut.
+- Unless stdin is a terminal or a device such as `/dev/null`, it is read to
+  its end, so a slow producer (`make 2>&1 | docsgpt-cli "why?"`) is waited
+  for. Input over 1 MB is cut, with a note on stderr.
+- Where stdin stays open without input, pass `--no-stdin` (or redirect it from
+  `/dev/null`): `ssh host docsgpt-cli …` without `-t`, CI runners that keep
+  stdin open, and `while read` loops, whose input it would swallow. On a
+  terminal, a stdin silent for a second shows
+  `waiting for piped input… (--no-stdin to skip)`.
 - On a terminal, the first `bash`/`sh` code block of the answer is copied to
   your clipboard.
 - The agent's tools are offered only when someone can approve them: stdin is a

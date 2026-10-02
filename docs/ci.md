@@ -84,6 +84,13 @@ start the agent a second time, while every new event gets its own key.
 git diff origin/main... | DOCSGPT_API_KEY="$REVIEW_KEY" docsgpt-cli "review this diff" > review.md
 ```
 
-Off a terminal, only the answer goes to stdout. Tools are not offered unless
-you pass `--auto-approve`; only do that in a sandboxed runner (see
+```bash
+docsgpt-cli --no-stdin "what changed in the 2.0 API?" > notes.md
+```
+
+Off a terminal, only the answer goes to stdout. Stdin is read to its end
+unless it is a terminal or `/dev/null`, so a step that pipes nothing in should
+pass `--no-stdin` (or `< /dev/null`): some runners keep stdin open, and the
+command would wait for it. Tools are not offered unless you pass
+`--auto-approve`; only do that in a sandboxed runner (see
 [Tools](tools.md#security)).

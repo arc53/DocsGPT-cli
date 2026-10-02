@@ -28,8 +28,11 @@ the server.
 | Ctrl+D | Quit |
 
 A long paste (over 10 lines or 1000 characters) shows as
-`[paste #1 +200 lines]` until it is sent. Your messages are kept in
-`~/.docsgpt/history` for ↑; lines that look like keys or tokens are left out.
+`[paste #1 +200 lines]` until it is sent. The marker is one piece: the cursor
+never stops inside it, and deleting any part of it deletes all of it.
+
+Your messages are kept in `~/.docsgpt/history` for ↑; lines that look like
+keys or tokens are left out.
 
 ## Slash commands
 
@@ -40,7 +43,7 @@ Type `/` to see them, filtered as you type. Tab completes, Enter runs.
 | `/new` (`/clear`) | Start a new conversation |
 | `/resume` | Pick an earlier chat in this directory |
 | `/copy` | Copy the last answer, or one of its code blocks |
-| `/export [file]` | Save the conversation as markdown (default `docsgpt-<date>.md`) |
+| `/export [file]` | Save the conversation as markdown (default `docsgpt-<date>.md`; `~/` is your home directory; asks before overwriting a file, No by default) |
 | `/think` | Show or hide the model's reasoning |
 | `/key` | Switch to another stored key, or add one |
 | `/settings` | Open the settings menu |
@@ -59,9 +62,11 @@ them.
 
 ## Sessions
 
-Every chat is saved under `~/.docsgpt/sessions/<directory>/`, one JSONL file
-per chat (readable only by you). Sessions belong to the directory you started
-them in.
+Every chat is saved under `~/.docsgpt/sessions/<directory>-<hash>/`, one JSONL
+file per chat (readable only by you): `<directory>` is the last 48 characters
+of the working directory's path, made file-name safe, and `<hash>` tells apart
+paths that read the same. Sessions belong to the directory you started them
+in; the list shows only the chats recorded for it.
 
 - `docsgpt-cli -c` continues the latest chat of this directory.
 - `docsgpt-cli -r` or `/resume` lists them (type to filter) with age, length and
@@ -70,6 +75,16 @@ them in.
   server are the same. Otherwise it continues in a new conversation, with the
   saved messages as history.
 - When you leave, the CLI reminds you of `docsgpt-cli -c`.
+
+## Stopping
+
+Ctrl+C stops the answer, or the command the agent (or `!cmd`) is running, and
+leaves you in the chat. A `TERM` or `HUP` signal (`kill`, `timeout`, a closed
+terminal) stops it the same way and ends the chat, also while you type or pick
+from a menu (nothing half-typed is sent). Either way the terminal is restored
+(echo on) before the CLI exits. Exit codes follow the
+shell's: `130` for Ctrl+C in a one-shot question, `143` for `TERM`, `129` for
+`HUP`.
 
 ## Context
 
@@ -101,7 +116,8 @@ The block is sent again only when it changes. `--no-context` sends none of it
 | `--key <name>` | Chat with this stored key |
 | `--url <url>` | Use this server |
 
-The same flags (except `-c` and `-r`) work for one-shot questions.
+The same flags (except `-c` and `-r`) work for one-shot questions, which also
+take `--no-stdin` ([Ask once](quickstart.md#4-ask-once)).
 
 ## Display
 
