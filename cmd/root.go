@@ -94,7 +94,8 @@ var rootCmd = &cobra.Command{
 	Short:   "Chat with your DocsGPT agents from the terminal",
 	Long: `Chat with your DocsGPT agents from the terminal. With no arguments it opens an
 interactive chat; with a question it answers once and exits. Anything piped in
-is sent along with the question.`,
+is sent along with the question (read to its end, up to 1 MB); where stdin
+stays open without input (ssh, CI jobs, a "while read" loop), pass --no-stdin.`,
 	Example: `  docsgpt-cli                                # chat
   docsgpt-cli -c                             # continue the latest chat here
   docsgpt-cli "how do I rotate the API key?" # ask once

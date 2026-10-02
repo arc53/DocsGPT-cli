@@ -211,9 +211,11 @@ var configShowCmd = &cobra.Command{
 }
 
 var configGetCmd = &cobra.Command{
-	Use:   "get <key>",
-	Short: "Print one setting",
-	Args:  usageArgs(cobra.ExactArgs(1)),
+	Use:     "get <key>",
+	Short:   "Print one setting",
+	Long:    "Print one setting. 'docsgpt-cli config --help' lists the keys.",
+	Example: "  docsgpt-cli config get auto_update",
+	Args:    usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := lookupSetting(args[0])
 		if err != nil {
@@ -231,7 +233,11 @@ var configGetCmd = &cobra.Command{
 var configSetCmd = &cobra.Command{
 	Use:   "set <key> <value>",
 	Short: "Change one setting",
-	Args:  usageArgs(cobra.ExactArgs(2)),
+	Long:  "Change one setting. 'docsgpt-cli config --help' lists the keys and their values.",
+	Example: `  docsgpt-cli config set url http://localhost:7091
+  docsgpt-cli config set auto_update notify
+  docsgpt-cli config set send_last_commands true`,
+	Args: usageArgs(cobra.ExactArgs(2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return setConfig(args[0], args[1])
 	},
