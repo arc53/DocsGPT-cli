@@ -55,7 +55,10 @@ internal/
   context/
     enricher.go      → Context building: cwd, dir contents, shell history
   display/
-    renderer.go      → StreamDelta: prints content + reasoning tokens (dim)
+    renderer.go      → StreamRenderer: streamed markdown on a TTY (finished blocks
+                       rendered once into scrollback, the block in progress redrawn
+                       in place while it fits on screen); raw text when not a TTY
+    markdown.go      → glamour setup (theme style, no margin, padding trimmed)
   tools/
     definitions.go   → Tool schemas: run_command, read_file, write_file
     executor.go      → Local tool execution with timeout

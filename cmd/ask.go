@@ -53,7 +53,6 @@ This command will provide a contextual answer and, if applicable, copy a relevan
 
 		cwd, _ := os.Getwd()
 		fmt.Println(display.RenderHeader(keyName, baseURL, cwd))
-		fmt.Print(display.Prompt("❯ "))
 
 		ctx := context.Background()
 		var toolDefs []docsgpt.Tool
@@ -69,20 +68,16 @@ This command will provide a contextual answer and, if applicable, copy a relevan
 		}
 
 		onToolCall := func(tc docsgpt.ToolCall) string {
+			renderer.Flush()
 			return handleToolCall(ctx, tc, timeout)
 		}
 
 		_, err = client.RunWithTools(ctx, messages, docsgpt.RunOptions{
 			Tools: toolDefs, Stream: !globalNoStream, OnDelta: onDelta, OnToolCall: onToolCall,
 		})
+		renderer.Flush()
 		if err != nil {
 			return err
-		}
-		fmt.Println()
-
-		// Render markdown for the final answer if it contains formatting
-		if rendered := renderer.Finish(); rendered != "" {
-			fmt.Print(rendered)
 		}
 
 		answer := renderer.Content()

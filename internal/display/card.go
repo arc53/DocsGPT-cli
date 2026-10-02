@@ -2,19 +2,27 @@ package display
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
 )
 
-// termWidth returns the current terminal width, defaulting to 80.
+// termWidth returns the width of the terminal stdout writes to, defaulting
+// to 80.
 func termWidth() int {
-	w, _, err := term.GetSize(0) // stdin fd
-	if err != nil || w <= 0 {
-		return 80
-	}
+	w, _ := termSize()
 	return w
+}
+
+// termSize returns stdout's terminal size, defaulting to 80x24.
+func termSize() (width, height int) {
+	w, h, err := term.GetSize(os.Stdout.Fd())
+	if err != nil || w <= 0 || h <= 0 {
+		return 80, 24
+	}
+	return w, h
 }
 
 // cardWidth returns a clamped width for card rendering.

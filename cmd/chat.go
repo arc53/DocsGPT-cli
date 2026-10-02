@@ -139,28 +139,24 @@ func (s *chatSession) executor(input string) {
 	}
 
 	onToolCall := func(tc docsgpt.ToolCall) string {
+		renderer.Flush()
 		return handleToolCall(ctx, tc, s.timeout)
 	}
 
 	res, err := s.client.RunWithTools(ctx, s.history, docsgpt.RunOptions{
 		Tools: s.toolDefs, Stream: !globalNoStream, OnDelta: onDelta, OnToolCall: onToolCall,
 	})
+	renderer.Flush()
 	if err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			// Drop the user turn that never got an answer so the next
 			// message doesn't carry a dangling question.
 			s.history = s.history[:len(s.history)-1]
-			fmt.Println()
 			fmt.Println(display.Muted("Interrupted."))
 			return
 		}
 		printError(err.Error())
 		return
-	}
-	fmt.Println()
-
-	if rendered := renderer.Finish(); rendered != "" {
-		fmt.Print(rendered)
 	}
 
 	s.history = res.Messages

@@ -24,23 +24,23 @@ type Theme struct {
 // T is the active theme instance. Call InitTheme before using.
 var T *Theme
 
+// darkBackground records the background InitTheme settled on, for the
+// markdown style.
+var darkBackground = true
+
 // InitTheme initializes the global theme. Mode can be "auto", "dark", or "light".
 func InitTheme(mode string) {
-	if mode == "" {
-		mode = "auto"
-	}
-
-	dark := true
-	switch mode {
-	case "dark":
-		dark = true
-	case "light":
-		dark = false
-	default: // "auto"
+	dark := mode != "light"
+	if mode == "" || mode == "auto" {
 		dark = lipgloss.HasDarkBackground()
 	}
-
+	darkBackground = dark
 	T = newTheme(dark)
+}
+
+// colorless reports whether output must stay free of colors.
+func colorless() bool {
+	return termenv.ColorProfile() == termenv.Ascii || os.Getenv("NO_COLOR") != ""
 }
 
 // UsePlainTheme swaps the active theme for the unstyled one regardless of
@@ -65,10 +65,7 @@ func plainTheme() *Theme {
 }
 
 func newTheme(dark bool) *Theme {
-	profile := termenv.ColorProfile()
-
-	if profile == termenv.Ascii || os.Getenv("NO_COLOR") != "" {
-		// No color support — return unstyled theme
+	if colorless() {
 		return plainTheme()
 	}
 
@@ -76,12 +73,12 @@ func newTheme(dark bool) *Theme {
 		return &Theme{
 			Text:      lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
 			Muted:     lipgloss.NewStyle().Foreground(lipgloss.Color("243")),
-			Accent:    lipgloss.NewStyle().Foreground(lipgloss.Color("133")), // dark magenta/purple
-			Success:   lipgloss.NewStyle().Foreground(lipgloss.Color("78")),  // muted green
-			Warn:      lipgloss.NewStyle().Foreground(lipgloss.Color("214")), // yellow/orange
-			Danger:    lipgloss.NewStyle().Foreground(lipgloss.Color("196")), // red
-			Info:      lipgloss.NewStyle().Foreground(lipgloss.Color("183")), // light purple/lavender
-			Border:    lipgloss.NewStyle().Foreground(lipgloss.Color("238")), // dark gray
+			Accent:    lipgloss.NewStyle().Foreground(lipgloss.Color("133")),            // dark magenta/purple
+			Success:   lipgloss.NewStyle().Foreground(lipgloss.Color("78")),             // muted green
+			Warn:      lipgloss.NewStyle().Foreground(lipgloss.Color("214")),            // yellow/orange
+			Danger:    lipgloss.NewStyle().Foreground(lipgloss.Color("196")),            // red
+			Info:      lipgloss.NewStyle().Foreground(lipgloss.Color("183")),            // light purple/lavender
+			Border:    lipgloss.NewStyle().Foreground(lipgloss.Color("238")),            // dark gray
 			Selection: lipgloss.NewStyle().Foreground(lipgloss.Color("177")).Bold(true), // bright purple
 			Reasoning: lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true),
 		}
