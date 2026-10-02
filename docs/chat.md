@@ -9,15 +9,25 @@ docsgpt-cli -r                   # pick an earlier chat to resume
 
 `docsgpt-cli` with no arguments opens a chat when stdin and stdout are a
 terminal. Answers stream in as markdown, followed by a short **Sources** list
-(linked when the source has a URL). The footer shows the directory, the key and
-the server.
+(linked when the source has a URL).
+
+The chat takes over the window: what it showed moves up into the scrollback
+(nothing is erased), a short header opens it (version, keys, and the
+`AGENTS.md` / `CLAUDE.md` files the context sends), and the input waits at the
+bottom of the window, blank space above it until the conversation fills the
+window. Your message is printed right under the previous answer, and the answer
+streams below it; the input is back at the bottom when it is done. Everything
+stays on the normal screen, so the scrollback keeps the whole conversation.
+`/new` and `/resume` start the window over the same way. Under the input: the
+directory and its git branch on the left, the key and the server (and what is
+on, such as `think on`) on the right.
 
 ## Editor
 
 | Key | Action |
 |---|---|
 | Enter | Send |
-| Ctrl+J, Alt+Enter, or a line ending in `\` | New line |
+| Shift+Enter, Ctrl+J, Alt+Enter, or a line ending in `\` | New line |
 | ↑ / ↓ | Move between lines; on the first or last line, browse earlier messages |
 | Ctrl+G | Edit the message in `$VISUAL` / `$EDITOR` (vi by default) |
 | Ctrl+A / Ctrl+E, Home / End | Start / end of the line |
@@ -26,6 +36,14 @@ the server.
 | Ctrl+U / Ctrl+K | Delete to the start / end of the line |
 | Ctrl+C | Stop the answer, or clear the input; twice on an empty input quits |
 | Ctrl+D | Quit |
+
+Shift+Enter needs a terminal that can tell it from Enter: one with the kitty
+keyboard protocol or xterm's `modifyOtherKeys`, such as kitty, Ghostty,
+iTerm2, WezTerm, foot, Alacritty or xterm. The input asks for both while it is
+open and turns them off when it closes. Terminal.app sends a plain Enter for
+Shift+Enter: use Ctrl+J there. In tmux, add `set -g extended-keys on` to
+`~/.tmux.conf` and restart tmux; until then the header shows `ctrl+j` instead
+of `shift+enter`.
 
 A long paste (over 10 lines or 1000 characters) shows as
 `[paste #1 +200 lines]` until it is sent. The marker is one piece: the cursor

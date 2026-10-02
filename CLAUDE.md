@@ -93,8 +93,12 @@ internal/
     markdown.go      → glamour style built from the palette (no margins/fills); top-level
                        code fences drawn by us (dim ``` lines, 2-space indent, chroma
                        tokens colored from the palette)
-    chrome.go        → one dim header line (docsgpt · key · host · cwd) for ask; chat
-                       welcome line, footer text, the user-message block, Ago
+    chrome.go        → one dim header line (docsgpt · key · host · cwd) for ask; chat:
+                       ClaimScreen (h-1 newlines from the cursor row r scroll exactly the
+                       r-1 rows above into the scrollback, then home), ChatHeader (2-row
+                       mark + version, key hints, `Context` files), ChatFooter (cwd + git
+                       branch read from .git/HEAD, worktrees and detached too); the
+                       user-message block, Ago
     style.go         → Accent/Muted/Dim/Success/Warn helpers, ErrorMsg (stderr)
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
                        (live last-5-lines region), DiffPreview for writes
@@ -116,7 +120,9 @@ internal/
                        validate), Spinner (stderr); TERM/HUP end a prompt with
                        ui.Signal (and ui.Stopped reports it);
                        Stderr option for prompts drawn while stdout carries an answer.
-                       editor.go: the chat input (Editor); history.go: prompt history
+                       editor.go: the chat input (Editor; Pin = pinned to the window
+                       bottom); keys.go: ttyInput (keyboard protocol → legacy bytes,
+                       cursor position replies), NewlineKey; history.go: prompt history
                        file; fuzzy.go: popup/filter matching; hold_*.go: echo off while
                        an answer streams, DiscardInput
   tools/
@@ -195,9 +201,31 @@ Errors (every command) go to stderr; a missing question or a bad flag is a usage
 ### chat command
 Loop: `ui.Editor.Run` (a fresh inline bubbletea program per message, so it is never
 running while an answer streams) → `handle`: `/command`, `!cmd`, or a message.
-- Editor: dim rules above and below the text, a dim footer (`…/dir · key · host`,
-  right: `think on`, `+N command outputs`). Enter sends; Ctrl+J / Alt+Enter / a
-  trailing `\` insert a newline; ↑/↓ move by visual row, history at the edges
+- Window (main screen, never the alternate one): `top()` = `display.ClaimScreen` +
+  banner (once) + `ChatHeader`, at start (after the `-r` picker, so Esc there leaves
+  the window alone), on `/new` and on resume. The editor runs with `Pin`: Init asks
+  for the cursor row (CSI 6n; the reply is taken out of the input by ttyInput and
+  comes back as a cursorMsg; Windows reads the console) and draws nothing until it
+  comes (500ms max; a terminal that never answers is not asked again); the frame is
+  blank rows + the editor, ending on the window's last row, and collapses to its
+  first row when done, so the next output lands right under the previous one. It
+  never quits while a reply is due (it would reach the shell). On resize it asks
+  again 80ms later (bubbletea leaves the cursor on the frame's last row); rows a
+  narrower window wrapped from the old frame are counted (`residue`), the cursor is
+  moved up over them and the frame redrawn from there. Known: blank rows the
+  terminal pushes into the scrollback when the window gets shorter stay there.
+  Nothing is pinned while an answer streams (a scroll region would keep lines out
+  of tmux's scrollback; the renderer redraws with relative moves).
+- Keys: while the editor runs, `keysOn` pushes kitty keyboard flags 1
+  (disambiguate) and xterm modifyOtherKeys 1; `keysOff` (deferred in `run()`, also
+  around Ctrl+G's $EDITOR via plainKeys, which hands the program the real stdin)
+  pops/resets them. ttyInput translates `CSI code;mods u` and `CSI 27;mods;code ~`
+  back to legacy bytes (Shift+Enter → `\n` = ctrl+j, Ctrl+C → 0x03, Esc → ESC, …),
+  holds an unfinished CSI across reads, passes bracketed pastes through untouched.
+- Editor: dim rules above and below the text, a dim footer (left `~/dir (branch)`,
+  right `key · host`, then `+N command outputs`, `think on`; it is dim as a whole,
+  so a differently styled item goes last; the left is cut from its start).
+  Enter sends; Shift+Enter / Ctrl+J / Alt+Enter / a trailing `\` insert a newline; ↑/↓ move by visual row, history at the edges
   (`~/.docsgpt/history`, JSON string per line, 0600, 500 entries, entries ≤16KB and
   not matching `secretLike`; trimming writes a temp file and renames it); bracketed pastes >10 lines or >1000 chars become
   `[paste #N +L lines]` markers (one unit: the cursor never rests inside one, any
@@ -215,8 +243,9 @@ running while an answer streams) → `handle`: `/command`, `!cmd`, or a message.
   `tools.RunShell` (no approval, no time limit) and its output is prepended to the
   next message; `!!cmd` is not sent.
 - Rhythm: every block ends with one blank line (user block, answer + sources,
-  command output, tool blocks open with their own); the editor and pickers draw
-  right after it and leave nothing when dismissed.
+  command output, tool blocks open with their own: a tool call right after the user
+  block moves up one row first); the editor and pickers draw right after it and
+  leave nothing when dismissed.
 - Sending: the user block (`display.UserMessage`, subtle background, `❯` without
   colors), then `RunWithTools` with the messages + `conversation_id`; the server
   then takes the history from the stored conversation, an older one from the
