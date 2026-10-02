@@ -34,13 +34,13 @@ func TestReadPipedStdin(t *testing.T) {
 
 	// A slow producer is waited for, with a hint that is cleared again.
 	r, w, _ := os.Pipe()
-	go func() {
+	go func(w *os.File) {
 		time.Sleep(200 * time.Millisecond)
 		w.Write([]byte("late "))
 		time.Sleep(100 * time.Millisecond)
 		w.Write([]byte("output\n"))
 		w.Close()
-	}()
+	}(w)
 	var hint bytes.Buffer
 	if got, _ := readPipedStdin(r, &hint); got != "late output" {
 		t.Errorf("slow pipe = %q", got)
@@ -60,10 +60,10 @@ func TestReadPipedStdin(t *testing.T) {
 	r.Close()
 
 	r, w, _ = os.Pipe()
-	go func() {
+	go func(w *os.File) {
 		w.Write([]byte(strings.Repeat("x", maxStdin+10)))
 		w.Close()
-	}()
+	}(w)
 	got, _ := readPipedStdin(r, nil)
 	if !strings.HasPrefix(got, "xxx") || !strings.HasSuffix(got, "[… truncated at 1 MB]") || len(got) > maxStdin+40 {
 		t.Errorf("large pipe: %d bytes, ends %q", len(got), got[len(got)-30:])
