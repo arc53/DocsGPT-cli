@@ -268,8 +268,11 @@ func TestLoginWhoamiLogout(t *testing.T) {
 		t.Errorf("after logout: %+v", cfg)
 	}
 	t.Setenv(config.EnvToken, "")
-	if err := runWhoami(ctx, false, &out); exitCodeFor(err) != exitUsage {
-		t.Errorf("whoami without a token should be a usage error, got %v", err)
+	if err := runWhoami(ctx, false, &out); exitCodeFor(err) != exitFailure || !strings.Contains(err.Error(), "not logged in") {
+		t.Errorf("whoami when logged out should exit 1, got %v", err)
+	}
+	if err := runWhoami(ctx, true, &out); exitCodeFor(err) != exitFailure {
+		t.Errorf("whoami --json without a token should exit 1, got %v", err)
 	}
 	if _, err := newManageClient(); exitCodeFor(err) != exitUsage {
 		t.Errorf("newManageClient without a token: %v", err)

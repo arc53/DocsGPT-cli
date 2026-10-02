@@ -592,9 +592,10 @@ func runWhoami(ctx context.Context, asJSON bool, out io.Writer) error {
 	}
 	baseURL := cfg.ResolveURL(globalURL)
 	token, source := cfg.ResolveToken(globalToken)
+	// Not being logged in is an answer, not a usage error: exit 1.
 	if asJSON {
 		if token == "" {
-			return usageErrf("no personal access token configured: run 'docsgpt-cli login', set %s, or pass --token", config.EnvToken)
+			return fmt.Errorf("no personal access token configured: run 'docsgpt-cli login', set %s, or pass --token", config.EnvToken)
 		}
 		id, err := manage.New(baseURL, token, userAgent()).Me(ctx)
 		if err != nil {
@@ -608,7 +609,7 @@ func runWhoami(ctx context.Context, asJSON bool, out io.Writer) error {
 		return usageErr(keyErr)
 	}
 	if key == "" && token == "" {
-		return usageErrf("not logged in: run 'docsgpt-cli login', or set %s / %s", config.EnvAPIKey, config.EnvToken)
+		return fmt.Errorf("not logged in: run 'docsgpt-cli login', or set %s / %s", config.EnvAPIKey, config.EnvToken)
 	}
 	row := func(k, v string) { fmt.Fprintf(out, "  %-13s %s\n", k, v) }
 	var failed error

@@ -171,7 +171,8 @@ server (warning instead). With no key, ask/chat on a TTY run the same prompt inl
 `--token` shadows the global one, so a `dgpt_pat_…` given to it, `=` or as the
 argument, names the stored token and must match it — `tokenSwitch`);
 removing the default promotes the first remaining key. `whoami`: active key
-(name, redacted, server, agent via /v1/models) + PAT identity; `--json` = PAT doc only.
+(name, redacted, server, agent via /v1/models) + PAT identity; `--json` = PAT doc only;
+neither configured (`--json`: no PAT) = exit 1, not a usage error.
 `keys` is a hidden alias of the TTY picker (the old add/set/delete flags are gone).
 
 ### ask command
