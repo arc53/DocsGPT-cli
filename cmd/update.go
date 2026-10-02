@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/install"
 	"github.com/arc53/DocsGPT-cli/internal/update"
 
 	"github.com/spf13/cobra"
@@ -77,7 +78,7 @@ var updateCmd = &cobra.Command{
 			fmt.Println(display.Warn(homebrewAdvice()))
 			return nil
 		}
-		if !isWritable(filepath.Dir(exePath)) {
+		if !install.IsWritable(filepath.Dir(exePath)) {
 			return fmt.Errorf("no write permission for %s, re-run with sudo", filepath.Dir(exePath))
 		}
 
@@ -115,7 +116,7 @@ func runRollback() error {
 		fmt.Println(display.Warn("This binary is managed by Homebrew. Roll back with brew instead."))
 		return nil
 	}
-	if !isWritable(filepath.Dir(exePath)) {
+	if !install.IsWritable(filepath.Dir(exePath)) {
 		return fmt.Errorf("no write permission for %s, re-run with sudo", filepath.Dir(exePath))
 	}
 

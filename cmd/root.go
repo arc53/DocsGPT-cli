@@ -9,6 +9,7 @@ import (
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/install"
 	"github.com/arc53/DocsGPT-cli/internal/update"
 
 	"github.com/mattn/go-isatty"
@@ -158,7 +159,7 @@ func updateGate() (mode string, exePath string) {
 	if err != nil {
 		return "", ""
 	}
-	if mode == update.ModeOn && (update.IsHomebrewPath(exePath) || !isWritable(filepath.Dir(exePath))) {
+	if mode == update.ModeOn && (update.IsHomebrewPath(exePath) || !install.IsWritable(filepath.Dir(exePath))) {
 		mode = update.ModeNotify
 	}
 	return mode, exePath
