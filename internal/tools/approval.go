@@ -24,7 +24,7 @@ import (
 // earlier in the session. Reads ask only outside the working directory or
 // for files that may hold secrets (readReason).
 type Session struct {
-	AutoApprove bool
+	AutoApprove bool          // run every call unasked: --auto-approve, "Always approve", /approve
 	Timeout     time.Duration // per command or read
 
 	allowWrites bool
@@ -75,14 +75,11 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 		if s.AutoApprove || s.allowed[alwaysKey(command)] {
 			break
 		}
-		items := []ui.Item{{Label: "Approve", Value: "approve", Keys: []string{"a", "y"}}}
-		if key := alwaysKey(command); key != "" {
-			items = append(items, ui.Item{Label: "Always allow " + display.Safe(key), Value: "always", Keys: []string{"l"}})
+		var always *ui.Item
+		if key := display.Safe(alwaysKey(command)); key != "" {
+			always = &ui.Item{Label: "Always allow " + key, Description: "run " + key + " commands without asking this session"}
 		}
-		items = append(items,
-			ui.Item{Label: "Deny", Value: "deny", Keys: []string{"d", "n"}},
-			ui.Item{Label: "Edit", Value: "edit", Keys: []string{"e"}})
-		choice, refusal := s.ask(cancel, items)
+		choice, refusal := s.ask(cancel, "run once", always, true)
 		if refusal != "" {
 			return refusal
 		}
@@ -174,11 +171,8 @@ func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path 
 	}
 	display.ToolTitle(title, note)
 	if reason != "" {
-		choice, refusal := s.ask(cancel, []ui.Item{
-			{Label: "Approve", Value: "approve", Keys: []string{"a", "y"}},
-			{Label: "Always allow reads", Value: "always", Keys: []string{"l"}},
-			{Label: "Deny", Value: "deny", Keys: []string{"d", "n"}},
-		})
+		choice, refusal := s.ask(cancel, "read this file once",
+			&ui.Item{Label: "Always allow reads", Description: "read any file without asking this session"}, false)
 		if refusal != "" {
 			return refusal
 		}
@@ -303,17 +297,15 @@ func (s *Session) writeFile(ctx context.Context, cancel context.CancelFunc, path
 	display.ToolLines(preview)
 
 	if !s.AutoApprove && !s.allowWrites {
-		choice, refusal := s.ask(cancel, []ui.Item{
-			{Label: "Approve", Value: "approve", Keys: []string{"a", "y"}},
-			{Label: "Always allow writes", Value: "always", Keys: []string{"l"}},
-			{Label: "Deny", Value: "deny", Keys: []string{"d", "n"}},
-		})
+		choice, refusal := s.ask(cancel, "write this file once",
+			&ui.Item{Label: "Always allow writes", Description: "write any file without asking this session"}, false)
 		if refusal != "" {
 			return refusal
 		}
 		s.allowWrites = choice == "always"
 	}
 	if ctx.Err() != nil {
+		display.ToolStatus(false, "cancelled")
 		return "The user interrupted the run before this tool call ran."
 	}
 	if err := writeFile(path, content); err != nil {
@@ -324,10 +316,24 @@ func (s *Session) writeFile(ctx context.Context, cancel context.CancelFunc, path
 	return fmt.Sprintf("Wrote %d bytes to %s.", len(content), path)
 }
 
-// ask shows the approval choices under the tool's title. It returns the
-// choice, or the result for the model when the call must not run: denied,
-// or cancelled (which also cancels the run).
-func (s *Session) ask(cancel context.CancelFunc, items []ui.Item) (choice, refusal string) {
+// ask shows the approval choices under the tool's title: Approve (once
+// describes it), the narrower "Always allow" when there is one, Always
+// approve, Deny and, with edit, Edit. It returns "approve", "always" or
+// "edit", or the result for the model when the call must not run: denied,
+// or cancelled (which also cancels the run). Always approve turns on
+// AutoApprove and returns "approve".
+func (s *Session) ask(cancel context.CancelFunc, once string, always *ui.Item, edit bool) (choice, refusal string) {
+	items := []ui.Item{{Label: "Approve", Value: "approve", Keys: []string{"a", "y"}, Description: once}}
+	if always != nil {
+		always.Value, always.Keys = "always", []string{"l"}
+		items = append(items, *always)
+	}
+	items = append(items,
+		ui.Item{Label: "Always approve", Value: "all", Keys: []string{"p"}, Description: "run every tool call without asking this session"},
+		ui.Item{Label: "Deny", Value: "deny", Keys: []string{"d", "n"}, Description: "don't run it, tell the model you declined"})
+	if edit {
+		items = append(items, ui.Item{Label: "Edit", Value: "edit", Keys: []string{"e"}, Description: "change the command, then decide again"})
+	}
 	choice, err := ui.Select{Items: items, Inline: true, Stderr: true, Summary: func(ui.Item) string { return "" }}.Run()
 	switch {
 	case errors.Is(err, ui.ErrCancelled):
@@ -340,6 +346,9 @@ func (s *Session) ask(cancel context.CancelFunc, items []ui.Item) (choice, refus
 	case choice == "deny":
 		display.ToolStatus(false, "denied")
 		return "", "The user denied this tool call."
+	case choice == "all":
+		s.AutoApprove = true
+		return "approve", ""
 	}
 	return choice, ""
 }

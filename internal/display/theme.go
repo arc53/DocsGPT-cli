@@ -37,6 +37,12 @@ var (
 		Dark:  lipgloss.CompleteColor{TrueColor: "#213b49", ANSI256: "236", ANSI: "8"},
 		Light: lipgloss.CompleteColor{TrueColor: "#dfe7ec", ANSI256: "254", ANSI: "7"},
 	}
+	// Tool block backgrounds (running, succeeded, failed): pi's, a step
+	// fainter (OKHSL lightness 20% dark, 94% light) so they sit below the
+	// user's message. No 16-color value: those blocks have no background.
+	colToolBg     = tone("#2b2f30", "236", "#edeeef", "255", "")
+	colToolOkBg   = tone("#243229", "22", "#e9f0eb", "194", "")
+	colToolFailBg = tone("#3e2727", "52", "#f4eceb", "224", "")
 )
 
 // Theme holds the semantic styles every UI element draws with.
@@ -52,6 +58,7 @@ type Theme struct {
 	Thinking   lipgloss.Style // reasoning tokens
 	ToolTitle  lipgloss.Style // "$ command", "read path"
 	ToolOutput lipgloss.Style
+	ToolBg     bool // tool blocks sit on colToolBg and friends (on a terminal)
 }
 
 // T is the active theme. It starts dark without asking the terminal, so
@@ -122,6 +129,7 @@ func newTheme() *Theme {
 		Thinking:   fg(colThinking).Italic(true),
 		ToolTitle:  lipgloss.NewStyle().Bold(true),
 		ToolOutput: fg(colMuted),
+		ToolBg:     true,
 	}
 }
 

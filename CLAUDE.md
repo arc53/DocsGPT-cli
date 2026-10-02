@@ -81,7 +81,8 @@ internal/
     session.go       → saved chats: ~/.docsgpt/sessions/<slug>-<hash>/<time>_<id>.jsonl (slug = last ≤48 chars of the cwd, non-[A-Za-z0-9_] runs as `-`; hash = 8 hex of sha256(cwd); 0600, dirs 0700); header + message/state lines, each Record one append; List keeps the files whose header cwd is this cwd; Load/Turns
   display/
     theme.go         → semantic palette (pi's OKHSL tones: hex + 256 + 16-color fallbacks,
-                       dark/light; plain under NO_COLOR); also sets ui.Colors. InitTheme
+                       dark/light; plain under NO_COLOR; tool block backgrounds a step
+                       fainter than pi's, no 16-color value); also sets ui.Colors. InitTheme
                        runs in the root PersistentPreRun (hidden --theme > config > auto)
     renderer.go      → StreamRenderer: streamed markdown on a TTY (finished blocks
                        rendered once into scrollback, the block in progress redrawn
@@ -101,7 +102,14 @@ internal/
                        user-message block, Ago
     style.go         → Accent/Muted/Dim/Success/Warn helpers, ErrorMsg (stderr)
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
-                       (live last-5-lines region), DiffPreview for writes
+                       (live last-5-lines region), DiffPreview for writes. With
+                       colors and stderr a 256/truecolor TTY a block is a toolBox:
+                       full-width rows on colToolBg (pi's Box(1,1): padding row
+                       above/below, one column each side; resets re-apply the bg),
+                       the live tail keeps the bottom padding, and ToolStatus
+                       redraws the on-screen part on colToolOkBg/colToolFailBg
+                       (skipped if the width changed). Titles wrap there (rows are
+                       cut to the width). Plain (indented, no bg) otherwise
     safe.go          → Safe: control chars as ␛ ␍ ␊, format runes as \uXXXX, so an
                        escape sequence cannot hide part of a command. Every model/server
                        string in tool blocks, sources, agents/sources lists, whoami, host
@@ -128,7 +136,8 @@ internal/
   tools/
     definitions.go   → Tool schemas: run_command, read_file (offset/limit), write_file
     approval.go      → Session: per chat session / ask run; title, approval, execution,
-                       status per call. Inline Approve / Always allow / Deny / Edit;
+                       status per call. Inline Approve / Always allow / Always
+                       approve (sets AutoApprove) / Deny / Edit;
                        readReason (when a read asks; home compared with os.SameFile),
                        secretNames
     allow.go         → alwaysKey: what "Always allow" covers, and when it is never offered
@@ -223,7 +232,7 @@ running while an answer streams) → `handle`: `/command`, `!cmd`, or a message.
   back to legacy bytes (Shift+Enter → `\n` = ctrl+j, Ctrl+C → 0x03, Esc → ESC, …),
   holds an unfinished CSI across reads, passes bracketed pastes through untouched.
 - Editor: dim rules above and below the text, a dim footer (left `~/dir (branch)`,
-  right `key · host`, then `+N command outputs`, `think on`; it is dim as a whole,
+  right `key · host`, then `+N command outputs`, `think on`, then `auto-approve` in the warning color; it is dim as a whole,
   so a differently styled item goes last; the left is cut from its start).
   Enter sends; Shift+Enter / Ctrl+J / Alt+Enter / a trailing `\` insert a newline; ↑/↓ move by visual row, history at the edges
   (`~/.docsgpt/history`, JSON string per line, 0600, 500 entries, entries ≤16KB and
@@ -237,7 +246,8 @@ running while an answer streams) → `handle`: `/command`, `!cmd`, or a message.
 - Commands (`chatCommands`, one table for popup, /help, dispatch): /new (/clear),
   /resume, /copy (whole answer, or a `ui.Select` of its code blocks), /export [file]
   (markdown, default `docsgpt-<date>.md`; `~/` expanded; an existing file only
-  after a `ui.Confirm`, default No), /think, /key (switch or add a key → new
+  after a `ui.Confirm`, default No), /think, /approve (toggles the tools
+  Session's AutoApprove; "Always allow" choices are kept), /key (switch or add a key → new
   conversation), /settings (the config menu), /help, /quit (/exit). An unknown
   `/word` is an error; `/path/like …` is a message. `!cmd` runs through
   `tools.RunShell` (no approval, no time limit) and its output is prepended to the
@@ -304,10 +314,10 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set a
 
 ### Tool call flow
 1. CLI sends `tools` array in request
-2. If model returns `finish_reason: "tool_calls"`, CLI shows the call's title (`$ cmd`, `read path`, `write path (+N −M)` with a short diff) and asks: Approve (a), Always allow (l), Deny (d), Edit (e, commands only: prefilled input, then asked again). Ctrl+C/Esc at the prompt cancels the whole run
+2. If model returns `finish_reason: "tool_calls"`, CLI shows the call's title (`$ cmd`, `read path`, `write path (+N −M)` with a short diff) and asks: Approve (a), Always allow (l, only when there is a narrow key), Always approve (p: every later call of the session unasked, i.e. AutoApprove), Deny (d), Edit (e, commands only: prefilled input, then asked again); the muted line under the row describes the highlighted choice. Ctrl+C/Esc at the prompt cancels the whole run
 3. On approve: executes locally (command output in a live 5-line tail, then `✓ exit 0 · 1.2s` / `✗ …`), sends result back as `role: "tool"` message
 4. Model continues with tool results — loop repeats until `finish_reason: "stop"`
-5. Security stance (like pi): approval is the only gate, there is no command blocklist. `read_file` asks only for files outside the working directory (symlinks resolved), when the working directory is the home directory or above it (compared as files, so case-insensitive spellings count), or for secret-looking names on the way (`.env*`, `.envrc`, `.netrc`, `*.pem`, `*.key`, `id_*`, `.ssh`, `.aws`, `.docsgpt`, `*_history`, … `secretNames`); devices, FIFOs and directories are refused. "Always allow" lasts for the session: all writes, all reads, or later commands with the same key — the program plus its subcommand word (`git status`, `npm test`), the program alone for plain read-only programs (`ls`, `cat`, `rg`) or option-only calls — and each later command is re-checked. Never offered for shell syntax beyond quotes, `VAR=value` prefixes, programs given as a path, code runners (shells, wrappers, interpreters, `find`, `make`, `tar`, editors, `cmd`/`powershell`/`start`), risky options (`-c`, `-C`, `-e`, `-o`, `-x`, `--exec*`, `--upload-pack`, `--git-dir`, …), risky subcommands (`git config`, `npm exec`, `docker run`), a path argument leaving the cwd (absolute, `~`, `..`), or options before the subcommand other than known value-less ones (`git --no-pager`); the doc comment of `alwaysKey` is the source of truth. Known gap (documented in docs/tools.md): a subcommand key covers its destructive forms (`git branch` → `git branch -D`). Commands run without the terminal, so password prompts fail at once. `--auto-approve` skips every prompt but still prints each title and status. Host mode (no person at the device) keeps its own denylist in `internal/host/invocation.go`
+5. Security stance (like pi): approval is the only gate, there is no command blocklist. `read_file` asks only for files outside the working directory (symlinks resolved), when the working directory is the home directory or above it (compared as files, so case-insensitive spellings count), or for secret-looking names on the way (`.env*`, `.envrc`, `.netrc`, `*.pem`, `*.key`, `id_*`, `.ssh`, `.aws`, `.docsgpt`, `*_history`, … `secretNames`); devices, FIFOs and directories are refused. "Always allow" lasts for the session: all writes, all reads, or later commands with the same key — the program plus its subcommand word (`git status`, `npm test`), the program alone for plain read-only programs (`ls`, `cat`, `rg`) or option-only calls — and each later command is re-checked. Never offered for shell syntax beyond quotes, `VAR=value` prefixes, programs given as a path, code runners (shells, wrappers, interpreters, `find`, `make`, `tar`, editors, `cmd`/`powershell`/`start`), risky options (`-c`, `-C`, `-e`, `-o`, `-x`, `--exec*`, `--upload-pack`, `--git-dir`, …), risky subcommands (`git config`, `npm exec`, `docker run`), a path argument leaving the cwd (absolute, `~`, `..`), or options before the subcommand other than known value-less ones (`git --no-pager`); the doc comment of `alwaysKey` is the source of truth. Known gap (documented in docs/tools.md): a subcommand key covers its destructive forms (`git branch` → `git branch -D`). Commands run without the terminal, so password prompts fail at once. `--auto-approve` (or "Always approve", or `/approve` in chat) skips every prompt but still prints each title and status. Host mode (no person at the device) keeps its own denylist in `internal/host/invocation.go`
 
 ## Config
 

@@ -38,3 +38,29 @@ func TestTailView(t *testing.T) {
 		t.Errorf("got\n%q\nwant\n%q", out.String(), want)
 	}
 }
+
+func TestToolBox(t *testing.T) {
+	UsePlainTheme()
+	defer InitTheme("dark")
+	b := &toolBox{bg: "<bg>", width: 12}
+	if got, want := b.row(b.bg, "a\x1b[0mb"), "<bg> a\x1b[0m<bg>b"+strings.Repeat(" ", 9)+"\x1b[0m"; got != want {
+		t.Errorf("row: got %q, want %q", got, want)
+	}
+	if got := b.row(b.bg, strings.Repeat("x", 20)); !strings.HasPrefix(got, "<bg> "+strings.Repeat("x", 9)+"… \x1b[0m") {
+		t.Errorf("long row not cut to the width: %q", got)
+	}
+
+	// The live region ends with the bottom padding until Close, which
+	// leaves the output as rows of the block.
+	var out bytes.Buffer
+	v := &TailView{out: &out, tty: true, width: 12, box: b}
+	v.draw()
+	v.tail, v.total = []string{"one"}, 1
+	v.draw()
+	out.Reset()
+	v.Close()
+	want := "\x1b[?2026h\r\x1b[2K\x1b[1A\x1b[2K\x1b[1A\x1b[2K" + b.row(b.bg, "one") + "\n\x1b[?2026l"
+	if out.String() != want || strings.Join(b.rows, "|") != "one" {
+		t.Errorf("close: got %q (rows %q), want %q", out.String(), b.rows, want)
+	}
+}
