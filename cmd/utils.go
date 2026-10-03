@@ -13,7 +13,6 @@ import (
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/ui"
 
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -47,7 +46,7 @@ func extractCommand(answer string) string {
 
 // copyToClipboard copies command and says so in a dim line.
 func copyToClipboard(command string) {
-	msg, err := copyText(command)
+	msg, err := copyText(command, func(text string) error { return ui.Copy(text, os.Stdout) })
 	if err != nil {
 		printError(err.Error())
 		return
@@ -55,10 +54,11 @@ func copyToClipboard(command string) {
 	fmt.Println(display.Success("✓") + " " + display.Dim(msg))
 }
 
-// copyText copies text to the clipboard and returns what to tell the user.
-func copyText(text string) (string, error) {
+// copyText copies text with copy (ui.Copy, Screen.Copy) and returns what
+// to tell the user.
+func copyText(text string, copy func(string) error) (string, error) {
 	text = strings.TrimSpace(text)
-	if err := clipboard.WriteAll(text); err != nil {
+	if err := copy(text); err != nil {
 		return "", errors.New("Failed to copy to clipboard: " + err.Error())
 	}
 	first, rest, multi := strings.Cut(text, "\n")

@@ -565,7 +565,7 @@ func (s *chatSession) copyAnswer(string) {
 			text = blocks[i].code
 		}
 	}
-	msg, err := copyText(text)
+	msg, err := copyText(text, s.scr.Copy)
 	if err != nil {
 		s.fail(err.Error())
 		return

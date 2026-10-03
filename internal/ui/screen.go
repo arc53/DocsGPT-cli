@@ -210,6 +210,15 @@ func (s *Screen) Mouse(on bool) {
 	})
 }
 
+// Copy puts text on the clipboard (see Copy), safe to call from any
+// goroutine.
+func (s *Screen) Copy(text string) error {
+	if s.m.out == nil {
+		return Copy(text, io.Discard)
+	}
+	return Copy(text, s.m.out)
+}
+
 // Quit ends Run.
 func (s *Screen) Quit() {
 	if !s.headless {
