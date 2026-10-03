@@ -686,6 +686,7 @@ func (s *chatSession) settings(string) {
 	if cfg, err := config.Load(); err == nil && saved {
 		s.cfg.Settings = cfg.Settings
 		s.scr.Mouse(cfg.Settings.Mouse != "off")
+		display.SetHyperlinks(cfg.Settings.Hyperlinks)
 		if url := cfg.ResolveURL(globalURL); url != s.baseURL {
 			s.baseURL, s.client.BaseURL = url, url
 			s.reset()
@@ -719,6 +720,7 @@ func (s *chatSession) help(string) {
 		{"esc", "clear the selection, stop the answer"},
 		{"ctrl+c", "stop the answer, clear the input; twice to quit"},
 		{"ctrl+d", "quit"},
+		{"ctrl+o", "expand or collapse tool output"},
 		{"ctrl+z", "suspend (fg to come back)"},
 	} {
 		fmt.Fprintf(&b, "  %-20s %s\n", k[0], display.Muted(k[1]))

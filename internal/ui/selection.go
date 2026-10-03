@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"fmt"
 	"io"
+	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 	"unicode"
@@ -78,8 +81,8 @@ func (m *screenModel) pointer(msg tea.MouseMsg) tea.Cmd {
 	case msg.Action == tea.MouseActionRelease:
 		s.held, s.dir = false, 0
 		if s.unit == 1 && !s.dragged {
-			m.sel = nil // a click
-			return nil
+			m.sel = nil // a click, which opens a link
+			return m.openLink(s.anchor)
 		}
 		s.x, s.y = msg.X, msg.Y
 		m.extend()
@@ -340,6 +343,99 @@ func highlight(line string, a, b int) string {
 	}
 	mid := sgr.ReplaceAllStringFunc(ansi.Cut(line, a, b), func(s string) string { return s + "\x1b[7m" })
 	return ansi.Cut(line, 0, a) + "\x1b[7m" + mid + "\x1b[27m" + ansi.TruncateLeft(line, b, "")
+}
+
+// openLink opens the hyperlink (OSC 8) at p in the browser, as pi does: the
+// terminal does not, while the chat takes the mouse. Not over SSH, where
+// the browser would open on the server.
+func (m *screenModel) openLink(p point) tea.Cmd {
+	lines, _ := m.rows(p.line, p.line, false)
+	if len(lines) == 0 || remote() {
+		return nil
+	}
+	u := linkAt(lines[0], p.col)
+	if u == "" {
+		return nil
+	}
+	return func() tea.Msg { return openedMsg{u, openURL(u)} }
+}
+
+type openedMsg struct {
+	url string
+	err error
+}
+
+// linkAt is the URL of the hyperlink on column col of a styled line, ""
+// for none.
+func linkAt(line string, col int) string {
+	active, at := "", 0
+	for i := 0; i < len(line); {
+		if line[i] == 0x1b {
+			n := escLen(line[i:])
+			if rest, ok := strings.CutPrefix(line[i:i+n], "\x1b]8;"); ok {
+				rest = strings.TrimSuffix(strings.TrimSuffix(rest, "\x07"), "\x1b\\")
+				_, active, _ = strings.Cut(rest, ";")
+			}
+			i += n
+			continue
+		}
+		g, _, w, _ := uniseg.FirstGraphemeClusterInString(line[i:], -1)
+		if col >= at && col < at+w {
+			return active
+		}
+		at += w
+		i += len(g)
+	}
+	return ""
+}
+
+// escLen is the length of the escape sequence s starts with: CSI to its
+// final byte, OSC to BEL or ST, others two bytes.
+func escLen(s string) int {
+	if len(s) < 2 {
+		return len(s)
+	}
+	switch s[1] {
+	case '[':
+		for i := 2; i < len(s); i++ {
+			if s[i] >= 0x40 && s[i] <= 0x7e {
+				return i + 1
+			}
+		}
+		return len(s)
+	case ']':
+		for i := 2; i < len(s); i++ {
+			if s[i] == 0x07 {
+				return i + 1
+			}
+			if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '\\' {
+				return i + 2
+			}
+		}
+		return len(s)
+	}
+	return 2
+}
+
+// openURL opens an http(s) or mailto URL with the system's handler.
+var openURL = func(u string) error {
+	if l := strings.ToLower(u); !strings.HasPrefix(l, "https://") && !strings.HasPrefix(l, "http://") && !strings.HasPrefix(l, "mailto:") {
+		return fmt.Errorf("not a web link")
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", u)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", u)
+	default:
+		cmd = exec.Command("xdg-open", u)
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
 }
 
 // copy copies text and says so in the status row.

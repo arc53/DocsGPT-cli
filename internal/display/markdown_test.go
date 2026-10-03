@@ -73,7 +73,7 @@ func TestMarkdownLooseList(t *testing.T) {
 func TestMarkdownPunctuation(t *testing.T) {
 	md := "Shells: `Bash`, `Zsh`, and `Fish` are supported; see [the docs](https://example.com), **bold**, *em*, and `x`."
 	eachStyle(t, func(colors bool) {
-		for w := 20; w <= 100; w++ {
+		for w := 22; w <= 100; w++ { // from where "(https://example.com)," fits
 			out := rendered(md, w)
 			checkRows(t, out, w)
 			for _, row := range strings.Split(out, "\n") {

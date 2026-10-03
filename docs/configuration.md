@@ -87,6 +87,7 @@ CI jobs can set the variables instead of logging in.
 | `DOCSGPT_URL` | Server URL |
 | `DOCSGPT_WEBHOOK_URL` | Default webhook for `agents trigger` |
 | `DOCSGPT_NO_UPDATE_CHECK` | Turns off every update check and auto-update |
+| `DOCSGPT_HYPERLINKS` | `1`, `0` or `auto`: overrides the `hyperlinks` setting |
 | `NO_COLOR` | No colours |
 | `VISUAL`, `EDITOR` | Editor for Ctrl+G in the chat |
 | `DOCSGPT_CLI_VERSION`, `DOCSGPT_NO_MODIFY_PATH` | For the [install scripts](install.md) |
@@ -112,6 +113,7 @@ docsgpt-cli config path                       # ~/.docsgpt/config.json
 | `banner` | `always`, `once`, `never` | `once` |
 | `theme` | `auto`, `dark`, `light` | `auto` |
 | `mouse` | `on`, `off`: scroll the chat with the wheel and select text to copy it ([Scrolling](chat.md#scrolling), [Selecting text](chat.md#selecting-text)) | `on` |
+| `hyperlinks` | `auto`, `on`, `off`: links in answers are clickable, without their URL ([Links](chat.md#links)) | `auto` |
 | `send_current_directory` | `true`, `false` | `true` |
 | `send_directory_contents` | `true`, `false` | `true` |
 | `send_project_instructions` | `true`, `false` (AGENTS.md / CLAUDE.md) | `true` |

@@ -109,6 +109,7 @@ stays open without input (ssh, CI jobs, a "while read" loop), pass --no-stdin.`,
 			theme = startupConfig.Settings.Theme
 		}
 		display.InitTheme(theme)
+		display.SetHyperlinks(startupConfig.Settings.Hyperlinks)
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if chatContinue || chatResume {

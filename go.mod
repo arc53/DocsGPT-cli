@@ -18,6 +18,7 @@ require (
 	github.com/spf13/cobra v1.8.1
 	github.com/tidwall/gjson v1.19.0
 	github.com/yuin/goldmark v1.7.13
+	github.com/yuin/goldmark-emoji v1.0.6
 	golang.org/x/mod v0.38.0
 	golang.org/x/sys v0.37.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -45,7 +46,6 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
 	golang.org/x/net v0.38.0 // indirect

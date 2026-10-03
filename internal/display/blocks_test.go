@@ -1,6 +1,7 @@
 package display
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -65,9 +66,60 @@ func TestToolBlock(t *testing.T) {
 	}
 	b.Write([]byte("progress 10%\rprogress 100%"))
 	b.Close(false, "exit 2 · 0.1s")
-	want := "$ make␛[2J in /src\n  … 4 earlier lines\n  line 4\n  line 5\n  line 6\n  line 7\n  progress 100%\n  ✗ exit 2 · 0.1s"
+	want := "$ make␛[2J in /src\n  … 4 earlier lines · ctrl+o to expand\n  line 4\n  line 5\n  line 6\n  line 7\n  progress 100%\n  ✗ exit 2 · 0.1s"
 	if got := xansi.Strip(strings.Join(b.Lines(40), "\n")); got != want {
 		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+	if !b.Folds() {
+		t.Error("9 lines do not fold")
+	}
+
+	b.Expand(true)
+	want = "$ make␛[2J in /src\n  line 0\n  line 1\n  line 2\n  line 3\n  line 4\n  line 5\n  line 6\n  line 7\n  progress 100%\n  ✗ exit 2 · 0.1s · ctrl+o to collapse"
+	if got := xansi.Strip(strings.Join(b.Lines(40), "\n")); got != want {
+		t.Errorf("expanded: got\n%s\nwant\n%s", got, want)
+	}
+	if got, want := copied(b, 40), strings.ReplaceAll(want, "\n  ", "\n"); got != want {
+		t.Errorf("expanded copies:\n%s\nwant\n%s", got, want)
+	}
+	b.Expand(false)
+	if got := xansi.Strip(strings.Join(b.Lines(40), "\n")); !strings.Contains(got, "… 4 earlier lines") {
+		t.Errorf("collapsed again:\n%s", got)
+	}
+
+	short := NewToolBlock("$ true", "")
+	short.Write([]byte("a\nb\n"))
+	short.Close(true, "exit 0")
+	short.Expand(true)
+	if got := xansi.Strip(strings.Join(short.Lines(40), "\n")); short.Folds() || got != "$ true\n  a\n  b\n  ✓ exit 0" {
+		t.Errorf("short output: %q", got)
+	}
+}
+
+// TestToolBlockKeeps: expanded, a block shows what the model gets of the
+// output, the last 2000 lines or 50 KB, and counts the rest.
+func TestToolBlockKeeps(t *testing.T) {
+	UsePlainTheme()
+	defer InitTheme("dark")
+	b := NewToolBlock("$ seq", "")
+	b.Expand(true)
+	for i := range 2500 {
+		fmt.Fprintf(b, "%d\n", i)
+	}
+	rows := strings.Split(xansi.Strip(strings.Join(b.Lines(40), "\n")), "\n")
+	if len(rows) != 2002 || rows[1] != "  … 500 earlier lines" || rows[2] != "  500" || rows[2001] != "  2499" {
+		t.Errorf("by lines: %d rows, %q … %q", len(rows), rows[1:3], rows[len(rows)-1])
+	}
+
+	b = NewToolBlock("$ big", "")
+	b.Expand(true)
+	line := strings.Repeat("x", 99)
+	for range 1000 {
+		b.Write([]byte(line + "\n"))
+	}
+	b.Write([]byte(strings.Repeat("y", 10000) + "\n"))
+	if n := len(b.out); b.size > keptBytes || b.size < keptBytes-200 || len(b.out[n-1]) != lineBytes {
+		t.Errorf("by bytes: %d lines, %d bytes, last %d", n, b.size, len(b.out[n-1]))
 	}
 }
 

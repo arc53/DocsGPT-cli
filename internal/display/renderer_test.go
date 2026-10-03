@@ -130,7 +130,7 @@ func TestStreamRendererStripsControls(t *testing.T) {
 	}
 }
 
-var escape = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+var escape = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]|\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)`)
 
 // emulate replays out on a terminal of the given size and returns the text
 // left on it, scrollback included. It knows the sequences the renderer

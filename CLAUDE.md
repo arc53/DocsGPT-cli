@@ -101,7 +101,21 @@ internal/
                        apart), then `rewrap` wraps at spaces only (wrapWords: words
                        never split unless wider than a row, styles carried per row)
                        under indent / quote bars / list hang. Unindented tables go to
-                       a glamour renderer at the width
+                       a glamour renderer at the width. Links (incl. autolinks, bare
+                       URLs) are marked in the AST (`markLinks`: U+FDD0/FDD1 emoji
+                       nodes around the text, destination → "#" so glamour prints no
+                       URL), then `placeLinks` swaps the markers for OSC 8 (ST) or a
+                       dim ` (url)`, and `relink` makes each wrapped row open/close
+                       its own links
+    links.go         → hyperlinks: setting `hyperlinks` auto|on|off (SetHyperlinks in
+                       the root PersistentPreRun) < DOCSGPT_HYPERLINKS=0|1|auto; auto =
+                       pi's list (kitty, Ghostty, WezTerm, Warp, iTerm2 incl.
+                       LC_TERMINAL over ssh, Windows Terminal, Alacritty, VS Code, Zed;
+                       tmux only when `client_termfeatures` has hyperlinks; screen,
+                       Terminal.app, unknown off). linkURL: http(s)/mailto, printable
+                       ASCII (non-ASCII escaped via net/url), else not a hyperlink.
+                       The model's own sequences are gone (StripControls) and the
+                       markers dropped from its text before parsing
     chrome.go        → one dim header line (docsgpt · key · host · cwd) for ask; chat:
                        chatHeader (2-row mark + version, key hints, `Context` files),
                        ChatFooter (cwd + git branch read from .git/HEAD, worktrees and
@@ -113,8 +127,11 @@ internal/
                        Answer (streamed: reasoning dim italic on top when shown, the
                        finished markdown blocks rendered once via commitPoint, the
                        last one again per frame; one glamour renderer kept per width);
-                       ToolBlock (title + note, preview, last 5 output lines, ✓/✗
-                       status, on toolBox rows tinted by the outcome)
+                       ToolBlock (title + note, preview, output, ✓/✗ status, on
+                       toolBox rows tinted by the outcome; keeps the output the
+                       model gets, 2000 lines / 50 KB, lines cut to their last
+                       4 KB; a ui.Expander: collapsed the last 5 lines under
+                       `… N earlier lines · ctrl+o to expand`, expanded all kept)
     style.go         → Accent/Muted/Dim/Success/Warn helpers, ErrorMsg (stderr)
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
                        (live last-5-lines region), DiffPreview for writes. With
@@ -135,8 +152,8 @@ internal/
                        chats, the user-message block, /export, error messages)
     copy.go          → how the chat's blocks copy (ui.Plain): joins, markdownPlain,
                        unwrapped (see chat command, Selection)
-    sources.go       → dim numbered "Sources" block, OSC 8 links (printable-ASCII
-                       http(s) URLs only), TTY only
+    sources.go       → dim numbered "Sources" block, OSC 8 links (linkURL, http(s)
+                       only; unless hyperlinks are set off), TTY only
     background*.go   → auto theme: COLORFGBG, else one OSC 11 query (stdout TTY only,
                        150ms max); the answer also feeds glamour and lipgloss
     banner.go        → dino banner, top of the chat's transcript, default "once"
@@ -256,6 +273,10 @@ or with TERM=dumb it refuses.
   editor and no panel, Ctrl+Home/Ctrl+End always. Sending, and a panel opening,
   return to the end. A resize keeps a scrolled-back view on the same block, at
   the same share of it (blocks re-render at the new width).
+- Ctrl+O (pi's app.tools.expand): `expanded` toggles every `ui.Expander` block
+  (ToolBlock; reasoning stays with /think), new ones are added in that state;
+  a scrolled-back view keeps its top line, or goes to the start of the block
+  at its top when that block folds; flash `Tool output expanded/collapsed`.
 - Selection (`ui/selection.go`, pi's fullscreen behaviour): with the mouse on,
   a left press in the transcript starts it, drag events (cell motion, 1002)
   extend it, the release copies it (`ui.Copy`, in a tea.Cmd) and flashes
@@ -266,6 +287,9 @@ or with TERM=dumb it refuses.
   transcript scrolls a line per 50ms tick while held. Highlight: reverse video,
   re-set after every SGR, grapheme-aligned (wide chars whole). A click, Esc
   (before anything else it would do), a resize, Clear or mouse off clear it.
+  A click (no drag) on an OSC 8 link opens it (`openURL`: open / xdg-open /
+  rundll32; not over SSH) and flashes `Opened <url>`, as pi does: the
+  terminal cannot while the chat holds the mouse.
   Copy text: `ui.Unwrap` over the rows' `ui.Plain` (Indent = decoration columns
   left out, Wrap + Sep = a soft wrap and what it took out); blocks implementing
   `ui.Plainer` supply it, others copy as shown. display finds it in `copy.go`:

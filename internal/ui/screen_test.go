@@ -120,6 +120,76 @@ func TestScreenResizeKeepsPlace(t *testing.T) {
 	}
 }
 
+// fold is an Expander: a title and 3 of its n lines, all of them expanded.
+type fold struct {
+	name     string
+	n        int
+	expanded bool
+}
+
+func (f *fold) Expand(on bool) { f.expanded = on }
+func (f *fold) Folds() bool    { return f.n > 3 }
+func (f *fold) Lines(int) []string {
+	out := []string{"$ " + f.name}
+	for i := range f.n {
+		if f.expanded || i >= f.n-3 {
+			out = append(out, fmt.Sprintf("%s out %d", f.name, i))
+		}
+	}
+	return out
+}
+
+// TestScreenExpand: Ctrl+O expands and collapses every Expander, new ones
+// too; the view stays at the end, or on the line at its top, or on the
+// start of the block at its top when that one changed.
+func TestScreenExpand(t *testing.T) {
+	stubClipboard(t)
+	f1, f2 := &fold{name: "f1", n: 20}, &fold{name: "f2", n: 2}
+	m := testScreen(70, 12, &numbered{"a", 10}, f1, f2, &numbered{"b", 10}) // 7 transcript rows
+	rows(m)
+	ctrlO := func() { m.Update(tea.KeyMsg{Type: tea.KeyCtrlO}) }
+
+	ctrlO()
+	r := rows(m)
+	if !f1.expanded || !f2.expanded || !m.follow || r[6] != "b 9" || !strings.Contains(r[7], "Tool output expanded") {
+		t.Fatalf("expanded at the end: %q / %q", r[:7], r[7])
+	}
+	f3 := &fold{name: "f3", n: 9}
+	m.Update(doMsg(func(m *screenModel) tea.Cmd { // as Screen.Add
+		(&Screen{m: m, headless: true}).Add(f3)
+		return nil
+	}))
+	if !f3.expanded {
+		t.Fatal("a new block was not expanded")
+	}
+
+	// The top in a block below f1: on the same line.
+	m.top, m.follow = m.offset(3)+4, false
+	if r = rows(m); r[0] != "b 4" {
+		t.Fatalf("setup: %q", r[0])
+	}
+	ctrlO()
+	if r = rows(m); r[0] != "b 4" || f1.expanded || !strings.Contains(r[7], "Tool output collapsed") {
+		t.Fatalf("collapsed: top %q, status %q", r[0], r[7])
+	}
+
+	// The top inside f1: from its start.
+	m.top = m.offset(1) + 2
+	if r = rows(m); r[0] != "f1 out 18" {
+		t.Fatalf("setup: %q", r[0])
+	}
+	ctrlO()
+	if r = rows(m); r[0] != "$ f1" || r[1] != "f1 out 0" || m.follow {
+		t.Fatalf("expanded inside: %q", r[:3])
+	}
+	// The top in f2, which shows the same either way: on its line.
+	m.top = m.offset(2) + 1
+	ctrlO()
+	if r = rows(m); r[0] != "f2 out 0" {
+		t.Fatalf("a block that does not fold: %q", r[:3])
+	}
+}
+
 // TestScreenJump: Ctrl+↑/↓ move between the user's messages.
 func TestScreenJump(t *testing.T) {
 	m := testScreen(40, 12, &prompt{numbered{"q1", 1}}, &numbered{"a", 20}, &prompt{numbered{"q2", 1}}, &numbered{"b", 20})

@@ -35,8 +35,8 @@ func sourceLines(sources []docsgpt.Source, width int) []string {
 	seen := map[string]bool{}
 	for _, s := range sources {
 		e := entry{title: s.Title}
-		if linkable(s.Source) {
-			e.url = s.Source
+		if u, ok := linkURL(s.Source); ok && !strings.HasPrefix(u, "mailto:") {
+			e.url = u
 		}
 		if e.title == "" {
 			e.title = s.Filename
@@ -56,12 +56,13 @@ func sourceLines(sources []docsgpt.Source, width int) []string {
 	if len(list) == 0 {
 		return nil
 	}
-	links := os.Getenv("TERM") != "dumb"
+	// The title shows either way: linked unless hyperlinks are off.
+	links := os.Getenv("TERM") != "dumb" && hyperlinkMode() != "off"
 	lines := []string{T.Dim.Render("Sources")}
 	for i, e := range list[:min(len(list), maxSources)] {
 		title := T.Muted.Render(ansi.Truncate(e.title, width-6, "…"))
 		if e.url != "" && links {
-			title = ansi.SetHyperlink(e.url) + title + ansi.ResetHyperlink()
+			title = openLink(e.url) + title + closeLink
 		}
 		lines = append(lines, fmt.Sprintf("  %s %s", T.Dim.Render(fmt.Sprintf("%d.", i+1)), title))
 	}
@@ -69,19 +70,4 @@ func sourceLines(sources []docsgpt.Source, width int) []string {
 		lines = append(lines, "  "+T.Dim.Render(fmt.Sprintf("+%d more", more)))
 	}
 	return lines
-}
-
-// linkable reports whether a source URL can go into an OSC 8 hyperlink: an
-// http(s) URL of printable ASCII only, so it cannot end the sequence early
-// and inject its own.
-func linkable(u string) bool {
-	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
-		return false
-	}
-	for i := 0; i < len(u); i++ {
-		if u[i] <= ' ' || u[i] >= 0x7f {
-			return false
-		}
-	}
-	return true
 }

@@ -67,19 +67,32 @@ func TestToolBlockSpoofing(t *testing.T) {
 	}
 }
 
-func TestLinkable(t *testing.T) {
-	for u, want := range map[string]bool{
-		"https://docs.example.com/a?b=c#d":      true,
-		"http://x":                              true,
-		"ftp://x":                               false,
-		"https://x\x07\x1b]8;;https://evil\x07": false,
-		"https://x\x1b\\injected":               false,
-		"https://x/\u009c":                      false,
-		"https://x/ space":                      false,
-		"javascript:alert(1)":                   false,
+func TestLinkURL(t *testing.T) {
+	for u, want := range map[string]string{
+		"https://docs.example.com/a?b=c#d":      "https://docs.example.com/a?b=c#d",
+		"http://x":                              "http://x",
+		"HTTPS://x":                             "HTTPS://x",
+		"mailto:a@b.c":                          "mailto:a@b.c",
+		"https://x/ space":                      "https://x/%20space",
+		"https://x/\u009c":                      "https://x/%C2%9C",
+		"https://x/ü":                           "https://x/%C3%BC",
+		"ftp://x":                               "",
+		"file:///etc/passwd":                    "",
+		"javascript:alert(1)":                   "",
+		"/docs/relative":                        "",
+		"https://x\x07\x1b]8;;https://evil\x07": "",
+		"https://x\x1b\\injected":               "",
+		"https://x\ny":                          "",
 	} {
-		if got := linkable(u); got != want {
-			t.Errorf("linkable(%q) = %v, want %v", u, got, want)
+		got, ok := linkURL(u)
+		if !ok {
+			got = ""
+		}
+		if got != want {
+			t.Errorf("linkURL(%q) = %q, want %q", u, got, want)
+		}
+		if strings.ContainsAny(got, "\x1b\x07\x9c ") {
+			t.Errorf("linkURL(%q) = %q: not printable ASCII", u, got)
 		}
 	}
 }

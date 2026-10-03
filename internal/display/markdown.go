@@ -15,6 +15,8 @@ import (
 	"github.com/muesli/termenv"
 	"github.com/rivo/uniseg"
 	"github.com/yuin/goldmark"
+	east "github.com/yuin/goldmark-emoji/ast"
+	"github.com/yuin/goldmark-emoji/definition"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
@@ -73,6 +75,9 @@ type olist struct {
 var listKey = parser.NewContextKey()
 
 func (layout) Transform(doc *ast.Document, reader text.Reader, pc parser.Context) {
+	if refs, _ := pc.Get(linksKey).(*[]linkRef); refs != nil {
+		markLinks(doc, reader.Source(), refs)
+	}
 	// Numbered from where the previous block left off: goldmark numbers a
 	// list from its first item, which may say "1." for every item.
 	if l, _ := pc.Get(listKey).(*olist); l != nil {
@@ -122,6 +127,133 @@ func (layout) Transform(doc *ast.Document, reader text.Reader, pc parser.Context
 		}
 		return ast.WalkContinue, nil
 	})
+}
+
+// A link's text is rendered between two markers, which placeLinks then
+// swaps for the link (see links.go); glamour would print its URL after it.
+// They are noncharacters, taken out of the markdown first.
+const (
+	linkStart = '﷐'
+	linkEnd   = '﷑'
+)
+
+// linkRef is a link of the markdown, in the order rendered.
+type linkRef struct {
+	url  string // the destination
+	text string // the text, plain
+}
+
+// linksKey passes renderMarkdown's *[]linkRef to layout.
+var linksKey = parser.NewContextKey()
+
+// markLinks puts the markers around the text of every link, autolink and
+// bare URL, and lists them in refs. The link's destination becomes an
+// anchor, which glamour does not print.
+func markLinks(doc ast.Node, src []byte, refs *[]linkRef) {
+	var found []ast.Node
+	ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if k := n.Kind(); entering && (k == ast.KindLink || k == ast.KindAutoLink) {
+			found = append(found, n)
+			return ast.WalkSkipChildren, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	marker := func(r rune) ast.Node { return east.NewEmoji(nil, &definition.Emoji{Unicode: []rune{r}}) }
+	for _, n := range found {
+		var ref linkRef
+		switch n := n.(type) {
+		case *ast.Link:
+			ref = linkRef{url: string(n.Destination), text: plainText(n, src)}
+			n.Destination = []byte("#")
+			if n.FirstChild() != nil {
+				n.InsertBefore(n, n.FirstChild(), marker(linkStart))
+			} else {
+				n.AppendChild(n, marker(linkStart))
+			}
+			n.AppendChild(n, marker(linkEnd))
+		case *ast.AutoLink:
+			// The label is a slice of src: its capacity tells where.
+			label := n.Label(src)
+			at := cap(src) - cap(label)
+			if len(label) == 0 || at < 0 || at+len(label) > len(src) || string(src[at:at+len(label)]) != string(label) {
+				continue
+			}
+			ref = linkRef{url: string(n.URL(src)), text: string(label)}
+			if n.AutoLinkType == ast.AutoLinkEmail && !strings.HasPrefix(strings.ToLower(ref.url), "mailto:") {
+				ref.url = "mailto:" + ref.url
+			}
+			link := ast.NewLink()
+			link.Destination = []byte("#")
+			link.AppendChild(link, marker(linkStart))
+			link.AppendChild(link, ast.NewTextSegment(text.NewSegment(at, at+len(label))))
+			link.AppendChild(link, marker(linkEnd))
+			n.Parent().ReplaceChild(n.Parent(), n, link)
+		}
+		*refs = append(*refs, ref)
+	}
+}
+
+// plainText is the text of n's inline children.
+func plainText(n ast.Node, src []byte) string {
+	var b strings.Builder
+	ast.Walk(n, func(c ast.Node, entering bool) (ast.WalkStatus, error) {
+		if t, ok := c.(*ast.Text); ok && entering {
+			b.Write(t.Segment.Value(src))
+		}
+		return ast.WalkContinue, nil
+	})
+	return b.String()
+}
+
+// placeLinks swaps the markers in rendered output for the links of refs:
+// OSC 8 around the text where the terminal shows hyperlinks, else the URL
+// after the text, dim, unless the text is the URL. A link that may not go
+// into a hyperlink (javascript:, a relative path) shows that way too.
+func placeLinks(out string, refs []linkRef) string {
+	if !strings.ContainsAny(out, string(linkStart)+string(linkEnd)) {
+		return out
+	}
+	on := hyperlinks()
+	var b strings.Builder
+	k := -1 // the link being placed
+	for _, r := range out {
+		switch r {
+		case linkStart:
+			k++
+			if k < len(refs) && on {
+				if u, ok := linkURL(refs[k].url); ok {
+					b.WriteString(openLink(u))
+				}
+			}
+		case linkEnd:
+			if k < 0 || k >= len(refs) {
+				continue
+			}
+			ref := refs[k]
+			if _, ok := linkURL(ref.url); ok && on {
+				b.WriteString(closeLink)
+				continue
+			}
+			if bare := strings.TrimPrefix(ref.url, "mailto:"); ref.url != "" && !strings.HasPrefix(ref.url, "#") && ref.text != ref.url && ref.text != bare {
+				if Colorless() {
+					b.WriteString(" (" + Safe(ref.url) + ")")
+				} else {
+					b.WriteString("\x1b[0m" + T.Dim.Render(" ("+Safe(ref.url)+")"))
+				}
+			}
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// dropMarkers takes the link markers out of text.
+func dropMarkers(s string) string {
+	if !strings.ContainsAny(s, string(linkStart)+string(linkEnd)) {
+		return s
+	}
+	return strings.NewReplacer(string(linkStart), "", string(linkEnd), "").Replace(s)
 }
 
 // markdownStyle builds the glamour style from the palette: no margins or
@@ -178,7 +310,7 @@ func ptr[T any](v T) *T { return &v }
 // list, when md is a block of a streamed answer, tells how the block before
 // it ended, and is set to how md ends.
 func renderMarkdown(m *markdown, width int, md string, list *olist) string {
-	md = strings.ReplaceAll(md, "\r\n", "\n")
+	md = dropMarkers(strings.ReplaceAll(md, "\r\n", "\n"))
 	var parts []string
 	add := func(out string) {
 		if list != nil {
@@ -197,16 +329,22 @@ func renderMarkdown(m *markdown, width int, md string, list *olist) string {
 			return
 		}
 		var b strings.Builder
+		var refs []linkRef
 		pc := parser.NewContext()
 		if list != nil {
 			pc.Set(listKey, list)
 		}
+		pc.Set(linksKey, &refs)
 		if err := m.prose.Convert([]byte(text), &b, parser.WithContext(pc)); err != nil {
 			add(tidy(text))
 			return
 		}
-		if out := rewrap(tidy(b.String()), width); out != "" {
-			parts = append(parts, out)
+		if out := rewrap(placeLinks(tidy(b.String()), refs), width); out != "" {
+			lines := strings.Split(out, "\n")
+			for i, l := range lines {
+				lines[i] = relink(l)
+			}
+			parts = append(parts, strings.Join(lines, "\n"))
 		}
 	}
 
