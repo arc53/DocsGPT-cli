@@ -93,7 +93,15 @@ internal/
                        token; visible reasoning is a dim italic block of its own
     markdown.go      → glamour style built from the palette (no margins/fills); top-level
                        code fences drawn by us (dim ``` lines, 2-space indent, chroma
-                       tokens colored from the palette)
+                       tokens colored from the palette). Glamour never wraps prose (its
+                       wrapper miscounts hyphens, then re-wraps: orphan words/commas,
+                       quote rows without a bar): goldmark + glamour's ANSI renderer at
+                       width 0 with a `layout` AST pass (soft breaks → spaces, a list
+                       item's later paragraphs on new lines, loose items a blank line
+                       apart), then `rewrap` wraps at spaces only (wrapWords: words
+                       never split unless wider than a row, styles carried per row)
+                       under indent / quote bars / list hang. Unindented tables go to
+                       a glamour renderer at the width
     chrome.go        → one dim header line (docsgpt · key · host · cwd) for ask; chat:
                        chatHeader (2-row mark + version, key hints, `Context` files),
                        ChatFooter (cwd + git branch read from .git/HEAD, worktrees and
