@@ -273,3 +273,103 @@ func TestEditorSetTextPrintable(t *testing.T) {
 		t.Fatalf("setText kept controls: %q", got)
 	}
 }
+
+func undo(m *editorModel) { press(m, key(tea.KeyCtrlUnderscore)) }
+
+// TestEditorUndo: a word typed is one step with the space before it, a
+// run of backspaces one step, and deletions, pastes and recalls each one.
+func TestEditorUndo(t *testing.T) {
+	m := testEditor()
+	for _, r := range "hello big world" {
+		press(m, runes(string(r)))
+	}
+	for _, want := range []string{"hello big", "hello", "", ""} {
+		if undo(m); m.text() != want {
+			t.Fatalf("undo: %q, want %q", m.text(), want)
+		}
+	}
+
+	// A move ends a word: typing after it is a step of its own.
+	press(m, runes("ab"), key(tea.KeyLeft), runes("x"))
+	if undo(m); m.text() != "ab" || m.col != 1 {
+		t.Fatalf("undo after a move: %q col %d", m.text(), m.col)
+	}
+
+	m = testEditor()
+	press(m, runes("one two"), key(tea.KeyCtrlJ), runes("three"))
+	for _, k := range []tea.KeyMsg{key(tea.KeyCtrlU), key(tea.KeyCtrlW), key(tea.KeyCtrlK), key(tea.KeyCtrlC)} {
+		before, col := m.text(), m.col
+		if k.Type == tea.KeyCtrlK {
+			press(m, key(tea.KeyCtrlA))
+			col = 0
+		}
+		press(m, k)
+		if m.text() == before {
+			t.Fatalf("%s changed nothing", k)
+		}
+		if undo(m); m.text() != before || m.col != col {
+			t.Fatalf("undo %s: %q col %d, want %q col %d", k, m.text(), m.col, before, col)
+		}
+	}
+
+	// A run of backspaces is one step.
+	press(m, key(tea.KeyCtrlE))
+	for range 4 {
+		press(m, key(tea.KeyBackspace))
+	}
+	if undo(m); m.text() != "one two\nthree" {
+		t.Fatalf("undo backspaces: %q", m.text())
+	}
+
+	// A paste and the cut of its marker come back with the paste.
+	big := strings.Repeat("line\n", 15) + "end"
+	press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(big), Paste: true})
+	marked := m.text()
+	press(m, key(tea.KeyBackspace))
+	if undo(m); m.text() != marked || m.expanded() != "one two\nthree"+big {
+		t.Fatalf("undo the marker's cut: %q", m.text())
+	}
+	if undo(m); m.text() != "one two\nthree" || len(m.pastes) != 0 {
+		t.Fatalf("undo the paste: %q, %d pastes", m.text(), len(m.pastes))
+	}
+
+	// Going back through the history is one step back to the draft.
+	h := LoadHistory(filepath.Join(t.TempDir(), "history"))
+	h.Add("old one")
+	h.Add("old two")
+	m = newEditorModel(nil, h)
+	press(m, key(tea.KeyUp), key(tea.KeyUp))
+	if m.text() != "old one" {
+		t.Fatalf("history: %q", m.text())
+	}
+	press(m, runes("!"))
+	undo(m)
+	if undo(m); m.text() != "" || m.hist != 2 {
+		t.Fatalf("undo the recall: %q, hist %d", m.text(), m.hist)
+	}
+
+	// The $EDITOR result, and nothing after a send.
+	m = testEditor()
+	press(m, runes("draft"))
+	f := filepath.Join(t.TempDir(), "msg.md")
+	os.WriteFile(f, []byte("edited\n"), 0o600)
+	m.update(editedMsg{path: f})
+	if m.text() != "edited" {
+		t.Fatalf("edited: %q", m.text())
+	}
+	if undo(m); m.text() != "draft" {
+		t.Fatalf("undo the edit: %q", m.text())
+	}
+	m.take()
+	if undo(m); m.text() != "" {
+		t.Fatalf("undo after send: %q", m.text())
+	}
+
+	// The stack is capped.
+	for i := range undoMax + 20 {
+		press(m, runes(fmt.Sprint(i%10)), runes(" "))
+	}
+	if len(m.undo) != undoMax {
+		t.Fatalf("%d steps kept", len(m.undo))
+	}
+}

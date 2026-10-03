@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"maps"
 	"os"
 	"os/exec"
 	"regexp"
@@ -29,6 +30,9 @@ var PasteMarker = regexp.MustCompile(`\[paste #(\d+) (?:\+\d+ lines|\d+ chars)\]
 // quitWindow is how soon a second Ctrl+C on an empty editor quits.
 const quitWindow = time.Second
 
+// undoMax is how many steps back Ctrl+- goes.
+const undoMax = 100
+
 // editorModel is the chat input of a Screen: multi-line text between two
 // dim rules, a dim footer line under them, prompt history on ↑/↓, large
 // pastes collapsed to a marker, and a popup of the slash commands.
@@ -50,6 +54,15 @@ type editorModel struct {
 	quitAt   time.Time
 	width    int
 	height   int
+	undo     []state // the states before the edits, the last one last
+	last     string  // the kind of the last edit (see editKind), "" after a move
+}
+
+// state is what an undo goes back to.
+type state struct {
+	lines    [][]rune
+	row, col int
+	pastes   map[int]string
 }
 
 // editorAction is what a key asks of the Screen.
@@ -81,9 +94,11 @@ func newEditorModel(commands []Command, history *History) *editorModel {
 
 func (m *editorModel) setSize(w, h int) { m.width, m.height = max(w, 10), max(h, 5) }
 
-func (m *editorModel) text() string {
-	parts := make([]string, len(m.lines))
-	for i, l := range m.lines {
+func (m *editorModel) text() string { return textOf(m.lines) }
+
+func textOf(lines [][]rune) string {
+	parts := make([]string, len(lines))
+	for i, l := range lines {
 		parts[i] = string(l)
 	}
 	return strings.Join(parts, "\n")
@@ -122,21 +137,104 @@ func (m *editorModel) update(msg tea.Msg) (tea.Cmd, editorAction) {
 		}
 	case editedMsg:
 		if data, err := os.ReadFile(msg.path); err == nil && msg.err == nil {
-			m.setText(strings.TrimRight(string(data), "\n"))
-			m.pastes = map[int]string{}
-			m.changed()
+			m.replace(strings.TrimRight(string(data), "\n"), nil)
 		}
 		os.Remove(msg.path)
 	case tea.KeyMsg:
-		before, row, col := m.text(), m.row, m.col
+		if msg.String() == "ctrl+_" { // Ctrl+-
+			m.undoLast()
+			return nil, editNothing
+		}
+		before, row, col := m.save(), m.row, m.col
+		browsing := m.hist < len(m.history.entries)
 		cmd, act := m.key(msg)
 		m.snap(row, col)
-		if s := msg.String(); m.text() != before && s != "up" && s != "down" {
+		if m.text() == textOf(before.lines) {
+			m.last = ""
+			return cmd, act
+		}
+		m.record(before, editKind(msg), browsing)
+		if s := msg.String(); s != "up" && s != "down" {
 			m.changed()
 		}
 		return cmd, act
 	}
 	return nil, editNothing
+}
+
+// editKind names the edit a key made: a word typed, a space typed, a
+// paste, or the key.
+func editKind(k tea.KeyMsg) string {
+	switch {
+	case k.Paste:
+		return "paste"
+	case (k.Type == tea.KeyRunes || k.Type == tea.KeySpace) && !k.Alt:
+		if strings.ContainsFunc(string(k.Runes), unicode.IsSpace) {
+			return "space"
+		}
+		return "word"
+	}
+	return k.String()
+}
+
+// record keeps the state before an edit of kind for undo. As in pi (and
+// fish), a word typed is one step together with the space before it, and
+// so is a run of the same deleting key; a recall from the history is one
+// step back to the draft, however far ↑ went.
+func (m *editorModel) record(before state, kind string, browsing bool) {
+	push := true
+	switch kind {
+	case "word":
+		push = m.last != "word" && m.last != "space"
+	case "backspace", "ctrl+h", "delete", "ctrl+d":
+		push = m.last != kind
+	case "up", "down":
+		push = !browsing
+	}
+	m.last = kind
+	if !push {
+		return
+	}
+	m.undo = append(m.undo, before)
+	if len(m.undo) > undoMax {
+		m.undo = slices.Delete(m.undo, 0, len(m.undo)-undoMax)
+	}
+}
+
+// save copies the state for undo.
+func (m *editorModel) save() state {
+	lines := make([][]rune, len(m.lines))
+	for i, l := range m.lines {
+		lines[i] = slices.Clone(l)
+	}
+	return state{lines, m.row, m.col, maps.Clone(m.pastes)}
+}
+
+// undoLast goes back to the state before the last edit.
+func (m *editorModel) undoLast() {
+	if len(m.undo) == 0 {
+		return
+	}
+	s := m.undo[len(m.undo)-1]
+	m.undo = m.undo[:len(m.undo)-1]
+	m.lines, m.row, m.col, m.pastes = s.lines, s.row, s.col, s.pastes
+	m.last, m.goal, m.shut = "", -1, ""
+	m.changed()
+}
+
+// replace sets the text and its pastes as one edit undo can take back
+// (the $EDITOR result).
+func (m *editorModel) replace(text string, pastes map[int]string) {
+	if before := m.save(); text != m.text() || !maps.Equal(pastes, m.pastes) {
+		m.record(before, "replace", false)
+	}
+	m.setText(text)
+	m.pastes = maps.Clone(pastes)
+	if m.pastes == nil {
+		m.pastes = map[int]string{}
+	}
+	m.last = ""
+	m.changed()
 }
 
 // changed follows an edit: history browsing ends, pastes whose marker is
@@ -294,6 +392,7 @@ func (m *editorModel) take() (text, shown string) {
 	m.history.Add(text)
 	m.lines, m.row, m.col, m.pastes = [][]rune{{}}, 0, 0, map[int]string{}
 	m.hist, m.draft, m.popup, m.shut, m.top, m.goal = len(m.history.entries), "", nil, "", 0, -1
+	m.undo, m.last = nil, ""
 	return text, shown
 }
 

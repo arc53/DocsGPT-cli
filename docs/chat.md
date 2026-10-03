@@ -87,6 +87,7 @@ wheel then does whatever the terminal does on a full-screen program: many send
 | Alt+← / Alt+→ (Ctrl+← / Ctrl+→) | Previous / next word |
 | Ctrl+W, Alt+Backspace | Delete the previous word |
 | Ctrl+U / Ctrl+K | Delete to the start / end of the line |
+| Ctrl+- | Undo: a word, a run of deletions, a paste or a recalled message at a time |
 | Esc | Clear the selection; else stop the answer or the command that runs |
 | Ctrl+C | Stop the answer, or clear the input; twice on an empty input quits |
 | Ctrl+D | Quit |

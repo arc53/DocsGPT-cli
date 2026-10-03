@@ -193,6 +193,8 @@ func legacyKey(params string, xterm bool) []byte {
 		s = string(rune(c & 0x1f))
 	case ctrl && c == '?':
 		s = "\x7f"
+	case ctrl && (c == '-' || c == '/'): // 0x1f, as a terminal sends them (undo)
+		s = "\x1f"
 	case shift && c >= 'a' && c <= 'z':
 		s = string(rune(c - 32))
 	default:

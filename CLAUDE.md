@@ -307,6 +307,11 @@ or with TERM=dumb it refuses.
   `[paste #N +L lines]` markers (one unit: the cursor never rests inside one, any
   deletion that reaches into one removes it whole; expanded on send, shown
   collapsed in the transcript); Ctrl+A/E/K/U/W, Alt+←/→; Ctrl+G opens $VISUAL/$EDITOR.
+  Ctrl+- (0x1f = ctrl+_; keys.go maps kitty/modifyOtherKeys Ctrl+- and Ctrl+/ to
+  it) undoes, pi's way: a stack of (lines, cursor, pastes) states, 100 deep,
+  cleared on send; a typed word is one step with the space before it, a run of
+  the same deleting key one step, a history recall one step back to the draft,
+  the $EDITOR result one step; no redo (pi has none).
   Typing `/` opens the command popup (prefix then fuzzy matches, under the editor); Tab
   completes, Enter runs the exact or selected command at once, Esc closes it.
 - Commands (`chatCommands`, one table for popup, /help, dispatch): /new (/clear:
