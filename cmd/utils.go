@@ -47,18 +47,27 @@ func extractCommand(answer string) string {
 
 // copyToClipboard copies command and says so in a dim line.
 func copyToClipboard(command string) {
-	command = strings.TrimSpace(command)
-	if err := clipboard.WriteAll(command); err != nil {
-		printError("Failed to copy to clipboard: " + err.Error())
+	msg, err := copyText(command)
+	if err != nil {
+		printError(err.Error())
 		return
 	}
-	first, rest, multi := strings.Cut(command, "\n")
+	fmt.Println(display.Success("✓") + " " + display.Dim(msg))
+}
+
+// copyText copies text to the clipboard and returns what to tell the user.
+func copyText(text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if err := clipboard.WriteAll(text); err != nil {
+		return "", errors.New("Failed to copy to clipboard: " + err.Error())
+	}
+	first, rest, multi := strings.Cut(text, "\n")
 	first = ansi.Truncate(first, 50, "…")
 	if multi {
 		n := strings.Count(rest, "\n") + 1
 		first += fmt.Sprintf(" (+%d more %s)", n, plural(n, "line", "lines"))
 	}
-	fmt.Println(display.Success("✓") + " " + display.Dim("Copied to clipboard: "+first))
+	return "Copied to clipboard: " + first, nil
 }
 
 // signalContext is cancelled by Ctrl+C, and by the TERM and HUP that

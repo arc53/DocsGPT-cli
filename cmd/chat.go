@@ -1,16 +1,17 @@
 package cmd
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
@@ -21,6 +22,7 @@ import (
 	"github.com/arc53/DocsGPT-cli/internal/ui"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 )
 
@@ -30,11 +32,12 @@ var chatCmd = &cobra.Command{
 	Hidden: true,
 	Long: `Start an interactive multi-turn chat session with DocsGPT.
 
-Type / for the commands, !cmd to run a shell command and send its output with
-your next message (!!cmd to keep it to yourself). Enter sends, Shift+Enter,
-Ctrl+J or Alt+Enter (or a trailing \) starts a new line, ↑/↓ browse earlier prompts and
-Ctrl+G edits the message in $EDITOR. Ctrl+C stops an answer or clears the
-input; twice on an empty input (or Ctrl+D) quits.`,
+The chat takes the whole window; the wheel, PgUp/PgDn and Shift+↑/↓ scroll
+it. Type / for the commands, !cmd to run a shell command and send its output
+with your next message (!!cmd to keep it to yourself). Enter sends, Shift+Enter,
+Ctrl+J or Alt+Enter (or a trailing \) starts a new line, ↑/↓ browse earlier
+prompts and Ctrl+G edits the message in $EDITOR. Esc or Ctrl+C stops an
+answer; Ctrl+C clears the input, twice on an empty input (or Ctrl+D) quits.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runChat(strings.Join(args, " "))
 	},
@@ -65,7 +68,10 @@ type chatSession struct {
 	toolDefs      []docsgpt.Tool
 	tools         *tools.Session
 	quit          bool
-	stopped       error // TERM or HUP ended a request: the chat exits with it
+
+	scr  *ui.Screen
+	ctx  context.Context // ends with the chat
+	said bool            // something was asked or shown again: the transcript is printed on exit
 }
 
 // chatCommand is a slash command of the chat.
@@ -95,6 +101,19 @@ func init() {
 }
 
 func runChat(first string) error {
+	if !ui.Interactive() {
+		return ui.ErrNotInteractive
+	}
+	if os.Getenv("TERM") == "dumb" {
+		return errors.New(`the chat needs a terminal that can move the cursor (TERM is "dumb"); ask one question at a time instead: docsgpt-cli "question"`)
+	}
+	if chatResume {
+		cwd, _ := os.Getwd()
+		if list, err := session.List(cwd); err != nil || len(list) == 0 {
+			fmt.Println(display.Dim("No earlier chat in this directory."))
+			return nil
+		}
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -114,13 +133,67 @@ func runChat(first string) error {
 	if !globalNoTools {
 		s.toolDefs = tools.ToolDefinitions()
 	}
+	var commands []ui.Command
+	for _, c := range chatCommands {
+		commands = append(commands, ui.Command{Name: c.name, Description: c.desc})
+	}
+	s.scr = ui.NewScreen(ui.ScreenOptions{
+		Commands: commands,
+		History:  ui.LoadHistory(filepath.Join(config.Dir(), "history")),
+		Mouse:    true,
+	})
+	s.tools.UI = &screenTools{scr: s.scr}
 
-	// -r picks the chat first, inline: leaving the picker leaves the
-	// window as it was.
+	ctx, cancel := context.WithCancel(context.Background())
+	s.ctx = ctx
+	done := make(chan any, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.scr.Kill()
+				done <- fmt.Sprintf("%v\n\n%s", r, debug.Stack())
+				return
+			}
+			done <- nil
+		}()
+		s.loop(first)
+		s.scr.Quit()
+	}()
+	err = s.scr.Run()
+	cancel() // whatever still runs
+	select {
+	case r := <-done:
+		if r != nil {
+			panic(r) // the terminal is restored
+		}
+	case <-time.After(3 * time.Second):
+	}
+
+	var sig ui.Signal
+	hup := errors.As(err, &sig) && sig.Signal == syscall.SIGHUP // no terminal left
+	if s.said && !hup {
+		width, _, werr := term.GetSize(os.Stdout.Fd())
+		if werr != nil {
+			width = 80
+		}
+		fmt.Println(s.scr.Transcript(width))
+	}
+	if s.sess.Saved() && !hup {
+		fmt.Println(display.Dim("Continue this chat with: docsgpt-cli -c"))
+	}
+	if errors.As(err, &sig) {
+		return sig
+	}
+	return err
+}
+
+// loop starts the chat (-r, -c, a first message), then handles what the
+// user sends until the screen ends or they quit.
+func (s *chatSession) loop(first string) {
 	switch {
 	case chatResume:
 		if !s.pickSession() {
-			return nil
+			return
 		}
 	case chatContinue:
 		cwd, _ := os.Getwd()
@@ -129,41 +202,27 @@ func runChat(first string) error {
 			break
 		}
 		s.top()
-		fmt.Println(display.Dim("No earlier chat in this directory; starting a new one.") + "\n")
+		s.note("No earlier chat in this directory; starting a new one.")
 	default:
 		s.top()
 	}
-
+	s.footer()
 	if first = strings.TrimSpace(first); first != "" {
 		s.send(first, first)
 	}
-	editor := &ui.Editor{History: ui.LoadHistory(filepath.Join(config.Dir(), "history")), Pin: true}
-	for _, c := range chatCommands {
-		editor.Commands = append(editor.Commands, ui.Command{Name: c.name, Description: c.desc})
-	}
-	for !s.quit && s.stopped == nil {
-		editor.Footer, editor.Status = s.footer()
-		text, shown, err := editor.Run()
-		if errors.Is(err, io.EOF) {
-			break
+	for !s.quit {
+		s.footer()
+		text, shown, ok := s.scr.Next()
+		if !ok {
+			return
 		}
-		if err == nil {
-			s.handle(text, shown)
-		} else if !errors.As(err, new(ui.Signal)) {
-			return err
-		}
-		// TERM or HUP at a prompt: this one, or a command's picker.
-		s.stopped = cmp.Or(s.stopped, ui.Stopped())
+		s.handle(text, shown)
 	}
-	if s.sess.Saved() {
-		fmt.Println(display.Dim("Continue this chat with: docsgpt-cli -c"))
-	}
-	return s.stopped
 }
 
-// footer returns the text under the input: where (left), as whom and
-// what is on (right).
-func (s *chatSession) footer() (left, right string) {
+// footer sets the line under the input: where (left), as whom and what is
+// on (right).
+func (s *chatSession) footer() {
 	cwd, _ := os.Getwd()
 	status := []string{s.keyName, hostOf(s.baseURL)}
 	if n := len(s.shellOutput); n > 0 {
@@ -175,22 +234,77 @@ func (s *chatSession) footer() (left, right string) {
 	if s.tools.AutoApprove { // last: the footer is dim up to it
 		status = append(status, display.Warn("auto-approve"))
 	}
-	right = strings.Join(status, " · ")
-	return display.ChatFooter(cwd, right), right
+	right := strings.Join(status, " · ")
+	s.scr.Footer(display.ChatFooter(cwd, right), right)
 }
 
-// top starts the window over with the chat's header: what it showed goes
-// to the scrollback.
+// top starts the transcript over with the chat's header.
 func (s *chatSession) top() {
-	if ui.Interactive() {
-		display.ClaimScreen()
-	}
-	display.ShowBanner(s.cfg.Settings.Banner)
 	var files []string
 	if !globalNoContext {
 		files = ctxenrich.Files(s.cfg.Settings)
 	}
-	fmt.Println(display.ChatHeader(Version, s.newline, files))
+	s.scr.Clear()
+	s.scr.Add(display.Header(Version, s.newline, files, s.cfg.Settings.Banner))
+}
+
+func (s *chatSession) note(msg string) { s.scr.Add(display.Note(msg)) }
+func (s *chatSession) fail(msg string) { s.scr.Add(display.Failure(msg)) }
+
+// writer adds what is written to it to the transcript.
+func (s *chatSession) writer() io.Writer {
+	return writerFunc(func(p []byte) (int, error) {
+		s.scr.Add(display.Text(string(p)))
+		return len(p), nil
+	})
+}
+
+type writerFunc func(p []byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// screenTools shows the tool calls in the transcript and asks about them in
+// the screen's panel.
+type screenTools struct {
+	scr   *ui.Screen
+	block *display.ToolBlock
+}
+
+func (t *screenTools) Open(title, note string) {
+	if t.block != nil {
+		t.block.Close(true, "")
+	}
+	t.block = display.NewToolBlock(title, note)
+	t.scr.Add(t.block)
+}
+
+func (t *screenTools) Lines(lines []string) {
+	t.block.AddLines(lines)
+	t.scr.Changed()
+}
+
+func (t *screenTools) Output() io.Writer {
+	t.scr.Status("Running…")
+	block := t.block
+	return writerFunc(func(p []byte) (int, error) {
+		block.Write(p)
+		t.scr.Changed()
+		return len(p), nil
+	})
+}
+
+func (t *screenTools) Close(ok bool, status string) {
+	t.block.Close(ok, status)
+	t.block = nil
+	t.scr.Changed()
+}
+
+func (t *screenTools) Choose(items []ui.Item) (string, error) {
+	return t.scr.Select(ui.Select{Items: items, Inline: true})
+}
+
+func (t *screenTools) Edit(title, value string) (string, error) {
+	return t.scr.Input(ui.Input{Title: title, Value: value})
 }
 
 // handle acts on one submitted input: a command, a shell command or a
@@ -220,8 +334,7 @@ func (s *chatSession) command(line string) bool {
 	if strings.Contains(name, "/") {
 		return false
 	}
-	printError("Unknown command /" + name + " (type / to see them)")
-	fmt.Println()
+	s.fail("Unknown command /" + name + " (type / to see them)")
 	return true
 }
 
@@ -233,26 +346,21 @@ func (s *chatSession) shell(line string) {
 	if command == "" {
 		return
 	}
-	ctx, stop := signalContext()
-	defer stop()
-	// The tool block opens with a blank line, which the input already left.
-	fmt.Fprint(os.Stderr, "\x1b[1A")
-	restore := ui.HoldInput()
-	defer restore()
-	out := tools.RunShell(ctx, nil, command)
-	restore()
-	if s.stopped = terminated(ctx); s.stopped != nil {
-		return
-	}
+	s.said = true
+	ctx, cancel := context.WithCancel(s.ctx)
+	defer cancel()
+	s.scr.Busy("Running…", cancel)
+	defer s.scr.Busy("", nil)
+	out := tools.RunShell(ctx, s.tools.UI, command)
 	if keep {
 		s.shellOutput = append(s.shellOutput, fmt.Sprintf("I ran `%s`:\n```\n%s\n```", command, strings.TrimRight(out, "\n")))
 	}
-	fmt.Println()
 }
 
 // send asks the agent, showing the message, the answer and its sources.
 func (s *chatSession) send(text, shown string) {
-	display.UserMessage(shown)
+	s.said = true
+	s.scr.Add(display.User(shown))
 
 	content := text
 	if len(s.shellOutput) > 0 {
@@ -266,57 +374,55 @@ func (s *chatSession) send(text, shown string) {
 	}
 	messages := append(slices.Clip(s.history), docsgpt.Message{Role: "user", Content: content})
 
-	// The editor is not running, so the terminal is in cooked mode and
-	// Ctrl+C is a real SIGINT: it cancels the request, not the chat.
-	ctx, stop := signalContext()
-	defer stop()
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
-
-	renderer := display.NewStreamRenderer()
-	renderer.ShowReasoning = s.showReasoning
-	renderer.Wait()
-	restore := ui.HoldInput() // what is typed meanwhile waits for the editor
-	defer restore()
+	s.scr.Busy("Thinking…", cancel)
+	defer s.scr.Busy("", nil)
+	answer := func() *display.Answer {
+		a := display.NewAnswer(s.showReasoning)
+		s.scr.Add(a)
+		return a
+	}
+	ans := answer()
+	var texts []string
+	label := "Thinking…"
 	res, err := s.client.RunWithTools(ctx, messages, docsgpt.RunOptions{
 		Tools: s.toolDefs, Stream: !globalNoStream, ConversationID: s.conversationID,
-		OnDelta: func(delta docsgpt.Delta, _ string) { renderer.Delta(delta) },
-		OnToolCall: func(tc docsgpt.ToolCall) string {
-			// The tool block opens with a blank line; right after the
-			// message, the message's own does.
-			first := !renderer.Started()
-			renderer.Flush()
-			if first {
-				fmt.Fprint(os.Stderr, "\x1b[1A")
+		OnDelta: func(delta docsgpt.Delta, _ string) {
+			if ans.Delta(delta) {
+				if delta.Content != "" && label != "Answering…" {
+					label = "Answering…"
+					s.scr.Status(label)
+				}
+				s.scr.Changed()
 			}
-			defer renderer.Wait()
-			ui.DiscardInput() // typed ahead, it would answer the approval
-			return s.tools.Handle(ctx, cancel, tc)
+		},
+		OnToolCall: func(tc docsgpt.ToolCall) string {
+			ans.Finish()
+			texts = append(texts, ans.Content())
+			out := s.tools.Handle(ctx, cancel, tc)
+			s.footer() // "Always approve" turns auto-approve on
+			label = "Thinking…"
+			s.scr.Status(label)
+			ans = answer()
+			return out
 		},
 	})
-	renderer.Flush()
-	restore()
+	ans.Finish()
+	s.scr.Changed()
+	texts = append(texts, ans.Content())
 	if err != nil {
-		if s.stopped = terminated(ctx); s.stopped != nil {
-			return
-		}
 		if ctx.Err() != nil {
-			gap := "" // after a partial answer
-			if renderer.Content() != "" {
-				gap = "\n"
-			}
-			fmt.Println("\r\x1b[2K" + gap + display.Dim("Interrupted.") + "\n")
+			s.note("Interrupted.")
 			return
 		}
 		// The server may have refused the conversation (deleted, say):
 		// the next turn starts a new one from the messages.
 		s.conversationID = ""
-		printError(err.Error())
-		fmt.Println()
+		s.fail(err.Error())
 		return
 	}
-	display.PrintSources(res.Sources)
-	fmt.Println()
+	s.scr.Add(display.Sources(res.Sources))
 
 	var added []session.Entry
 	for i := range res.Messages[len(messages)-1:] {
@@ -325,12 +431,11 @@ func (s *chatSession) send(text, shown string) {
 	added[0].Text = text
 	added[len(added)-1].Sources = res.Sources
 	if err := s.sess.Record(s.baseURL, s.keyName, res.ConversationID, added...); err != nil {
-		printError("Could not save the chat: " + err.Error())
-		fmt.Println()
+		s.fail("Could not save the chat: " + err.Error())
 	}
 	s.history, s.conversationID = res.Messages, res.ConversationID
 	s.sentContext, s.shellOutput = block, nil
-	s.lastAnswer = renderer.Content()
+	s.lastAnswer = strings.Join(slices.DeleteFunc(texts, func(t string) bool { return strings.TrimSpace(t) == "" }), "\n\n")
 }
 
 // reset starts a new conversation, saved in a new session.
@@ -347,7 +452,7 @@ func (s *chatSession) pickSession() bool {
 	cwd, _ := os.Getwd()
 	list, err := session.List(cwd)
 	if err != nil || len(list) == 0 {
-		fmt.Println(display.Dim("No earlier chat in this directory.") + "\n")
+		s.note("No earlier chat in this directory.")
 		return false
 	}
 	items := make([]ui.Item, len(list))
@@ -359,7 +464,7 @@ func (s *chatSession) pickSession() bool {
 			Description: fmt.Sprintf("%s · %d %s · %s", display.Ago(sess.Updated), n, plural(n, "message", "messages"), sess.Key),
 		}
 	}
-	v, err := ui.Select{Title: "Resume a chat", Items: items, Filter: true, Summary: func(ui.Item) string { return "" }}.Run()
+	v, err := s.scr.Select(ui.Select{Title: "Resume a chat", Items: items, Filter: true})
 	if err != nil {
 		return false
 	}
@@ -398,17 +503,17 @@ func (s *chatSession) resume(sess *session.Session) {
 	}
 
 	turns := sess.Turns()
+	s.said = true
 	s.top()
-	fmt.Println(display.Dim(fmt.Sprintf("── resumed · %s · %d %s ──", display.Ago(sess.Updated), len(turns), plural(len(turns), "message", "messages"))) + "\n")
-	for _, t := range turns[max(0, len(turns)-3):] {
-		display.UserMessage(t.Question)
-		display.PrintMarkdown(t.Answer)
-		display.PrintSources(t.Sources)
-		fmt.Println()
+	s.note(fmt.Sprintf("── resumed · %s · %d %s ──", display.Ago(sess.Updated), len(turns), plural(len(turns), "message", "messages")))
+	for _, t := range turns {
+		s.scr.Add(display.User(t.Question))
+		s.scr.Add(display.Markdown(t.Answer))
+		s.scr.Add(display.Sources(t.Sources))
 		s.lastAnswer = display.StripControls(t.Answer)
 	}
 	if note != "" {
-		fmt.Println(display.Warn("! ") + display.Dim(note) + "\n")
+		s.scr.Add(display.Text(display.Warn("! ") + display.Dim(note)))
 	}
 }
 
@@ -423,7 +528,7 @@ func (s *chatSession) toggleThinking(string) {
 	if s.showReasoning {
 		state = "shown"
 	}
-	fmt.Println(display.Dim("Reasoning will be "+state+".") + "\n")
+	s.note("Reasoning will be " + state + ".")
 }
 
 func (s *chatSession) toggleApprove(string) {
@@ -432,14 +537,13 @@ func (s *chatSession) toggleApprove(string) {
 	if s.tools.AutoApprove {
 		msg = "Tool calls run without asking."
 	}
-	fmt.Println(display.Dim(msg) + "\n")
+	s.note(msg)
 }
 
 // copyAnswer copies the last answer, or one of its code blocks.
 func (s *chatSession) copyAnswer(string) {
 	if s.lastAnswer == "" {
-		printError("Nothing to copy yet.")
-		fmt.Println()
+		s.fail("Nothing to copy yet.")
 		return
 	}
 	text := s.lastAnswer
@@ -453,7 +557,7 @@ func (s *chatSession) copyAnswer(string) {
 			}
 			items = append(items, ui.Item{Label: display.Safe(first), Value: strconv.Itoa(i), Description: desc})
 		}
-		v, err := ui.Select{Title: "Copy", Items: items, Summary: func(ui.Item) string { return "" }}.Run()
+		v, err := s.scr.Select(ui.Select{Title: "Copy", Items: items})
 		if err != nil {
 			return
 		}
@@ -461,8 +565,12 @@ func (s *chatSession) copyAnswer(string) {
 			text = blocks[i].code
 		}
 	}
-	copyToClipboard(text)
-	fmt.Println()
+	msg, err := copyText(text)
+	if err != nil {
+		s.fail(err.Error())
+		return
+	}
+	s.scr.Add(display.Done(msg))
 }
 
 func lineCount(s string) string {
@@ -482,8 +590,7 @@ func plural(n int, one, many string) string {
 func (s *chatSession) export(file string) {
 	turns := s.sess.Turns()
 	if len(turns) == 0 {
-		printError("Nothing to export yet.")
-		fmt.Println()
+		s.fail("Nothing to export yet.")
 		return
 	}
 	if file == "" {
@@ -497,12 +604,11 @@ func (s *chatSession) export(file string) {
 	}
 	if fi, err := os.Stat(file); err == nil {
 		if !fi.Mode().IsRegular() {
-			printError(shown + " is not a file.")
-			fmt.Println()
+			s.fail(shown + " is not a file.")
 			return
 		}
-		if ok, _ := ui.Confirm("Overwrite "+shown+"?", false); !ok {
-			fmt.Println(display.Dim("Not exported.") + "\n")
+		if ok, _ := ui.ConfirmWith(s.scr, "Overwrite "+shown+"?", false); !ok {
+			s.note("Not exported.")
 			return
 		}
 	}
@@ -527,11 +633,10 @@ func (s *chatSession) export(file string) {
 	os.MkdirAll(filepath.Dir(file), 0o755)
 	// The answers are the model's: no control sequences for a later cat.
 	if err := os.WriteFile(file, []byte(display.StripControls(b.String())), 0o644); err != nil {
-		printError(err.Error())
-		fmt.Println()
+		s.fail(err.Error())
 		return
 	}
-	fmt.Println(display.Success("✓") + " " + display.Dim("Exported to "+shown) + "\n")
+	s.scr.Add(display.Done("Exported to " + shown))
 }
 
 // switchKey picks another stored key (or adds one) and starts a new
@@ -550,17 +655,16 @@ func (s *chatSession) switchKey(string) {
 		items = append(items, ui.Item{Label: name, Value: name, Description: config.RedactKey(s.cfg.Keys[name]) + " · " + host})
 	}
 	items = append(items, ui.Item{Label: "Add a key…", Value: "\x00add"})
-	name, err := ui.Select{Title: "Chat with", Items: items, Default: current, Filter: len(items) > 8, Summary: func(ui.Item) string { return "" }}.Run()
+	name, err := s.scr.Select(ui.Select{Title: "Chat with", Items: items, Default: current, Filter: len(items) > 8})
 	if err != nil {
 		return
 	}
 	if name == "\x00add" {
 		cfg := s.cfg
-		if name, err = addCredential(context.Background(), ui.Inline, &cfg, true, os.Stdout); err != nil {
+		if name, err = addCredential(s.ctx, s.scr, &cfg, true, s.writer()); err != nil {
 			if !errors.Is(err, ui.ErrCancelled) {
-				printError(err.Error())
+				s.fail(err.Error())
 			}
-			fmt.Println()
 			return
 		}
 		s.cfg.Keys = cfg.Keys
@@ -570,13 +674,13 @@ func (s *chatSession) switchKey(string) {
 	}
 	s.keyName, s.client.APIKey = name, s.cfg.Keys[name]
 	s.reset()
-	fmt.Println(display.Success("✓") + " " + display.Dim("Chatting with "+name+", in a new conversation.") + "\n")
+	s.scr.Add(display.Done("Chatting with " + name + ", in a new conversation."))
 }
 
 func (s *chatSession) settings(string) {
-	saved, err := runConfigMenu(ui.Inline, os.Stdout)
+	saved, err := runConfigMenu(s.scr, s.writer())
 	if err != nil {
-		printError(err.Error())
+		s.fail(err.Error())
 	}
 	if cfg, err := config.Load(); err == nil && saved {
 		s.cfg.Settings = cfg.Settings
@@ -584,9 +688,6 @@ func (s *chatSession) settings(string) {
 			s.baseURL, s.client.BaseURL = url, url
 			s.reset()
 		}
-	}
-	if saved || err != nil {
-		fmt.Println()
 	}
 }
 
@@ -607,10 +708,16 @@ func (s *chatSession) help(string) {
 		{"shift+enter, ctrl+j", "new line (alt+enter too, or end the line with \\)"},
 		{"↑ ↓", "move between lines, browse earlier messages"},
 		{"ctrl+g", "edit the message in $EDITOR"},
+		{"wheel, pgup pgdn", "scroll (shift+↑ ↓ by a line)"},
+		{"ctrl+↑ ctrl+↓", "previous / next message of yours"},
+		{"end, ctrl+end", "back to the end (home, ctrl+home: the start)"},
+		{"esc", "stop the answer"},
 		{"ctrl+c", "stop the answer, clear the input; twice to quit"},
 		{"ctrl+d", "quit"},
+		{"ctrl+z", "suspend (fg to come back)"},
 	} {
 		fmt.Fprintf(&b, "  %-18s %s\n", k[0], display.Muted(k[1]))
 	}
-	fmt.Println(b.String())
+	b.WriteString(display.Dim("Select text with Shift-drag (Option-drag in iTerm2)."))
+	s.scr.Add(display.Text(b.String()))
 }

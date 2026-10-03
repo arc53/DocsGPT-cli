@@ -12,20 +12,25 @@ import (
 )
 
 func testEditor(cmds ...string) *editorModel {
-	e := &Editor{Footer: "~/repo · test"}
+	var commands []Command
 	for _, c := range cmds {
-		e.Commands = append(e.Commands, Command{Name: c, Description: c + " it"})
+		commands = append(commands, Command{Name: c, Description: c + " it"})
 	}
-	return newEditorModel(e)
+	m := newEditorModel(commands, nil)
+	m.footer = "~/repo · test"
+	return m
 }
 
-func press(m *editorModel, keys ...tea.KeyMsg) tea.Cmd {
-	var cmd tea.Cmd
+// press types keys and returns what the last asked of the screen.
+func press(m *editorModel, keys ...tea.KeyMsg) editorAction {
+	var act editorAction
 	for _, k := range keys {
-		_, cmd = m.Update(k)
+		_, act = m.update(k)
 	}
-	return cmd
+	return act
 }
+
+func view(m *editorModel) string { return strings.Join(m.view(m.width, m.height, true), "\n") }
 
 func TestEditorMultiline(t *testing.T) {
 	m := testEditor()
@@ -41,8 +46,11 @@ func TestEditorMultiline(t *testing.T) {
 	if got := m.text(); got != "one!x\ntwo\nthree" {
 		t.Fatalf("backspace at line start: %q", got)
 	}
-	if cmd := press(m, key(tea.KeyEnter)); cmd == nil || !m.done || m.quit {
+	if press(m, key(tea.KeyEnter)) != editSubmit {
 		t.Fatal("enter did not submit")
+	}
+	if text, shown := m.take(); text != "one!x\ntwo\nthree" || shown != text || !m.empty() {
+		t.Fatalf("took %q, %q, left %q", text, shown, m.text())
 	}
 }
 
@@ -66,9 +74,9 @@ func TestEditorPasteMarker(t *testing.T) {
 		t.Fatalf("after deleting the marker: %q", got)
 	}
 	m = testEditor()
-	press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a\r\nb"), Paste: true}, key(tea.KeyEnter))
-	if got := m.expanded(); got != "a\nb" || !m.done {
-		t.Fatalf("small paste = %q, submitted %v", got, m.done)
+	act := press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a\r\nb"), Paste: true}, key(tea.KeyEnter))
+	if got := m.expanded(); got != "a\nb" || act != editSubmit {
+		t.Fatalf("small paste = %q, submitted %v", got, act == editSubmit)
 	}
 }
 
@@ -137,11 +145,11 @@ func TestEditorSlashPopup(t *testing.T) {
 	if len(m.popup.matches) != 1 || m.selected() != "quit" {
 		t.Fatalf("/q matches %v", m.popup.matches)
 	}
-	if !strings.Contains(ansi.Strip(m.View()), "/quit  quit it") {
-		t.Fatalf("popup not drawn:\n%s", ansi.Strip(m.View()))
+	if !strings.Contains(ansi.Strip(view(m)), "/quit  quit it") {
+		t.Fatalf("popup not drawn:\n%s", ansi.Strip(view(m)))
 	}
-	if press(m, key(tea.KeyEnter)); !m.done || m.text() != "/quit" {
-		t.Fatalf("one enter: done %v, text %q", m.done, m.text())
+	if act := press(m, key(tea.KeyEnter)); act != editSubmit || m.text() != "/quit" {
+		t.Fatalf("one enter: submitted %v, text %q", act == editSubmit, m.text())
 	}
 
 	m = testEditor("new", "copy", "quit", "export")
@@ -162,20 +170,17 @@ func TestEditorSlashPopup(t *testing.T) {
 
 func TestEditorCtrlC(t *testing.T) {
 	m := testEditor()
-	press(m, runes("draft"), key(tea.KeyCtrlC))
-	if m.text() != "" || m.done {
-		t.Fatalf("ctrl+c on text: %q, done %v", m.text(), m.done)
+	if act := press(m, runes("draft"), key(tea.KeyCtrlC)); m.text() != "" || act != editNothing {
+		t.Fatalf("ctrl+c on text: %q, %v", m.text(), act)
 	}
-	press(m, key(tea.KeyCtrlC))
-	if m.done || !strings.Contains(ansi.Strip(m.View()), "press ctrl+c again to quit") {
+	if act := press(m, key(tea.KeyCtrlC)); act != editNothing || !strings.Contains(ansi.Strip(view(m)), "press ctrl+c again to quit") {
 		t.Fatal("first ctrl+c on empty input should only hint")
 	}
-	press(m, key(tea.KeyCtrlC))
-	if !m.done || !m.quit {
+	if press(m, key(tea.KeyCtrlC)) != editQuit {
 		t.Fatal("second ctrl+c did not quit")
 	}
 	m = testEditor()
-	if press(m, key(tea.KeyCtrlD)); !m.quit {
+	if press(m, key(tea.KeyCtrlD)) != editQuit {
 		t.Fatal("ctrl+d on empty input did not quit")
 	}
 }
@@ -194,7 +199,7 @@ func TestEditorHistory(t *testing.T) {
 		t.Fatalf("history file mode: %v %v", fi.Mode(), err)
 	}
 
-	m := newEditorModel(&Editor{History: h})
+	m := newEditorModel(nil, h)
 	press(m, runes("dra"), key(tea.KeyUp))
 	if m.text() != "dra" || m.col != 0 {
 		t.Fatalf("up on a draft goes to its start first: %q col %d", m.text(), m.col)
@@ -253,7 +258,7 @@ func TestEditorWrapsAndScrolls(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		press(m, key(tea.KeyCtrlJ), runes("l"))
 	}
-	v := ansi.Strip(m.View())
+	v := ansi.Strip(view(m))
 	if !strings.Contains(v, "↑ 7 more") || strings.Count(v, "\n") != 8 {
 		t.Fatalf("scrolled view:\n%s", v)
 	}
@@ -266,43 +271,5 @@ func TestEditorSetTextPrintable(t *testing.T) {
 	m.setText("red \x1b[31mtext\r\n\ttab\x07")
 	if got := m.text(); got != "red [31mtext\n    tab" {
 		t.Fatalf("setText kept controls: %q", got)
-	}
-}
-
-// TestEditorPinned: the frame fills the window from the row it starts on
-// down, and waits for the cursor position before quitting.
-func TestEditorPinned(t *testing.T) {
-	m := testEditor()
-	m.Pin = true
-	m.setSize(40, 20)
-	m.Init()
-	if m.locating == 0 || m.View() != " " {
-		t.Fatal("drawn before the cursor position came")
-	}
-	if cmd := press(m, runes("hi"), key(tea.KeyEnter)); cmd != nil {
-		t.Fatal("quit with the cursor position due")
-	}
-	if _, cmd := m.Update(cursorMsg{5}); cmd == nil || m.at != 0 {
-		t.Fatal("did not quit once it came")
-	}
-
-	m = testEditor()
-	m.Pin = true
-	m.setSize(40, 20)
-	m.Init()
-	m.Update(cursorMsg{5})
-	if rows := strings.Split(m.View(), "\n"); len(rows) != 16 || rows[0] != "" || !strings.HasPrefix(ansi.Strip(rows[12]), "───") {
-		t.Fatalf("frame from row 5: %d rows, %q", len(rows), rows)
-	}
-	// A narrower window wraps the rules: two rows above the frame then.
-	m.Update(tea.WindowSizeMsg{Width: 20, Height: 20})
-	m.View()
-	m.Update(relocateMsg(m.resizes))
-	if _, cmd := m.Update(cursorMsg{20}); cmd == nil || m.at != 5 {
-		t.Fatalf("at %d, without moving up over the wrapped rows", m.at)
-	}
-	m.Update(atMsg(3))
-	if rows := strings.Split(m.View(), "\n"); len(rows) != 18 {
-		t.Fatalf("frame from row 3: %d rows", len(rows))
 	}
 }

@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -9,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -25,50 +23,21 @@ type Command struct {
 	Description string
 }
 
-// Editor is the chat input: multi-line text between two dim rules, a dim
-// footer line under them, prompt history on ↑/↓, large pastes collapsed to
-// a marker, and a popup of the slash commands.
-type Editor struct {
-	Commands []Command
-	History  *History // nil for none
-	Footer   string   // left of the footer line
-	Status   string   // right of the footer line
-	// Pin draws the editor at the bottom of the window, blank rows between
-	// it and the text above; it collapses to where it started when done.
-	Pin bool
-}
-
 // PasteMarker matches the marker a collapsed paste leaves in the editor.
 var PasteMarker = regexp.MustCompile(`\[paste #(\d+) (?:\+\d+ lines|\d+ chars)\]`)
 
 // quitWindow is how soon a second Ctrl+C on an empty editor quits.
 const quitWindow = time.Second
 
-// cursorWait bounds the wait for the terminal to say where the cursor is.
-const cursorWait = 500 * time.Millisecond
-
-// noCursorReports is set once a terminal left a cursor request unanswered:
-// later editors do not wait for it again.
-var noCursorReports atomic.Bool
-
-// Run edits one message. It returns the text with pastes expanded, and as
-// shown (pastes as their markers), or io.EOF when the user quits: Ctrl+D on
-// an empty editor, or Ctrl+C twice.
-func (e *Editor) Run() (text, shown string, err error) {
-	m := newEditorModel(e)
-	m.tty = newTTYInput()
-	if _, err := run(m, false, m.tty); err != nil {
-		return "", "", err
-	}
-	if m.quit {
-		return "", "", io.EOF
-	}
-	// Text typed ahead during an answer arrives with its line end.
-	return strings.TrimRight(m.expanded(), "\n"), strings.TrimRight(m.text(), "\n"), nil
-}
-
+// editorModel is the chat input of a Screen: multi-line text between two
+// dim rules, a dim footer line under them, prompt history on ↑/↓, large
+// pastes collapsed to a marker, and a popup of the slash commands.
 type editorModel struct {
-	*Editor
+	commands []Command
+	history  *History
+	footer   string // left of the footer line
+	status   string // right of the footer line
+
 	lines    [][]rune
 	row, col int // cursor: line, rune
 	goal     int // visual column ↑/↓ keep, -1 when unset
@@ -81,18 +50,16 @@ type editorModel struct {
 	quitAt   time.Time
 	width    int
 	height   int
-	done     bool
-	quit     bool
-	away     bool // in $EDITOR: the frame is cleared, or it would stay above
-
-	tty      *ttyInput // nil off a Unix terminal
-	at       int       // pinned: the window row (from 1) the frame starts on, 0 if unknown
-	locating int       // the cursor position asked for (counting), 0 when none is due
-	asked    int       // cursor positions asked for
-	resizes  int       // counts resizes, so only the last one relocates
-	widths   []int     // the last frame's line widths
-	residue  int       // rows of an earlier frame a narrower window wrapped
 }
+
+// editorAction is what a key asks of the Screen.
+type editorAction int
+
+const (
+	editNothing editorAction = iota
+	editSubmit
+	editQuit
+)
 
 type (
 	hintMsg   struct{}
@@ -100,48 +67,19 @@ type (
 		path string
 		err  error
 	}
-	relocateMsg int
-	atMsg       int
-	unanswered  int // the cursor position asked for that has not come
 )
 
-func newEditorModel(e *Editor) *editorModel {
-	if e.History == nil {
-		e.History = LoadHistory("")
+func newEditorModel(commands []Command, history *History) *editorModel {
+	if history == nil {
+		history = LoadHistory("")
 	}
 	return &editorModel{
-		Editor: e, lines: [][]rune{{}}, goal: -1, pastes: map[int]string{},
-		hist: len(e.History.entries), width: 80, height: 24,
+		commands: commands, history: history, lines: [][]rune{{}}, goal: -1, pastes: map[int]string{},
+		hist: len(history.entries), width: 80, height: 24,
 	}
 }
 
 func (m *editorModel) setSize(w, h int) { m.width, m.height = max(w, 10), max(h, 5) }
-
-// Init asks where the cursor is when pinned: until the answer the editor
-// draws nothing, as it would be drawn in the wrong place.
-func (m *editorModel) Init() tea.Cmd {
-	if !m.Pin || m.tty != nil && noCursorReports.Load() {
-		return nil
-	}
-	return m.locate()
-}
-
-// locate asks for the cursor position, answered with a cursorMsg: by the
-// terminal through ttyInput, or the console on Windows. While it is due the
-// editor does not quit, so the answer never reaches the shell.
-func (m *editorModel) locate() tea.Cmd {
-	m.asked++
-	m.locating = m.asked
-	tty, n := m.tty, m.asked
-	return tea.Batch(func() tea.Msg {
-		if tty == nil {
-			return cursorMsg{consoleCursorRow()}
-		}
-		tty.cursor.Store(true)
-		os.Stdout.WriteString("\x1b[6n")
-		return nil
-	}, tea.Tick(cursorWait, func(time.Time) tea.Msg { return unanswered(n) }))
-}
 
 func (m *editorModel) text() string {
 	parts := make([]string, len(m.lines))
@@ -174,76 +112,15 @@ func (m *editorModel) setText(s string) {
 	m.col = len(m.lines[m.row])
 }
 
-func (m *editorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+// update handles a message for the editor and says what it asks of the
+// Screen.
+func (m *editorModel) update(msg tea.Msg) (tea.Cmd, editorAction) {
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		w, h := m.width, m.height
-		if m.at > 0 && msg.Width < w && len(m.widths) > 0 {
-			// The terminal wraps the frame's lines, and bubbletea redraws
-			// from below the extra rows; they stay above it.
-			for _, lw := range m.widths[:len(m.widths)-1] {
-				m.residue += max(0, (lw-1)/msg.Width)
-			}
-		}
-		m.setSize(msg.Width, msg.Height)
-		// The terminal may have moved the frame (rows to or from the
-		// scrollback): ask where it is once the window settles.
-		if m.at > 0 && (w != m.width || h != m.height) {
-			m.resizes++
-			n := m.resizes
-			return m, tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg { return relocateMsg(n) })
-		}
-	case relocateMsg:
-		if int(msg) == m.resizes && !m.done && m.locating == 0 {
-			return m, m.locate()
-		}
-	case unanswered:
-		if int(msg) != m.locating {
-			break
-		}
-		m.locating = 0
-		if m.tty != nil && m.at == 0 {
-			noCursorReports.Store(true)
-		}
-		if m.done {
-			return m, tea.Quit
-		}
-	case cursorMsg:
-		if m.locating == 0 {
-			break
-		}
-		m.locating = 0
-		switch {
-		case m.done:
-			return m, tea.Quit
-		case msg.row > 0 && m.at == 0:
-			m.at = msg.row
-		case msg.row > 0:
-			// After a resize: bubbletea left the cursor on the frame's last
-			// row. Rows the window wrapped are erased and drawn over.
-			top := max(1, msg.row-min(len(m.widths), m.height)+1)
-			k := min(m.residue, top-1)
-			m.residue = 0
-			if k == 0 {
-				m.at = top
-				break
-			}
-			return m, func() tea.Msg {
-				os.Stdout.WriteString("\x1b[" + strconv.Itoa(k) + "A")
-				return atMsg(top - k)
-			}
-		}
-	case atMsg:
-		// The cursor is k rows up: a full redraw from there (bubbletea
-		// would skip the rows that look unchanged).
-		m.at = int(msg)
-		return m, func() tea.Msg { return tea.WindowSizeMsg{Width: m.width, Height: m.height} }
 	case hintMsg:
 		if time.Since(m.quitAt) >= quitWindow {
 			m.quitAt = time.Time{}
 		}
 	case editedMsg:
-		m.away = false
 		if data, err := os.ReadFile(msg.path); err == nil && msg.err == nil {
 			m.setText(strings.TrimRight(string(data), "\n"))
 			m.pastes = map[int]string{}
@@ -252,20 +129,20 @@ func (m *editorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		os.Remove(msg.path)
 	case tea.KeyMsg:
 		before, row, col := m.text(), m.row, m.col
-		cmd := m.key(msg)
+		cmd, act := m.key(msg)
 		m.snap(row, col)
 		if s := msg.String(); m.text() != before && s != "up" && s != "down" {
 			m.changed()
 		}
-		return m, cmd
+		return cmd, act
 	}
-	return m, nil
+	return nil, editNothing
 }
 
 // changed follows an edit: history browsing ends, pastes whose marker is
 // gone are dropped and the popup refreshes.
 func (m *editorModel) changed() {
-	m.hist = len(m.History.entries)
+	m.hist = len(m.history.entries)
 	kept := map[int]string{}
 	for _, sub := range PasteMarker.FindAllStringSubmatch(m.text(), -1) {
 		if id, _ := strconv.Atoi(sub[1]); m.pastes[id] != "" {
@@ -276,7 +153,7 @@ func (m *editorModel) changed() {
 	m.refreshPopup()
 }
 
-func (m *editorModel) key(k tea.KeyMsg) tea.Cmd {
+func (m *editorModel) key(k tea.KeyMsg) (tea.Cmd, editorAction) {
 	s := k.String()
 	if s != "ctrl+c" {
 		m.quitAt = time.Time{}
@@ -286,25 +163,25 @@ func (m *editorModel) key(k tea.KeyMsg) tea.Cmd {
 	}
 	if k.Paste {
 		m.paste(string(k.Runes))
-		return nil
+		return nil, editNothing
 	}
 	if m.popup != nil {
 		switch s {
 		case "up", "ctrl+p", "down", "ctrl+n":
 			m.popup.move(strings.TrimPrefix(s, "ctrl+"))
-			return nil
+			return nil, editNothing
 		case "tab":
 			m.setText("/" + m.selected() + " ")
 			m.popup = nil
-			return nil
+			return nil, editNothing
 		case "enter":
 			if !m.isCommand(strings.TrimPrefix(m.text(), "/")) {
 				m.setText("/" + m.selected())
 			}
-			return m.submit()
+			return nil, editSubmit
 		case "esc":
 			m.popup, m.shut = nil, m.text()
-			return nil
+			return nil, editNothing
 		}
 	}
 
@@ -314,16 +191,16 @@ func (m *editorModel) key(k tea.KeyMsg) tea.Cmd {
 		if !m.empty() {
 			m.lines, m.row, m.col, m.pastes = [][]rune{{}}, 0, 0, map[int]string{}
 			m.quitAt = time.Time{}
-			return nil
+			return nil, editNothing
 		}
 		if !m.quitAt.IsZero() && time.Since(m.quitAt) < quitWindow {
-			return m.finish(true)
+			return nil, editQuit
 		}
 		m.quitAt = time.Now()
-		return tea.Tick(quitWindow, func(time.Time) tea.Msg { return hintMsg{} })
+		return tea.Tick(quitWindow, func(time.Time) tea.Msg { return hintMsg{} }), editNothing
 	case "ctrl+d":
 		if m.empty() {
-			return m.finish(true)
+			return nil, editQuit
 		}
 		m.deleteForward()
 	case "enter":
@@ -331,12 +208,12 @@ func (m *editorModel) key(k tea.KeyMsg) tea.Cmd {
 			m.lines[m.row] = slices.Delete(line, m.col-1, m.col)
 			m.col--
 			m.insert("\n")
-			return nil
+			return nil, editNothing
 		}
 		if strings.TrimSpace(m.text()) == "" {
-			return nil
+			return nil, editNothing
 		}
-		return m.submit()
+		return nil, editSubmit
 	case "ctrl+j", "alt+enter":
 		m.insert("\n")
 	case "up":
@@ -396,7 +273,7 @@ func (m *editorModel) key(k tea.KeyMsg) tea.Cmd {
 	case "ctrl+w", "alt+backspace":
 		m.cut(wordStart(line, m.col), m.col)
 	case "ctrl+g":
-		return m.externalEditor()
+		return m.externalEditor(), editNothing
 	default:
 		if (k.Type == tea.KeyRunes || k.Type == tea.KeySpace) && !k.Alt {
 			m.insert(strings.Map(func(r rune) rune {
@@ -407,20 +284,17 @@ func (m *editorModel) key(k tea.KeyMsg) tea.Cmd {
 			}, string(k.Runes)))
 		}
 	}
-	return nil
+	return nil, editNothing
 }
 
-func (m *editorModel) finish(quit bool) tea.Cmd {
-	m.done, m.quit, m.popup = true, quit, nil
-	if m.locating > 0 {
-		return nil // quits with the cursor position
-	}
-	return tea.Quit
-}
-
-func (m *editorModel) submit() tea.Cmd {
-	m.History.Add(m.expanded())
-	return m.finish(false)
+// take empties the editor for the next message and returns the one it
+// held: the text with pastes expanded, and as shown (pastes as markers).
+func (m *editorModel) take() (text, shown string) {
+	text, shown = m.expanded(), m.text()
+	m.history.Add(text)
+	m.lines, m.row, m.col, m.pastes = [][]rune{{}}, 0, 0, map[int]string{}
+	m.hist, m.draft, m.popup, m.shut, m.top, m.goal = len(m.history.entries), "", nil, "", 0, -1
+	return text, shown
 }
 
 // insert puts s, which may hold newlines, at the cursor.
@@ -563,7 +437,7 @@ func (m *editorModel) up() {
 		m.moveTo(rows, k-1)
 		return
 	}
-	entries := m.History.entries
+	entries := m.history.entries
 	browsing := m.hist < len(entries)
 	if (m.empty() || browsing || m.col == 0) && m.hist > 0 {
 		if !browsing {
@@ -585,7 +459,7 @@ func (m *editorModel) down() {
 		m.moveTo(rows, k+1)
 		return
 	}
-	entries := m.History.entries
+	entries := m.history.entries
 	if m.hist < len(entries) {
 		m.hist++
 		if m.hist == len(entries) {
@@ -669,32 +543,16 @@ func (m *editorModel) externalEditor() tea.Cmd {
 	f.WriteString(m.expanded())
 	f.Close()
 	args := append(strings.Fields(editor), f.Name())
-	m.away = true
-	done := func(err error) tea.Msg { return editedMsg{f.Name(), err} }
-	if m.tty == nil {
-		return tea.ExecProcess(exec.Command(args[0], args[1:]...), done)
-	}
-	return tea.Exec(plainKeys{exec.Command(args[0], args[1:]...)}, done)
-}
-
-// plainKeys runs a program on the terminal itself (bubbletea would hand it
-// ttyInput, which an exec.Cmd copies through a pipe), with the key reports
-// as they were.
-type plainKeys struct{ *exec.Cmd }
-
-func (c plainKeys) SetStdin(r io.Reader)  { c.Stdin = r.(*ttyInput).File }
-func (c plainKeys) SetStdout(w io.Writer) { c.Stdout = w }
-func (c plainKeys) SetStderr(w io.Writer) { c.Stderr = w }
-
-func (c plainKeys) Run() error {
-	os.Stdout.WriteString(keysOff)
-	defer os.Stdout.WriteString(keysOn)
-	return c.Cmd.Run()
+	return tea.Exec(handoff(func() error {
+		c := exec.Command(args[0], args[1:]...)
+		c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+		return c.Run()
+	}), func(err error) tea.Msg { return editedMsg{f.Name(), err} })
 }
 
 // isCommand reports whether name is one of the commands.
 func (m *editorModel) isCommand(name string) bool {
-	return slices.ContainsFunc(m.Commands, func(c Command) bool { return c.Name == name })
+	return slices.ContainsFunc(m.commands, func(c Command) bool { return c.Name == name })
 }
 
 func (m *editorModel) selected() string {
@@ -705,14 +563,14 @@ func (m *editorModel) selected() string {
 // first, then fuzzy ones.
 func (m *editorModel) refreshPopup() {
 	text := m.text()
-	if !strings.HasPrefix(text, "/") || strings.ContainsAny(text, " \t\n") || text == m.shut || len(m.Commands) == 0 {
+	if !strings.HasPrefix(text, "/") || strings.ContainsAny(text, " \t\n") || text == m.shut || len(m.commands) == 0 {
 		m.popup = nil
 		return
 	}
 	q := text[1:]
 	type hit struct{ i, score int }
 	var hits []hit
-	for i, c := range m.Commands {
+	for i, c := range m.commands {
 		if strings.HasPrefix(c.Name, q) {
 			hits = append(hits, hit{i, -1 << 20})
 		} else if s, ok := fuzzyScore(q, c.Name); ok {
@@ -724,8 +582,8 @@ func (m *editorModel) refreshPopup() {
 		return
 	}
 	sort.SliceStable(hits, func(a, b int) bool { return hits[a].score < hits[b].score })
-	items := make([]Item, len(m.Commands))
-	for i, c := range m.Commands {
+	items := make([]Item, len(m.commands))
+	for i, c := range m.commands {
 		items[i] = Item{Label: "/" + c.Name, Description: c.Description}
 	}
 	m.popup = newSelectModel(Select{Items: items})
@@ -736,41 +594,41 @@ func (m *editorModel) refreshPopup() {
 	m.popup.cursor = 0
 }
 
-func (m *editorModel) View() string {
-	if m.done || m.away || m.locating > 0 && m.at == 0 {
-		return summary("")
-	}
-	rows := m.layout()
-	k := m.cursorRow(rows)
+// view draws the editor in width columns, the footer line last, taking
+// at most rows rows (at least 4); without focus it has no cursor.
+func (m *editorModel) view(width, rows int, focus bool) []string {
+	m.width = max(width, 10)
+	layout := m.layout()
+	k := m.cursorRow(layout)
 	popupRows := 0
 	if m.popup != nil {
-		m.popup.setSize(m.width, m.height)
-		m.popup.maxRows = clamp(m.height-6, 1, 8)
+		m.popup.setSize(m.width, rows)
+		m.popup.maxRows = clamp(rows-6, 1, 8)
 		popupRows = min(len(m.popup.matches), m.popup.maxRows)
 		if len(m.popup.matches) > popupRows {
 			popupRows++
 		}
 	}
-	visible := clamp(m.height-3-popupRows, 1, max(5, m.height*3/10))
+	visible := clamp(rows-3-popupRows, 1, max(5, m.height*3/10))
 	if k < m.top {
 		m.top = k
 	} else if k >= m.top+visible {
 		m.top = k - visible + 1
 	}
-	top := clamp(m.top, 0, max(0, len(rows)-visible))
+	top := clamp(m.top, 0, max(0, len(layout)-visible))
 	m.top = top
-	end := min(len(rows), top+visible)
+	end := min(len(layout), top+visible)
 
 	dim := fg(Colors.Dim)
 	lines := []string{dim.Render(rule(m.width, "↑", top))}
 	for i := top; i < end; i++ {
-		lines = append(lines, m.renderRow(rows[i], i == k))
+		lines = append(lines, m.renderRow(layout[i], focus && i == k))
 	}
-	lines = append(lines, dim.Render(rule(m.width, "↓", len(rows)-end)))
+	lines = append(lines, dim.Render(rule(m.width, "↓", len(layout)-end)))
 	if m.popup != nil {
 		lines = append(lines, m.popup.list()...)
 	}
-	left, right := m.Footer, m.Status
+	left, right := m.footer, m.status
 	if !m.quitAt.IsZero() {
 		left, right = "press ctrl+c again to quit", ""
 	}
@@ -782,18 +640,11 @@ func (m *editorModel) View() string {
 		}
 		left += strings.Repeat(" ", max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right))) + right
 	}
-	lines = append(lines, dim.Render(ansi.Truncate(left, m.width, "…")))
-	if gap := m.height - (m.at - 1) - len(lines); m.at > 0 && gap > 0 {
-		lines = append(make([]string, gap), lines...)
-	} else if m.at > 0 {
-		m.at = max(1, m.height-len(lines)+1) // the window scrolls up under it
-	}
-	m.widths = m.widths[:0]
+	lines = append(lines, dim.Render(left))
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, m.width, "…")
-		m.widths = append(m.widths, lipgloss.Width(lines[i]))
 	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 // rule is the editor's border, noting rows scrolled out of view.

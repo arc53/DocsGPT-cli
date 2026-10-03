@@ -1,7 +1,8 @@
-// Package ui holds the small inline interactive components (select lists,
-// confirmations, text inputs, a spinner) used wherever the CLI asks the user
-// something. Prompts render inline on stdout, never on the alternate screen,
-// and collapse to a one-line summary once answered.
+// Package ui holds the interactive components: the small inline prompts
+// (select lists, confirmations, text inputs, a spinner) used wherever the
+// CLI asks the user something, which render inline and collapse to a
+// one-line summary once answered, and the chat's full-screen Screen, which
+// shows the same prompts in a panel.
 package ui
 
 import (
@@ -9,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync/atomic"
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,17 +32,6 @@ var (
 type Signal struct{ os.Signal }
 
 func (s Signal) Error() string { return s.String() }
-
-var stopped atomic.Value // the Signal that ended a prompt
-
-// Stopped returns the Signal that ended a prompt of this process, or nil:
-// for callers that go on after a cancelled prompt.
-func Stopped() error {
-	if s, ok := stopped.Load().(Signal); ok {
-		return s
-	}
-	return nil
-}
 
 // Palette holds the colours every component draws with. Set Colors to
 // restyle them; lipgloss already honours NO_COLOR.
@@ -97,12 +86,11 @@ func (inline) Select(s Select) (string, error) { return s.Run() }
 func (inline) Input(in Input) (string, error)  { return in.Run() }
 
 // run drives one prompt inline on stdout, or on stderr when toStderr is
-// set, and returns its final model. With in, it reads stdin through in, the
-// terminal reporting modified keys meanwhile.
+// set, and returns its final model.
 func run(m interface {
 	tea.Model
 	sizer
-}, toStderr bool, in *ttyInput) (tea.Model, error) {
+}, toStderr bool) (tea.Model, error) {
 	out := os.Stdout
 	if toStderr {
 		out = os.Stderr
@@ -118,16 +106,7 @@ func run(m interface {
 	}
 	// bubbletea would end on TERM as if the prompt were answered, and leave
 	// HUP to kill the process in raw mode; both stop the prompt instead.
-	opts := []tea.ProgramOption{tea.WithOutput(out), tea.WithoutSignalHandler()}
-	if in != nil {
-		opts = append(opts, tea.WithInput(in))
-		out.WriteString(keysOn)
-		defer out.WriteString(keysOff) // a panic in the program too
-	}
-	p := tea.NewProgram(m, opts...)
-	if in != nil {
-		in.send = p.Send
-	}
+	p := tea.NewProgram(m, tea.WithOutput(out), tea.WithoutSignalHandler())
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigs)
@@ -145,7 +124,6 @@ func run(m interface {
 	select {
 	case sig := <-got:
 		if sig != os.Interrupt {
-			stopped.Store(Signal{sig})
 			return nil, Signal{sig}
 		}
 		return nil, ErrCancelled

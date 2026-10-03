@@ -39,20 +39,10 @@ func RenderHeader(version, keyName, baseURL, cwd string) string {
 	return ansi.Truncate(line, width, "…")
 }
 
-// ClaimScreen scrolls what the window shows into the scrollback and puts
-// the cursor in its top-left corner, so a chat starts on a clean window
-// without erasing anything: newlines from the cursor row r scroll exactly
-// the r-1 rows above it away.
-func ClaimScreen() {
-	_, h := termSize()
-	fmt.Print("\r" + strings.Repeat("\n", h-1) + "\x1b[H")
-}
-
-// ChatHeader is what opens a chat at the top of the window: a small mark
-// beside the name and version, then the key hints (newline names the key
-// for a new line), and the instruction files the context sends.
-func ChatHeader(version, newline string, files []string) string {
-	width := termWidth()
+// chatHeader is what opens a chat, in width columns: a small mark beside
+// the name and version, then the key hints (newline names the key for a
+// new line), and the instruction files the context sends.
+func chatHeader(width int, version, newline string, files []string) string {
 	mark := []string{T.Accent.Render("█▀▄"), T.Accent.Render("█▄▀")}
 	name := T.Accent.Bold(true).Render("docsgpt")
 	if version != "" {
@@ -70,9 +60,9 @@ func ChatHeader(version, newline string, files []string) string {
 		}
 		keys = next
 	}
-	out := mark[0] + "  " + name + "\n" + mark[1] + "  " + keys + "\n"
+	out := mark[0] + "  " + name + "\n" + mark[1] + "  " + keys
 	if len(files) > 0 {
-		out += "\n" + ansi.Truncate(T.Muted.Render("Context ")+T.Dim.Render(Safe(strings.Join(files, ", "))), width, "…") + "\n"
+		out += "\n\n" + ansi.Truncate(T.Muted.Render("Context ")+T.Dim.Render(Safe(strings.Join(files, ", "))), width, "…")
 	}
 	return out
 }
@@ -122,10 +112,9 @@ func gitBranch(dir string) string {
 	}
 }
 
-// UserMessage prints what the user sent as a block on a subtle background
-// (a "❯" prefix without colors), followed by a blank line.
-func UserMessage(text string) {
-	width := termWidth()
+// userMessage renders what the user sent in width columns: a block on a
+// subtle background, or after a "❯" without colours.
+func userMessage(width int, text string) string {
 	text = strings.ReplaceAll(strings.TrimRight(StripControls(text), "\n"), "\t", "    ")
 	if Colorless() {
 		lines := strings.Split(ansi.Wrap(text, max(width-2, 10), ""), "\n")
@@ -136,10 +125,9 @@ func UserMessage(text string) {
 				lines[i] = "  " + l
 			}
 		}
-		fmt.Println(strings.Join(lines, "\n") + "\n")
-		return
+		return strings.Join(lines, "\n")
 	}
-	fmt.Println(lipgloss.NewStyle().Background(colUserBg).Foreground(colText).Width(width).Padding(1, 1).Render(text) + "\n")
+	return lipgloss.NewStyle().Background(colUserBg).Foreground(colText).Width(width).Padding(1, 1).Render(text)
 }
 
 // Ago renders how long ago t was: "just now", "5m ago", "3h ago", "2d ago",

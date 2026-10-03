@@ -1,12 +1,8 @@
 package display
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
-
-	"github.com/mattn/go-isatty"
 )
 
 // Pixel-art T-rex silhouette inspired by the Chrome offline runner sprite.
@@ -46,34 +42,37 @@ var wordmark = []string{
 
 var tagline = `              ━━━━━━━  Terminal AI Assistant  ━━━━━━━`
 
-// ShowBanner prints the startup banner of an interactive chat, all at once.
-// setting: "always", "once", "never" (empty defaults to "once"). The
-// wordmark needs 80 columns; narrower terminals get the dino alone.
-func ShowBanner(setting string) {
-	if setting == "" {
-		setting = "once"
+// showBanner reports whether a chat shows the banner, per setting:
+// "always", "once" (the default: the first chat only) or "never".
+func showBanner(setting string) bool {
+	switch setting {
+	case "never":
+		return false
+	case "always":
+		return true
 	}
-	if setting == "never" || !isatty.IsTerminal(os.Stdout.Fd()) || os.Getenv("TERM") == "dumb" {
-		return
+	if bannerShown() {
+		return false
 	}
-	if setting == "once" && bannerShown() {
-		return
-	}
-	var b strings.Builder
+	markBannerShown()
+	return true
+}
+
+// bannerLines is the banner in width columns: the wordmark needs 80, so
+// narrower terminals get the dino alone.
+func bannerLines(width int) []string {
+	var lines []string
 	for _, line := range dinoArt {
-		b.WriteString(T.Accent.Render(line) + "\n")
+		lines = append(lines, T.Accent.Render(line))
 	}
-	if termWidth() >= 80 {
-		b.WriteString("\n")
+	if width >= 80 {
+		lines = append(lines, "")
 		for _, line := range wordmark {
-			b.WriteString(T.Accent.Bold(true).Render(line) + "\n")
+			lines = append(lines, T.Accent.Bold(true).Render(line))
 		}
-		b.WriteString(T.Muted.Render(tagline) + "\n")
+		lines = append(lines, T.Muted.Render(tagline))
 	}
-	fmt.Println(b.String())
-	if setting == "once" {
-		markBannerShown()
-	}
+	return lines
 }
 
 func bannerShown() bool {

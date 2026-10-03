@@ -15,13 +15,21 @@ import (
 // maxSources is how many sources are listed before "+N more".
 const maxSources = 5
 
-// PrintSources lists the sources an answer drew on, on a terminal only: a
-// dim "Sources" block of numbered titles, linked (OSC 8) when the source
-// has a URL, without duplicates.
+// PrintSources lists the sources an answer drew on, on a terminal only,
+// after a blank line (see sourceLines).
 func PrintSources(sources []docsgpt.Source) {
 	if !isatty.IsTerminal(os.Stdout.Fd()) {
 		return
 	}
+	if lines := sourceLines(sources, termWidth()); len(lines) > 0 {
+		fmt.Print("\n" + strings.Join(lines, "\n") + "\n")
+	}
+}
+
+// sourceLines renders the sources in width columns: a dim "Sources" line
+// and the numbered titles, linked (OSC 8) when the source has a URL,
+// without duplicates; nothing without sources.
+func sourceLines(sources []docsgpt.Source, width int) []string {
 	type entry struct{ title, url string }
 	var list []entry
 	seen := map[string]bool{}
@@ -46,22 +54,21 @@ func PrintSources(sources []docsgpt.Source) {
 		list = append(list, e)
 	}
 	if len(list) == 0 {
-		return
+		return nil
 	}
 	links := os.Getenv("TERM") != "dumb"
-	var b strings.Builder
-	b.WriteString("\n" + T.Dim.Render("Sources") + "\n")
+	lines := []string{T.Dim.Render("Sources")}
 	for i, e := range list[:min(len(list), maxSources)] {
-		title := T.Muted.Render(ansi.Truncate(e.title, termWidth()-6, "…"))
+		title := T.Muted.Render(ansi.Truncate(e.title, width-6, "…"))
 		if e.url != "" && links {
 			title = ansi.SetHyperlink(e.url) + title + ansi.ResetHyperlink()
 		}
-		fmt.Fprintf(&b, "  %s %s\n", T.Dim.Render(fmt.Sprintf("%d.", i+1)), title)
+		lines = append(lines, fmt.Sprintf("  %s %s", T.Dim.Render(fmt.Sprintf("%d.", i+1)), title))
 	}
 	if more := len(list) - maxSources; more > 0 {
-		b.WriteString("  " + T.Dim.Render(fmt.Sprintf("+%d more", more)) + "\n")
+		lines = append(lines, "  "+T.Dim.Render(fmt.Sprintf("+%d more", more)))
 	}
-	fmt.Print(b.String())
+	return lines
 }
 
 // linkable reports whether a source URL can go into an OSC 8 hyperlink: an

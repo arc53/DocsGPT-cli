@@ -8,14 +8,11 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Shift+Enter sends the same byte as Enter unless the terminal is asked to
-// report modified keys. While the editor runs it asks in both ways there
+// report modified keys. While the Screen runs it asks in both ways there
 // are (the kitty keyboard protocol's "disambiguate" flag, and xterm's
 // modifyOtherKeys, which tmux forwards with extended-keys on); a terminal
 // that knows neither ignores both. ttyInput turns the replies back into the
@@ -44,19 +41,14 @@ func NewlineKey() string {
 	return "shift+enter"
 }
 
-// ttyInput is stdin for the editor: modified keys translated, and the reply
-// to a cursor position request taken out of the stream and sent as a
-// cursorMsg. It keeps stdin's Fd and Name, so bubbletea still switches the
-// terminal to raw mode and can cancel a read.
+// ttyInput is stdin for the Screen, its modified keys translated. It keeps
+// stdin's Fd and Name, so bubbletea still switches the terminal to raw mode
+// and can cancel a read.
 type ttyInput struct {
 	*os.File
-	held   []byte      // an unfinished sequence, completed by the next read
-	paste  bool        // inside a bracketed paste, passed on as it is
-	cursor atomic.Bool // a cursor position reply is due
-	send   func(tea.Msg)
+	held  []byte // an unfinished sequence, completed by the next read
+	paste bool   // inside a bracketed paste, passed on as it is
 }
-
-type cursorMsg struct{ row int } // 0: unknown
 
 // newTTYInput returns nil on Windows, where bubbletea reads console events.
 func newTTYInput() *ttyInput {
@@ -110,8 +102,8 @@ func (t *ttyInput) translate(b []byte) (out, held []byte) {
 		}
 		params := string(b[i+2 : min(j, len(b))])
 		if j == len(b) {
-			// No final byte yet: a key or reply split across reads.
-			if params != "" && len(params) < 32 && strings.Trim(params, "0123456789;:") == "" {
+			// No final byte yet: a key or mouse report split across reads.
+			if params != "" && len(params) < 32 && strings.Trim(strings.TrimPrefix(params, "<"), "0123456789;:") == "" {
 				return out, b[i:]
 			}
 			return append(out, b[i:]...), nil
@@ -122,12 +114,6 @@ func (t *ttyInput) translate(b []byte) (out, held []byte) {
 		case final == '~' && params == "200":
 			t.paste = true
 			out = append(out, seq...)
-		case final == 'R' && t.cursor.Load() && strings.Count(params, ";") == 1:
-			row, _ := strconv.Atoi(params[:strings.IndexByte(params, ';')])
-			t.cursor.Store(false)
-			if t.send != nil {
-				t.send(cursorMsg{row})
-			}
 		case final == 'u':
 			out = append(out, legacyKey(params, false)...)
 		case final == '~' && strings.HasPrefix(params, "27;"):

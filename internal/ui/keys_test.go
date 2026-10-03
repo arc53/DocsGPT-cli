@@ -2,8 +2,6 @@ package ui
 
 import (
 	"testing"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestTranslateKeys(t *testing.T) {
@@ -31,7 +29,8 @@ func TestTranslateKeys(t *testing.T) {
 		{"a\x1b[13;2ub", "a\nb"},               // among text
 		{"\x1b[1;5A\x1b[A", "\x1b[1;5A\x1b[A"}, // arrows untouched
 		{"\x1b[3~", "\x1b[3~"},                 // Delete untouched
-		{"\x1b[24;1R", "\x1b[24;1R"},           // no cursor reply expected
+		{"\x1b[24;1R", "\x1b[24;1R"},           // a cursor report passes
+		{"\x1b[<64;10;5M", "\x1b[<64;10;5M"},   // a wheel report too
 		{"\x1b[200~\x1b[13;2u\x1b[201~\x1b[13;2u", "\x1b[200~\x1b[13;2u\x1b[201~\n"}, // pasted text stays
 	} {
 		in := &ttyInput{}
@@ -51,6 +50,11 @@ func TestTranslateSplitReads(t *testing.T) {
 	if out, held = in.translate(append(held, "2u"...)); string(out) != "\n" || held != nil {
 		t.Fatalf("second half: %q, held %q", out, held)
 	}
+	// So is a mouse report.
+	if out, held = in.translate([]byte("\x1b[<65;1")); string(out) != "" || string(held) != "\x1b[<65;1" {
+		t.Fatalf("mouse report: %q, held %q", out, held)
+	}
+	in.translate(append(held, "0;5M"...))
 	// A lone Esc or Alt+[ is not held.
 	if out, held = in.translate([]byte("\x1b[")); string(out) != "\x1b[" || held != nil {
 		t.Fatalf("alt+[: %q, held %q", out, held)
@@ -66,15 +70,5 @@ func TestTranslateSplitReads(t *testing.T) {
 	}
 	if out, _ = in.translate(append(held, "1~\x1b[13;2u"...)); string(out) != "\x1b[201~\n" || in.paste {
 		t.Fatalf("after the paste: %q, paste %v", out, in.paste)
-	}
-}
-
-func TestTranslateCursorReply(t *testing.T) {
-	var got []tea.Msg
-	in := &ttyInput{send: func(m tea.Msg) { got = append(got, m) }}
-	in.cursor.Store(true)
-	out, _ := in.translate([]byte("hi\x1b[12;1R\x1b[3;4R"))
-	if string(out) != "hi\x1b[3;4R" || len(got) != 1 || got[0] != (cursorMsg{12}) {
-		t.Fatalf("out %q, msgs %v", out, got)
 	}
 }

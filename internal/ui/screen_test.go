@@ -1,0 +1,184 @@
+package ui
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+)
+
+// numbered is a block of n lines "<name> <i>", wrapped in two at widths
+// under 30.
+type numbered struct {
+	name string
+	n    int
+}
+
+func (b *numbered) Lines(width int) []string {
+	var out []string
+	for i := range b.n {
+		out = append(out, fmt.Sprintf("%s %d", b.name, i))
+		if width < 30 {
+			out = append(out, "  (wrapped)")
+		}
+	}
+	return out
+}
+
+type prompt struct{ numbered }
+
+func (prompt) Prompt() {}
+
+func testScreen(w, h int, blocks ...Block) *screenModel {
+	m := &screenModel{ed: newEditorModel(nil, nil), follow: true, blocks: blocks}
+	m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	return m
+}
+
+func rows(m *screenModel) []string { return strings.Split(ansi.Strip(m.View()), "\n") }
+
+func wheel(m *screenModel, up bool, n int) {
+	b := tea.MouseButtonWheelDown
+	if up {
+		b = tea.MouseButtonWheelUp
+	}
+	for range n {
+		m.wheel = time.Time{}
+		m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: b})
+	}
+}
+
+// TestScreenLayout: the transcript on top, the blocks a blank line apart,
+// then the status row and the editor; every frame fills the window.
+func TestScreenLayout(t *testing.T) {
+	m := testScreen(40, 12, &numbered{"a", 2}, &numbered{"empty", 0}, &numbered{"b", 1})
+	r := rows(m)
+	if len(r) != 12 || r[0] != "a 0" || r[1] != "a 1" || r[2] != "" || r[3] != "b 0" || !strings.HasPrefix(r[8], "───") {
+		t.Fatalf("frame:\n%s", strings.Join(r, "\n"))
+	}
+}
+
+// TestScreenScroll: the view follows the end, stays where the user
+// scrolled while lines come, says how many came, and jumps back.
+func TestScreenScroll(t *testing.T) {
+	answer := &numbered{"line", 30}
+	m := testScreen(40, 12, answer) // 7 transcript rows
+	if r := rows(m); r[6] != "line 29" {
+		t.Fatalf("not at the end: %q", r[:7])
+	}
+	if perLineWheel {
+		wheel(m, true, 6)
+	} else {
+		wheel(m, true, 2)
+	}
+	r := rows(m)
+	if r[0] != "line 17" || m.follow {
+		t.Fatalf("after scrolling up: %q", r[:7])
+	}
+	answer.n = 40
+	r = rows(m)
+	if r[0] != "line 17" || !strings.Contains(r[7], "↓ 10 new lines · end to jump") {
+		t.Fatalf("the view moved, or no hint: %q / %q", r[0], r[7])
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if r = rows(m); r[0] != "line 11" {
+		t.Fatalf("pgup: %q", r[0])
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if r = rows(m); !strings.Contains(r[7], "ctrl+end to jump") {
+		t.Fatalf("with text typed, end is the editor's: %q", r[7])
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlEnd})
+	if r = rows(m); r[6] != "line 39" || !m.follow || strings.TrimSpace(r[7]) != "" {
+		t.Fatalf("ctrl+end: %q, %q", r[6], r[7])
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyShiftUp})
+	m.Update(tea.KeyMsg{Type: tea.KeyShiftDown})
+	if rows(m); !m.follow {
+		t.Fatal("back at the end without following it")
+	}
+}
+
+// TestScreenResizeKeepsPlace: a scrolled-back view shows the same line
+// after the transcript is wrapped again.
+func TestScreenResizeKeepsPlace(t *testing.T) {
+	m := testScreen(40, 12, &numbered{"x", 5}, &numbered{"line", 30})
+	rows(m)
+	m.scroll(-20)
+	r := rows(m)
+	top := r[0]
+	m.Update(tea.WindowSizeMsg{Width: 20, Height: 12})
+	if r = rows(m); r[0] != top || m.follow {
+		t.Fatalf("narrower: %q, want %q", r[0], top)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
+	if r = rows(m); r[0] != top {
+		t.Fatalf("wider again: %q, want %q", r[0], top)
+	}
+}
+
+// TestScreenJump: Ctrl+↑/↓ move between the user's messages.
+func TestScreenJump(t *testing.T) {
+	m := testScreen(40, 12, &prompt{numbered{"q1", 1}}, &numbered{"a", 20}, &prompt{numbered{"q2", 1}}, &numbered{"b", 20})
+	rows(m)
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlUp})
+	if r := rows(m); r[0] != "q2 0" {
+		t.Fatalf("ctrl+up: %q", r[0])
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlUp})
+	if r := rows(m); r[0] != "q1 0" {
+		t.Fatalf("ctrl+up twice: %q", r[0])
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	if r := rows(m); r[0] != "q2 0" {
+		t.Fatalf("ctrl+down: %q", r[0])
+	}
+}
+
+// TestScreenSubmitAndQueue: Enter hands the message to the waiting caller,
+// or queues it while the caller is busy; Esc stops the work and puts what
+// was queued back in the editor.
+func TestScreenSubmitAndQueue(t *testing.T) {
+	m := testScreen(40, 12)
+	waiter := make(chan [2]string, 1)
+	m.waiter = waiter
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := <-waiter; got[0] != "hi" || !m.ed.empty() {
+		t.Fatalf("submitted %q, editor %q", got, m.ed.text())
+	}
+	cancelled := false
+	m.cancel = func() { cancelled = true }
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("next")})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.queue) != 1 || !strings.Contains(rows(m)[7], "1 queued") {
+		t.Fatalf("not queued: %v", m.queue)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if !cancelled || len(m.queue) != 0 || m.ed.text() != "next" {
+		t.Fatalf("esc: cancelled %v, queue %v, editor %q", cancelled, m.queue, m.ed.text())
+	}
+}
+
+// TestScreenPanel: a prompt's panel takes the keys once it has been up a
+// moment; keys typed just before it opened still go to the editor.
+func TestScreenPanel(t *testing.T) {
+	m := testScreen(60, 16)
+	p := &panel{sel: newSelectModel(approvalSelect()), reply: make(chan result, 1), at: time.Now()}
+	m.panel = p
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if m.ed.text() != "a" || len(p.reply) != 0 {
+		t.Fatal("a key typed as the panel opened answered it")
+	}
+	if !strings.Contains(strings.Join(rows(m), "\n"), "Approve") {
+		t.Fatal("panel not drawn")
+	}
+	p.at = time.Now().Add(-time.Second)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if r := <-p.reply; r.value != "deny" || m.panel != nil {
+		t.Fatalf("answer %v", r)
+	}
+}

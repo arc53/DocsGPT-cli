@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/arc53/DocsGPT-cli/internal/session"
 	"github.com/arc53/DocsGPT-cli/internal/tools"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 )
 
@@ -19,7 +21,7 @@ import (
 func TestExport(t *testing.T) {
 	home := isolateConfig(t)
 	t.Chdir(t.TempDir())
-	s := &chatSession{sess: session.New("/w", "https://example.com", "k")}
+	s := &chatSession{sess: session.New("/w", "https://example.com", "k"), scr: ui.NewScreen(ui.ScreenOptions{Headless: true})}
 	q, a := docsgpt.Message{Role: "user", Content: "q"}, docsgpt.Message{Role: "assistant", Content: "the answer"}
 	s.sess.Record("https://example.com", "k", "c", session.Entry{Message: &q}, session.Entry{Message: &a})
 
@@ -52,7 +54,8 @@ func TestHandleDecidesOnWhatWasShown(t *testing.T) {
 		jsonReply(w, 500, `{"error":"no"}`)
 	}))
 	defer srv.Close()
-	s := &chatSession{client: docsgpt.NewClient(srv.URL, "k"), tools: &tools.Session{}, sess: session.New(t.TempDir(), srv.URL, "k")}
+	scr := ui.NewScreen(ui.ScreenOptions{Headless: true})
+	s := &chatSession{client: docsgpt.NewClient(srv.URL, "k"), tools: &tools.Session{UI: &screenTools{scr: scr}}, sess: session.New(t.TempDir(), srv.URL, "k"), scr: scr, ctx: context.Background()}
 
 	marker := filepath.Join(t.TempDir(), "ran")
 	pasted := "!touch " + marker + "\n" + strings.Repeat("more\n", 12)

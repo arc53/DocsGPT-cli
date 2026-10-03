@@ -1,7 +1,6 @@
 package display
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -74,15 +73,6 @@ func markdownStyle(width int) ansi.StyleConfig {
 }
 
 func ptr[T any](v T) *T { return &v }
-
-// PrintMarkdown renders md, stripped of control sequences, to stdout at the
-// terminal's width.
-func PrintMarkdown(md string) {
-	width := termWidth()
-	if out := renderMarkdown(newMarkdown(width), width, StripControls(md)); out != "" {
-		fmt.Println(out)
-	}
-}
 
 // renderMarkdown renders md with r (raw md when r is nil or fails) at width
 // and tidies glamour's output: no padding at the end of a line, no blank
