@@ -44,9 +44,32 @@ res, err := client.RunWithTools(ctx, messages, docsgpt.RunOptions{
 |---|---|
 | `Send`, `SendStream` | One request, whole or streamed (`StreamHandler` per delta) |
 | `RunWithTools` | The tool-call loop, streamed or not |
+| `Message.Parts`, `AttachmentPart` | Images and files in a message ([below](#images-and-files)) |
 | `Models` | The key's agent (`GET /v1/models`); a cheap way to check a key |
 | `APIError` | A non-2xx reply: status code, body, `Message()` (the server's message, one line), `Code()`, `RetryAfter` |
 | `RetryPolicy` | `Client.Retry`: how failed chat requests are sent again |
+
+## Images and files
+
+A user message carries images and files as content parts after its text;
+the server stores them as the conversation's attachments (PDFs, office
+documents, spreadsheets, text, PNG/JPEG/WebP images), so later turns of the
+conversation see them too.
+
+```go
+data, _ := os.ReadFile("shot.png")
+msg := docsgpt.Message{
+	Role:    "user",
+	Content: "Why does this fail?",
+	Parts:   []docsgpt.ContentPart{docsgpt.AttachmentPart("shot.png", data)},
+}
+```
+
+`AttachmentPart` sends an image (told by its bytes) as an `image_url` part
+and anything else as a `file` part named by its file name; `ImagePart`,
+`FilePart` and `TextPart` build one kind. With `Parts`, the message goes
+out with the OpenAI content array; one read back with a content array has
+every part in `Parts`, and `Text()` joins its text.
 
 ## Retries
 
