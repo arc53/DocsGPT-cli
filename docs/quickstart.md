@@ -93,6 +93,13 @@ docsgpt-cli < question.txt
 - A single word that looks like a mistyped command (`docsgpt-cli agnets`) is
   refused with a hint. `docsgpt-cli -- <words>` always sends the words as a
   question.
+- `--json` prints one JSON object instead, with the sources, usage and tool
+  calls too (plain output off a terminal leaves them out); see
+  [CI](ci.md#json-output) for its fields:
+
+```bash
+docsgpt-cli --json "how do I rotate the API key?" | jq -r '.answer, (.sources[] | "- \(.title) \(.url)")'
+```
 
 ## Tip: a terminal prompt
 

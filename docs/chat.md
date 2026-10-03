@@ -122,6 +122,7 @@ Type `/` to see them, filtered as you type. Tab completes, Enter runs.
 | `/approve` | Run tool calls without asking (the footer then shows `auto-approve`), or ask again; see [Tools](tools.md#always-approve) |
 | `/key` | Switch to another stored key, or add one |
 | `/settings` | Open the settings menu |
+| `/changelog` | Show what's new in the latest release (fetched when the last update check is over a day old) |
 | `/help` | Show commands and keys |
 | `/quit` (`/exit`) | Leave |
 

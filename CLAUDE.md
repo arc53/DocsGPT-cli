@@ -18,7 +18,12 @@ cmd/docsgpt-cli/     → Entry point (package main), calls cmd.Execute(). Lives 
 sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, package
                        docsgpt: the public chat client (Client, Send, SendStream,
                        RunWithTools + RunOptions/RunResult, Models, StreamHandler,
-                       Source, APIError) — OpenAI-compatible types and the tool-call loop;
+                       Source, APIError with Message/Code/RetryAfter, RetryPolicy:
+                       Client.Retry, 3 retries 2s/4s/8s of a chat request that failed
+                       before its response — 408/429/502-504, refused/reset/timeout,
+                       Retry-After capped by MaxDelay, x-should-retry, never once a
+                       stream has started; a blocking OnRetry counts towards the wait)
+                       — OpenAI-compatible types and the tool-call loop;
                        results carry conversation id, sources, model and usage. A stream
                        without [DONE] and without a finish_reason is an error, and so is a
                        tool_calls index outside 0-63. Stdlib-only, tagged sdk/vX.Y.Z
@@ -36,7 +41,11 @@ examples/            → agents/ (sample definition), bench/ (suite, one case pe
 deployment/          → install.sh / install.ps1 (attached to every release)
 cmd/
   root.go            → Root command = the entry point (chat on a TTY, else one-shot ask), typo guard + questionArgs (extra words after a command: exit 2 with `To ask it as a question: docsgpt-cli -- "…"`), global flags (--url, --key, --token), chat flags (+ --no-stdin), help groups + usage template, Execute (startup config, update gate)
-  ask.go             → Single-shot Q&A with streaming + tool support (hidden alias; the root runs it)
+  ask.go             → Single-shot Q&A with streaming + tool support (hidden alias; the root runs it); --json (askResult on stdout, errors in it + errReported exit)
+  errors.go          → explainChatError: one actionable line per failure (401/403 → login, 404 → url, 429, 5xx, can't reach: refused/DNS/TLS/timeout); DOCSGPT_DEBUG=1 adds the raw error
+  retry.go           → retrying(): a per-run client copy whose retry waits count down on a status ("Retrying (1/3) in 4s… (502 Bad Gateway)"); the retry setting
+  completion.go      → cobra's completion command (under Tools) + config-only completions: key names, settings and their values; completing() keeps __complete off the update gate
+  whatsnew.go        → chat: the release notes once after an update (first 10 lines, whats_new setting), /changelog
   chat.go            → Interactive chat (hidden alias; optional first message): drives the full-screen ui.Screen from a goroutine (loop over Screen.Next), the slash command table, !cmd, sessions (-c/-r//resume), screenTools (tools.UI in the transcript and panel), transcript printed on exit
   config.go          → config get / set / show / path + the settings menu; one `settings` table drives all of them
   install.go         → Hidden `install` (run by the install scripts), wiring over internal/install
@@ -179,7 +188,8 @@ internal/
     apply.go         → Asset download, sha256 verify, binary swap + backup, Rollback, host CheckAndApply
     stage.go         → Staged updates in ~/.docsgpt/staging (download now, apply next launch)
     worker.go        → Detached background worker (`update --worker`): check + stage
-    notify.go        → Check state in ~/.docsgpt/update_check.json (latest, skip version)
+    notify.go        → Check state in ~/.docsgpt/update_check.json (latest, skip version, latest release notes, whats_new = version an update installed)
+    notes.go         → MarkUpdated (Apply/ApplyStaged) / PendingNotes / ShownNotes, LatestNotes (cache < 1 day, else fetch, else stale cache), TidyNotes (drops GoReleaser's heading, merges, hashes)
     restart_*.go     → Post-update restart: exec(2) on Unix, exit(3) on Windows
     detach_*.go      → Platform detach for the worker process
 ```
@@ -315,7 +325,7 @@ or with TERM=dumb it refuses.
   existing file only after a confirmation, default No), /think, /approve (toggles
   the tools Session's AutoApprove; "Always allow" choices are kept), /key (switch
   or add a key → new conversation), /settings (the config menu in the panel; the
-  mouse setting applies at once), /help, /quit (/exit). An unknown `/word` is an
+  mouse setting applies at once), /changelog (latest release notes), /help, /quit (/exit). An unknown `/word` is an
   error; `/path/like …` is a message. `!cmd` runs through `tools.RunShell` (no
   approval, no time limit, cancellable) into a tool block and its output is
   prepended to the next message; `!!cmd` is not sent.
@@ -351,6 +361,7 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set a
 4. Rollback records a skip version so auto-update won't reinstall it; a manual `update` clears the skip
 5. Host daemons check every ~12h while idle (10 min boot delay), apply directly, then restart: exec(2) on Unix (same PID), exit(3) on Windows (Task Scheduler RestartOnFailure); all shipped service configs restart only on failure since a revoke exits 0
 6. Everything is stamped release-version-only: `update` refuses "dev"/git-describe builds and Homebrew-managed binaries
+7. What's new: every check stores the latest release's notes; Apply and ApplyStaged record the installed version, and the next chat on that version shows the notes once (cmd/whatsnew.go)
 
 ### bench command
 1. Loads a suite dir (default `./bench`): optional `bench.yaml` defaults + any subdir with a `case.yaml`
