@@ -37,19 +37,24 @@ redirect it from /dev/null. When stdout is not a terminal, only the answer is
 written to it, as plain text (terminal control sequences removed, as on a
 terminal).
 
+An @path in the question (@shot.png, @"My Spec.pdf") attaches that file:
+images (PNG, JPEG, WebP, GIF) and documents (PDF, Office, text, …), up to
+100 MB. A word starting with @ that names no file stays as it is.
+
 On a terminal, the first bash/sh code block of the answer is copied to your clipboard.
 
 --json prints one JSON object instead: answer, sources, conversation_id,
-model, usage and tool_calls, or an error (and a non-zero exit).`,
+model, usage, tool_calls and attachments, or an error (and a non-zero exit).`,
 	Example: `  docsgpt-cli ask "How do I open a file in Python?"
   tail -n 50 app.log | docsgpt-cli ask "Why does this fail?"
   docsgpt-cli ask "Summarize the README" > summary.md
+  docsgpt-cli "Why does this fail?" @shot.png @spec.pdf
   docsgpt-cli --json "What changed in v2?" | jq -r '.sources[].url'`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if !askJSON {
 			return runAsk(args, nil)
 		}
-		out := &askResult{Sources: []askSource{}, ToolCalls: []askToolCall{}}
+		out := &askResult{Sources: []askSource{}, ToolCalls: []askToolCall{}, Attachments: []askAttachment{}}
 		err := runAsk(args, out)
 		if err != nil {
 			out.Error = err.Error()
@@ -72,13 +77,22 @@ var errReported = errors.New("reported")
 
 // askResult is what ask --json prints.
 type askResult struct {
-	Answer         string         `json:"answer"`
-	Sources        []askSource    `json:"sources"`
-	ConversationID string         `json:"conversation_id"`
-	Model          string         `json:"model"`
-	Usage          *docsgpt.Usage `json:"usage"`
-	ToolCalls      []askToolCall  `json:"tool_calls"`
-	Error          string         `json:"error,omitempty"`
+	Answer         string          `json:"answer"`
+	Sources        []askSource     `json:"sources"`
+	ConversationID string          `json:"conversation_id"`
+	Model          string          `json:"model"`
+	Usage          *docsgpt.Usage  `json:"usage"`
+	ToolCalls      []askToolCall   `json:"tool_calls"`
+	Attachments    []askAttachment `json:"attachments"`
+	Error          string          `json:"error,omitempty"`
+}
+
+// askAttachment is a file the question carried.
+type askAttachment struct {
+	Path   string `json:"path"`
+	Type   string `json:"type"` // image or file
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
 }
 
 type askSource struct {
@@ -99,6 +113,20 @@ type askToolCall struct {
 // clipboard.
 func runAsk(args []string, out *askResult) error {
 	question := strings.Join(args, " ")
+	// The @paths of the arguments attach files; piped text is only text.
+	att, err := attachFiles(question, nil)
+	if err != nil {
+		return usageErrf("%v", err)
+	}
+	if out != nil {
+		for _, f := range att.files {
+			kind := "file"
+			if f.Image {
+				kind = "image"
+			}
+			out.Attachments = append(out.Attachments, askAttachment{Path: f.Path, Type: kind, Bytes: f.Size, SHA256: f.SHA256})
+		}
+	}
 	var piped string
 	if !globalNoStdin {
 		var hint io.Writer
@@ -140,13 +168,16 @@ func runAsk(args []string, out *askResult) error {
 	}
 
 	messages := []docsgpt.Message{
-		{Role: "user", Content: fullQuestion},
+		{Role: "user", Content: fullQuestion, Parts: att.parts},
 	}
 
 	tty := out == nil && isatty.IsTerminal(os.Stdout.Fd())
 	if tty {
 		cwd, _ := os.Getwd()
 		fmt.Print(display.RenderHeader("", keyName, baseURL, cwd) + "\n\n")
+		if len(att.files) > 0 {
+			fmt.Println(display.Dim(display.Safe(markers(att.files))) + "\n")
+		}
 	}
 
 	ctx, stop := signalContext()

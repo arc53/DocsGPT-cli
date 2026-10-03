@@ -15,7 +15,7 @@ import (
 )
 
 // TestAskJSON: --json fills in the answer of every round, the sources,
-// the conversation, model, usage and tool calls.
+// the conversation, model, usage, tool calls and attachments.
 func TestAskJSON(t *testing.T) {
 	isolateConfig(t)
 	dir := t.TempDir()
@@ -31,6 +31,9 @@ func TestAskJSON(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		frames := []string{`{"docsgpt":{"type":"id","conversation_id":"conv-1"}}`}
 		if calls == 1 {
+			if !strings.Contains(string(b), `"filename":"notes.txt","file_data":"data:text/plain;base64,aGVsbG8K"`) {
+				t.Errorf("@notes.txt was not attached: %s", b)
+			}
 			frames = append(frames,
 				`{"choices":[{"delta":{"content":"Let me look."}}]}`,
 				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"notes.txt\"}"}}]},"finish_reason":"tool_calls"}]}`,
@@ -56,7 +59,7 @@ func TestAskJSON(t *testing.T) {
 	t.Setenv(config.EnvAPIKey, "k")
 
 	out := &askResult{Sources: []askSource{}, ToolCalls: []askToolCall{}}
-	if err := runAsk([]string{"what", "is", "in", "notes?"}, out); err != nil {
+	if err := runAsk([]string{"what", "is", "in", "@notes.txt?"}, out); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(out)
@@ -66,6 +69,7 @@ func TestAskJSON(t *testing.T) {
 		`"conversation_id":"conv-1"`, `"model":"gpt-x"`,
 		`"usage":{"prompt_tokens":30,"completion_tokens":5,"total_tokens":35}`,
 		`"tool_calls":[{"name":"read_file","arguments":{"path":"notes.txt"},"result":"hello\n","approved":true}]`,
+		`"attachments":[{"path":"` + filepath.Join(dir, "notes.txt") + `","type":"file","bytes":6,"sha256":"5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"}]`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("%s\nlacks %s", b, want)
@@ -83,5 +87,12 @@ func TestAskJSON(t *testing.T) {
 	err := runAsk([]string{"q"}, out)
 	if err == nil || !strings.Contains(err.Error(), "rejected the key in "+config.EnvAPIKey) {
 		t.Fatalf("err = %v", err)
+	}
+
+	// A file that cannot be attached is a usage error, before any request.
+	os.WriteFile(filepath.Join(dir, "app.bin"), []byte{0, 1}, 0o644)
+	err = runAsk([]string{"see", "@app.bin"}, &askResult{})
+	if exitCodeFor(err) != 2 || !strings.Contains(err.Error(), "app.bin: not a type the server reads") {
+		t.Fatalf("app.bin: %v (exit %d)", err, exitCodeFor(err))
 	}
 }
