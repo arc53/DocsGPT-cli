@@ -3,7 +3,8 @@ package docsgpt
 import "encoding/json"
 
 // Message is one chat message. Content is its text; Parts add images and
-// files to a user message (see ContentPart), and the message then goes out
+// files to a user message, or images to a tool result (see ContentPart,
+// ToolResult), and the message then goes out
 // with the OpenAI content array: Content as its first text part, then
 // Parts. A message read with a content array has all its parts in Parts
 // and Content empty; Text joins its text either way.

@@ -40,10 +40,15 @@ res, err := client.Run(ctx, messages, docsgpt.RunOptions{
 // res.Sources, res.Model, res.Usage
 ```
 
+A tool that returns images uses `OnToolResult` instead: its
+`ToolResult` carries the text and `Parts` (`ImagePart`), which the server
+shows to the model.
+
 | API | What |
 |---|---|
 | `Send`, `SendStream` | One request, whole or streamed (`StreamHandler` per delta) |
 | `Run` | The tool-call loop, streamed or not; `RunWithTools` is its older positional form (deprecated) |
+| `ToolResult`, `OnToolResult` | A tool result with images for the model |
 | `Message.Parts`, `AttachmentPart` | Images and files in a message ([below](#images-and-files)) |
 | `Models` | The key's agent (`GET /v1/models`); a cheap way to check a key |
 | `APIError` | A non-2xx reply: status code, body, `Message()` (the server's message, one line), `Code()`, `RetryAfter` |
