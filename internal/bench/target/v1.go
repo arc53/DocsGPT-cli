@@ -4,11 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +14,7 @@ import (
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/bench/spec"
+	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 
 	"github.com/tidwall/gjson"
 )
@@ -41,8 +40,8 @@ type v1Message struct {
 }
 
 // v1Request is the request body. It is built locally rather than through
-// the sdk module so bench can send parts-array content (inline files) without
-// touching the interactive chat plumbing.
+// the sdk's client, which does not stamp the bench headers or time the first
+// token.
 type v1Request struct {
 	Model         string        `json:"model"`
 	Messages      []v1Message   `json:"messages"`
@@ -146,40 +145,19 @@ func buildV1Messages(req Request) ([]v1Message, error) {
 	if len(req.InlineFiles) == 0 {
 		return append(msgs, v1Message{Role: "user", Content: req.Question}), nil
 	}
-	parts := []map[string]any{{"type": "text", "text": req.Question}}
+	parts := []docsgpt.ContentPart{docsgpt.TextPart(req.Question)}
 	for _, f := range req.InlineFiles {
-		part, err := inlineFilePart(f)
+		data, err := os.ReadFile(f.Path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("inline attachment %s: %w", f.Path, err)
 		}
-		parts = append(parts, part)
+		name := f.Name
+		if name == "" {
+			name = filepath.Base(f.Path)
+		}
+		parts = append(parts, docsgpt.AttachmentPart(name, data))
 	}
 	return append(msgs, v1Message{Role: "user", Content: parts}), nil
-}
-
-// inlineFilePart base64-encodes a file into an OpenAI content part: images
-// become image_url parts, everything else a file part with a data URI.
-func inlineFilePart(f InlineFile) (map[string]any, error) {
-	data, err := os.ReadFile(f.Path)
-	if err != nil {
-		return nil, fmt.Errorf("inline attachment %s: %w", f.Path, err)
-	}
-	name := f.Name
-	if name == "" {
-		name = filepath.Base(f.Path)
-	}
-	mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-	if i := strings.IndexByte(mimeType, ';'); i >= 0 {
-		mimeType = mimeType[:i] // drop charset params
-	}
-	dataURI := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
-	if strings.HasPrefix(mimeType, "image/") {
-		return map[string]any{"type": "image_url", "image_url": map[string]any{"url": dataURI}}, nil
-	}
-	return map[string]any{"type": "file", "file": map[string]any{"filename": name, "file_data": dataURI}}, nil
 }
 
 // parseV1Response decodes a non-streaming chat completion.
