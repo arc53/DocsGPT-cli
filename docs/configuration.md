@@ -88,6 +88,7 @@ CI jobs can set the variables instead of logging in.
 | `DOCSGPT_WEBHOOK_URL` | Default webhook for `agents trigger` |
 | `DOCSGPT_NO_UPDATE_CHECK` | Turns off every update check and auto-update |
 | `DOCSGPT_HYPERLINKS` | `1`, `0` or `auto`: overrides the `hyperlinks` setting |
+| `DOCSGPT_DEBUG` | `1` adds the raw error (status and body, or the network error) under a failed request's message |
 | `NO_COLOR` | No colours |
 | `VISUAL`, `EDITOR` | Editor for Ctrl+G in the chat |
 | `DOCSGPT_CLI_VERSION`, `DOCSGPT_NO_MODIFY_PATH` | For the [install scripts](install.md) |
@@ -114,6 +115,8 @@ docsgpt-cli config path                       # ~/.docsgpt/config.json
 | `theme` | `auto`, `dark`, `light` | `auto` |
 | `mouse` | `on`, `off`: scroll the chat with the wheel and select text to copy it ([Scrolling](chat.md#scrolling), [Selecting text](chat.md#selecting-text)) | `on` |
 | `hyperlinks` | `auto`, `on`, `off`: links in answers are clickable, without their URL ([Links](chat.md#links)) | `auto` |
+| `retry` | `on`, `off`: send a request again when it fails before its answer starts (429, 502-504, a refused or dropped connection), up to 3 times after 2s, 4s and 8s or the server's `Retry-After`; the chat counts the wait down, Esc cancels it | `on` |
+| `whats_new` | `on`, `off`: after an update, the next chat starts with the first lines of the release notes (`/changelog` shows them all) | `on` |
 | `send_current_directory` | `true`, `false` | `true` |
 | `send_directory_contents` | `true`, `false` | `true` |
 | `send_project_instructions` | `true`, `false` (AGENTS.md / CLAUDE.md) | `true` |

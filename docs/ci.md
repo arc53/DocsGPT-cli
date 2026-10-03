@@ -94,3 +94,42 @@ pass `--no-stdin` (or `< /dev/null`): some runners keep stdin open, and the
 command would wait for it. Tools are not offered unless you pass
 `--auto-approve`; only do that in a sandboxed runner (see
 [Tools](tools.md#security)).
+
+A request that fails before its answer starts (429, 502, 503, 504, a refused
+or dropped connection, a timeout) is retried up to 3 times, after 2s, 4s and
+8s, or after the server's `Retry-After` when it gives one (up to a minute).
+An answer that breaks off mid-way is not retried. `docsgpt-cli config set retry
+off` turns retries off. Errors are one line saying what to do;
+`DOCSGPT_DEBUG=1` adds the error as the server or the network gave it.
+
+### JSON output
+
+`--json` writes one JSON object to stdout and nothing else: no header,
+rendering or clipboard.
+
+```bash
+docsgpt-cli --json --no-stdin "what changed in the 2.0 API?" > answer.json
+jq -r .answer answer.json
+jq -r '.sources[].url' answer.json
+```
+
+```json
+{
+  "answer": "The 2.0 API …",
+  "sources": [{"title": "Changelog", "url": "https://docs.example.com/changelog", "filename": "changelog.md"}],
+  "conversation_id": "45f38376-80e8-42b1-a2f3-da84320a800d",
+  "model": "gpt-5.1",
+  "usage": {"prompt_tokens": 2220, "completion_tokens": 30, "total_tokens": 2250},
+  "tool_calls": [{"name": "read_file", "arguments": {"path": "go.mod"}, "result": "module …", "approved": true}]
+}
+```
+
+- `answer` joins the text of every round of a run with tool calls.
+- `sources` have the fields the server sent: `title`, `url` (a URL or a path)
+  and `filename`. `usage` is summed over the run, `null` when the server
+  reported none; `model` is the model that answered.
+- `tool_calls` lists the calls the agent made, with `approved: false` for one
+  that was denied or not run.
+- On failure the object also has `error` (the same one-line message as on a
+  terminal), the fields hold what arrived before it, and the exit code is `1`
+  (`2` for a usage error such as no question, `130` when interrupted).

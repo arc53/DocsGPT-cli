@@ -96,6 +96,7 @@ func init() {
 		{name: "approve", desc: "Run tool calls without asking, or ask again", run: (*chatSession).toggleApprove},
 		{name: "key", desc: "Switch to another agent API key", run: (*chatSession).switchKey},
 		{name: "settings", desc: "Change settings", run: (*chatSession).settings},
+		{name: "changelog", desc: "Show what's new in the latest release", run: (*chatSession).changelog},
 		{name: "help", desc: "Show commands and keys", run: (*chatSession).help},
 		{name: "quit", desc: "Leave the chat", aliases: []string{"exit"}, run: func(s *chatSession, _ string) { s.quit = true }},
 	}
@@ -207,6 +208,7 @@ func (s *chatSession) loop(first string) {
 	default:
 		s.top()
 	}
+	s.whatsNew()
 	s.footer()
 	if first = strings.TrimSpace(first); first != "" {
 		s.send(first, first)
@@ -387,7 +389,7 @@ func (s *chatSession) send(text, shown string) {
 	ans := answer()
 	var texts []string
 	label := "Thinking…"
-	res, err := s.client.RunWithTools(ctx, messages, docsgpt.RunOptions{
+	res, err := retrying(ctx, s.client, s.cfg.Settings, s.scr.Status, "").RunWithTools(ctx, messages, docsgpt.RunOptions{
 		Tools: s.toolDefs, Stream: !globalNoStream, ConversationID: s.conversationID,
 		OnDelta: func(delta docsgpt.Delta, _ string) {
 			if ans.Delta(delta) {
@@ -420,7 +422,7 @@ func (s *chatSession) send(text, shown string) {
 		// The server may have refused the conversation (deleted, say):
 		// the next turn starts a new one from the messages.
 		s.conversationID = ""
-		s.fail(err.Error())
+		s.fail(explainChatError(err, s.baseURL, s.keyName).Error())
 		return
 	}
 	s.scr.Add(display.Sources(res.Sources))

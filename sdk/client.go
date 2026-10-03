@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -16,13 +15,19 @@ type Client struct {
 	BaseURL    string
 	APIKey     string
 	HTTPClient *http.Client
+	// Retry says how chat requests that failed before their answer
+	// started are sent again; the zero value never retries.
+	Retry RetryPolicy
 }
 
+// NewClient returns a client for the server at baseURL, with
+// DefaultRetryPolicy.
 func NewClient(baseURL, apiKey string) *Client {
 	return &Client{
 		BaseURL:    strings.TrimRight(baseURL, "/"),
 		APIKey:     apiKey,
 		HTTPClient: &http.Client{},
+		Retry:      DefaultRetryPolicy(),
 	}
 }
 
@@ -45,22 +50,11 @@ func (c *Client) Send(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	c.setHeaders(httpReq)
-
-	resp, err := c.HTTPClient.Do(httpReq)
+	resp, err := c.do(ctx, func() (*http.Request, error) { return c.newChatRequest(ctx, body, false) })
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
-	}
 
 	var chatResp ChatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
@@ -82,23 +76,13 @@ func (c *Client) SendStream(ctx context.Context, req ChatRequest, onDelta Stream
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	c.setHeaders(httpReq)
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	resp, err := c.HTTPClient.Do(httpReq)
+	// Retries end with the response: past it, part of the answer may
+	// have been seen.
+	resp, err := c.do(ctx, func() (*http.Request, error) { return c.newChatRequest(ctx, body, true) })
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
-	}
 
 	var (
 		out          ChatResponse
@@ -329,8 +313,7 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+		return nil, newAPIError(resp)
 	}
 	var list struct {
 		Data []Model `json:"data"`
@@ -339,6 +322,19 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 		return nil, fmt.Errorf("decode models: %w", err)
 	}
 	return list.Data, nil
+}
+
+// newChatRequest builds a chat completion request carrying body.
+func (c *Client) newChatRequest(ctx context.Context, body []byte, stream bool) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+	if stream {
+		req.Header.Set("Accept", "text/event-stream")
+	}
+	return req, nil
 }
 
 func (c *Client) setHeaders(req *http.Request) {

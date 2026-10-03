@@ -118,7 +118,7 @@ stays open without input (ssh, CI jobs, a "while read" loop), pass --no-stdin.`,
 			}
 			return chatCmd.RunE(chatCmd, args)
 		}
-		if len(args) == 0 && stdinIsTerminal() && isatty.IsTerminal(os.Stdout.Fd()) {
+		if len(args) == 0 && !askJSON && stdinIsTerminal() && isatty.IsTerminal(os.Stdout.Fd()) {
 			return chatCmd.RunE(chatCmd, nil)
 		}
 		if err := commandTypo(cmd, args); err != nil {
@@ -231,7 +231,7 @@ func groupCommand(c *cobra.Command) {
 const groupAnnotation = "docsgpt/group"
 
 func Execute() {
-	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	setupCompletion()
 	questionArgs()
 
 	if err := config.MigrateIfNeeded(); err != nil {
@@ -262,7 +262,8 @@ func Execute() {
 
 	if err != nil {
 		// A prompt dismissed with Esc or Ctrl+C needs no message.
-		if !errors.Is(err, ui.ErrCancelled) {
+		// Nor one already reported (in ask --json's output).
+		if !errors.Is(err, ui.ErrCancelled) && !errors.Is(err, errReported) {
 			display.ErrorMsg(err.Error())
 		}
 		os.Exit(exitCodeFor(err))
@@ -274,7 +275,7 @@ func Execute() {
 // build, or the update/host commands (which run their own update logic).
 // Installs we cannot swap (Homebrew, unwritable dir) downgrade on → notify.
 func updateGate() (mode string, exePath string) {
-	if os.Getenv("DOCSGPT_NO_UPDATE_CHECK") != "" {
+	if os.Getenv("DOCSGPT_NO_UPDATE_CHECK") != "" || completing() {
 		return "", ""
 	}
 	if !isatty.IsTerminal(os.Stderr.Fd()) {
@@ -337,6 +338,7 @@ func init() {
 	}
 	for _, c := range []*cobra.Command{rootCmd, askCmd} {
 		c.Flags().BoolVar(&globalNoStdin, "no-stdin", false, "Don't read piped input (for ssh, CI jobs and while-read loops)")
+		c.Flags().BoolVar(&askJSON, "json", false, "Print the answer, sources, usage and tool calls as one JSON object")
 	}
 	for _, c := range []*cobra.Command{rootCmd, chatCmd} {
 		c.Flags().BoolVarP(&chatContinue, "continue", "c", false, "Continue the latest chat in this directory")

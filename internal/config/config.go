@@ -55,6 +55,8 @@ type Settings struct {
 	Hyperlinks              string `json:"hyperlinks,omitempty"`           // "auto" (the default), "on", "off": links in answers are clickable (OSC 8)
 	AutoUpdate              string `json:"auto_update,omitempty"`          // "on", "notify", "off"
 	DisableUpdateCheck      bool   `json:"disable_update_check,omitempty"` // legacy, superseded by auto_update
+	Retry                   string `json:"retry,omitempty"`                // "on" (the default), "off": send a chat request that failed before its answer again
+	WhatsNew                string `json:"whats_new,omitempty"`            // "on" (the default), "off": show the release notes in the chat after an update
 }
 
 // AutoUpdateMode resolves the effective auto-update mode: "on" (stage and

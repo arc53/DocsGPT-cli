@@ -1,6 +1,7 @@
 package update
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,7 +11,8 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-const latestReleaseURL = "https://api.github.com/repos/arc53/DocsGPT-cli/releases/latest"
+// latestReleaseURL is a variable for the tests.
+var latestReleaseURL = "https://api.github.com/repos/arc53/DocsGPT-cli/releases/latest"
 
 // Auto-update modes; config.Settings.AutoUpdateMode resolves to one of these.
 const (
@@ -33,6 +35,7 @@ func IsHomebrewPath(path string) bool {
 type Release struct {
 	TagName string  `json:"tag_name"`
 	HTMLURL string  `json:"html_url"`
+	Body    string  `json:"body"` // the release notes, markdown
 	Assets  []Asset `json:"assets"`
 }
 
@@ -74,15 +77,21 @@ func IsNewer(latest, current string) bool {
 
 // FetchLatest queries GitHub for the most recent release.
 func FetchLatest(timeout time.Duration) (*Release, error) {
-	client := &http.Client{Timeout: timeout}
-	req, err := http.NewRequest(http.MethodGet, latestReleaseURL, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return FetchLatestContext(ctx)
+}
+
+// FetchLatestContext is FetchLatest, for as long as ctx lasts.
+func FetchLatestContext(ctx context.Context) (*Release, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestReleaseURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "docsgpt-cli")
 
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
