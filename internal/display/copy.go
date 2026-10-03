@@ -10,7 +10,7 @@ import (
 
 // How the transcript's lines copy (ui.Plain). A block knows its text before
 // it was wrapped: a message's own, or for markdown the same markdown
-// rendered wide enough that glamour wraps nothing. joins lines the wrapped
+// rendered wide enough that nothing wraps. joins lines the wrapped
 // rows up against it, so a copied paragraph is one line again and a code
 // line cut for the width is whole.
 

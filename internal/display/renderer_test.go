@@ -197,14 +197,37 @@ func emulate(t *testing.T, out string, width, height int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func TestHangLists(t *testing.T) {
-	in := "\x1b[38;5;8m• \x1b[0mfirst item that is\nlong\n• short\n    1. nested item\n    that wraps\n\nplain paragraph\nline two"
-	want := "• first item that is\n  long\n• short\n    1. nested item that\n       wraps\n\nplain paragraph\nline two"
-	if got := xansi.Strip(hangLists(in, 24)); got != want {
-		t.Errorf("hangLists:\n got %q\nwant %q", got, want)
+func TestRewrap(t *testing.T) {
+	in := "\x1b[38;5;8m• \x1b[0mfirst item that is long\n• short\n  1. nested item that wraps\nits hard break\n\n│ a quoted line that wraps\nplain paragraph that wraps"
+	want := "• first item that is\n  long\n• short\n  1. nested item\n     that wraps\n     its hard break\n\n│ a quoted line that\n│ wraps\nplain paragraph that\nwraps"
+	if got := xansi.Strip(rewrap(in, 20)); got != want {
+		t.Errorf("rewrap:\n got %q\nwant %q", got, want)
 	}
 	if got := tidy("a\n\n\n\nb\n\n"); got != "a\n\nb" {
 		t.Errorf("tidy kept doubled blank lines: %q", got)
+	}
+}
+
+func TestWrapWords(t *testing.T) {
+	for _, tt := range []struct {
+		s     string
+		width int
+		want  string
+	}{
+		{"one two three", 7, "one two\nthree"},
+		{"an id 6f0e1c2a-1111-2222 here", 16, "an id 6f0e1c2a-1\n111-2222 here"},
+		{"see https://example.com/a/very/long/path ok", 20, "see https://example.\ncom/a/very/long/path\nok"},
+		{"中文字符测试中文", 5, "中文\n字符\n测试\n中文"},
+		{"中文", 1, "中\n文"},
+		{"x \x1b[3mitalic words\x1b[0m y", 8, "x italic\nwords y"},
+	} {
+		got := wrapWords(tt.s, tt.width)
+		if s := xansi.Strip(strings.Join(got, "\n")); s != tt.want {
+			t.Errorf("wrapWords(%q, %d) = %q, want %q", tt.s, tt.width, s, tt.want)
+		}
+	}
+	if got := wrapWords("x \x1b[3mitalic words\x1b[0m y", 8); !strings.HasPrefix(got[1], "\x1b[3mwords") {
+		t.Errorf("the second row does not set its style: %q", got)
 	}
 }
 

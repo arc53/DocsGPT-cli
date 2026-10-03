@@ -10,7 +10,6 @@ import (
 	"github.com/arc53/DocsGPT-cli/internal/ui"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
 )
@@ -38,7 +37,7 @@ type StreamRenderer struct {
 
 	out    io.Writer
 	tty    bool
-	md     *glamour.TermRenderer
+	md     *markdown
 	width  int
 	height int
 

@@ -8,7 +8,6 @@ import (
 	"github.com/arc53/DocsGPT-cli/internal/ui"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
@@ -173,7 +172,7 @@ func User(text string) ui.Block {
 
 // markdownAt returns a markdown renderer for width, kept per width: a new
 // one costs a few milliseconds. Only the screen's goroutine renders.
-func markdownAt(width int) *glamour.TermRenderer {
+func markdownAt(width int) *markdown {
 	mdMu.Lock()
 	defer mdMu.Unlock()
 	if mdWidth != width || mdRenderer == nil {
@@ -184,7 +183,7 @@ func markdownAt(width int) *glamour.TermRenderer {
 
 var (
 	mdMu       sync.Mutex
-	mdRenderer *glamour.TermRenderer
+	mdRenderer *markdown
 	mdWidth    int
 )
 
