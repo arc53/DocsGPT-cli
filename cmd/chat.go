@@ -239,7 +239,7 @@ func (s *chatSession) shell(line string) {
 	fmt.Fprint(os.Stderr, "\x1b[1A")
 	restore := ui.HoldInput()
 	defer restore()
-	out := tools.RunShell(ctx, command)
+	out := tools.RunShell(ctx, nil, command)
 	restore()
 	if s.stopped = terminated(ctx); s.stopped != nil {
 		return

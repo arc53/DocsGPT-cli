@@ -26,10 +26,18 @@ import (
 type Session struct {
 	AutoApprove bool          // run every call unasked: --auto-approve, "Always approve", /approve
 	Timeout     time.Duration // per command or read
+	UI          UI            // stderr when nil
 
 	allowWrites bool
 	allowReads  bool
 	allowed     map[string]bool // keys of always-allowed commands
+}
+
+func (s *Session) ui() UI {
+	if s.UI == nil {
+		s.UI = &stderrUI{}
+	}
+	return s.UI
 }
 
 // Handle runs one tool call and returns the result for the model. A
@@ -69,7 +77,7 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 	edited, titled := false, false
 	for {
 		if !titled {
-			display.ToolTitle("$ "+command, note)
+			s.ui().Open("$ "+command, note)
 			titled = true
 		}
 		if s.AutoApprove || s.allowed[alwaysKey(command)] {
@@ -87,7 +95,7 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 			// The one-line field shows the command as the title does; what
 			// the user submits is what runs, with ␊ read back as a newline.
 			shown := display.Safe(command)
-			v, err := ui.Input{Title: "Edit command", Value: shown, Stderr: true, Summary: func(string) string { return "" }}.Run()
+			v, err := s.ui().Edit("Edit command", shown)
 			if v = strings.TrimSpace(v); err == nil && v != "" && v != shown {
 				command, edited, titled = strings.ReplaceAll(v, "␊", "\n"), true, false
 			}
@@ -102,11 +110,9 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 		break
 	}
 
-	view := display.NewTailView()
 	var out tailBuffer
 	start := time.Now()
-	err := runCommand(ctx, command, dir, s.Timeout, io.MultiWriter(&out, view))
-	view.Close()
+	err := runCommand(ctx, command, dir, s.Timeout, io.MultiWriter(&out, s.ui().Output()))
 	took := display.Duration(time.Since(start))
 
 	result := out.String()
@@ -119,19 +125,19 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
-		display.ToolStatus(true, "exit 0 · "+took)
+		s.ui().Close(true, "exit 0 · "+took)
 		return result
 	case errors.Is(err, context.Canceled):
-		display.ToolStatus(false, "cancelled")
+		s.ui().Close(false, "cancelled")
 		return result + "\n[The user interrupted the command.]"
 	case errors.Is(err, errTimeout):
-		display.ToolStatus(false, "timed out after "+display.Duration(s.Timeout))
+		s.ui().Close(false, "timed out after "+display.Duration(s.Timeout))
 		return result + fmt.Sprintf("\n[The command timed out after %s.]", display.Duration(s.Timeout))
 	case errors.As(err, &exit):
-		display.ToolStatus(false, fmt.Sprintf("exit %d · %s", exit.ExitCode(), took))
+		s.ui().Close(false, fmt.Sprintf("exit %d · %s", exit.ExitCode(), took))
 		return result + fmt.Sprintf("\n[The command exited with code %d.]", exit.ExitCode())
 	}
-	display.ToolStatus(false, err.Error())
+	s.ui().Close(false, err.Error())
 	return result + "\n[The command failed: " + err.Error() + "]"
 }
 
@@ -145,8 +151,8 @@ func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path 
 	}
 	real, err := regularFile(path)
 	if err != nil {
-		display.ToolTitle(title, "")
-		display.ToolStatus(false, err.Error())
+		s.ui().Open(title, "")
+		s.ui().Close(false, err.Error())
 		return "Error: " + err.Error()
 	}
 	var reason string
@@ -169,7 +175,7 @@ func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path 
 			note = "→ " + display.ShortPath(real) + " " + note
 		}
 	}
-	display.ToolTitle(title, note)
+	s.ui().Open(title, note)
 	if reason != "" {
 		choice, refusal := s.ask(cancel, "read this file once",
 			&ui.Item{Label: "Always allow reads", Description: "read any file without asking this session"}, false)
@@ -188,20 +194,20 @@ func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path 
 	text, shown, total, err := readFile(readCtx, real, offset, limit)
 	switch {
 	case ctx.Err() != nil:
-		display.ToolStatus(false, "cancelled")
+		s.ui().Close(false, "cancelled")
 		return "The user interrupted the read."
 	case errors.Is(err, context.DeadlineExceeded):
-		display.ToolStatus(false, "timed out after "+display.Duration(s.Timeout))
+		s.ui().Close(false, "timed out after "+display.Duration(s.Timeout))
 		return "Error: reading the file timed out."
 	case err != nil:
-		display.ToolStatus(false, err.Error())
+		s.ui().Close(false, err.Error())
 		return "Error: " + err.Error()
 	}
 	status := lines(shown)
 	if shown < total {
 		status += fmt.Sprintf(" of %d", total)
 	}
-	display.ToolStatus(true, status)
+	s.ui().Close(true, status)
 	return text
 }
 
@@ -276,8 +282,8 @@ func (s *Session) writeFile(ctx context.Context, cancel context.CancelFunc, path
 	title := "write " + display.ShortPath(path)
 	fi, err := os.Stat(path)
 	if err == nil && !fi.Mode().IsRegular() {
-		display.ToolTitle(title, "")
-		display.ToolStatus(false, path+" is not a regular file")
+		s.ui().Open(title, "")
+		s.ui().Close(false, path+" is not a regular file")
 		return "Error: " + path + " is not a regular file"
 	}
 	var before []byte
@@ -287,14 +293,14 @@ func (s *Session) writeFile(ctx context.Context, cancel context.CancelFunc, path
 	preview, added, removed := display.DiffPreview(string(before), content, 10)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		display.ToolTitle(title, "(new, "+lines(added)+")")
+		s.ui().Open(title, "(new, "+lines(added)+")")
 	case err == nil && fi.Size() > maxPreviewBytes:
 		preview = nil
-		display.ToolTitle(title, fmt.Sprintf("(replaces %d bytes with %s)", fi.Size(), lines(added)))
+		s.ui().Open(title, fmt.Sprintf("(replaces %d bytes with %s)", fi.Size(), lines(added)))
 	default:
-		display.ToolTitle(title, fmt.Sprintf("(+%d −%d)", added, removed))
+		s.ui().Open(title, fmt.Sprintf("(+%d −%d)", added, removed))
 	}
-	display.ToolLines(preview)
+	s.ui().Lines(preview)
 
 	if !s.AutoApprove && !s.allowWrites {
 		choice, refusal := s.ask(cancel, "write this file once",
@@ -305,14 +311,14 @@ func (s *Session) writeFile(ctx context.Context, cancel context.CancelFunc, path
 		s.allowWrites = choice == "always"
 	}
 	if ctx.Err() != nil {
-		display.ToolStatus(false, "cancelled")
+		s.ui().Close(false, "cancelled")
 		return "The user interrupted the run before this tool call ran."
 	}
 	if err := writeFile(path, content); err != nil {
-		display.ToolStatus(false, err.Error())
+		s.ui().Close(false, err.Error())
 		return "Error: " + err.Error()
 	}
-	display.ToolStatus(true, "wrote "+lines(len(splitLines(content))))
+	s.ui().Close(true, "wrote "+lines(len(splitLines(content))))
 	return fmt.Sprintf("Wrote %d bytes to %s.", len(content), path)
 }
 
@@ -334,17 +340,17 @@ func (s *Session) ask(cancel context.CancelFunc, once string, always *ui.Item, e
 	if edit {
 		items = append(items, ui.Item{Label: "Edit", Value: "edit", Keys: []string{"e"}, Description: "change the command, then decide again"})
 	}
-	choice, err := ui.Select{Items: items, Inline: true, Stderr: true, Summary: func(ui.Item) string { return "" }}.Run()
+	choice, err := s.ui().Choose(items)
 	switch {
 	case errors.Is(err, ui.ErrCancelled):
 		cancel()
-		display.ToolStatus(false, "cancelled")
+		s.ui().Close(false, "cancelled")
 		return "", "The user interrupted the run before this tool call ran."
 	case err != nil:
-		display.ToolStatus(false, "not run: "+err.Error())
+		s.ui().Close(false, "not run: "+err.Error())
 		return "", "The tool call could not be approved: " + err.Error()
 	case choice == "deny":
-		display.ToolStatus(false, "denied")
+		s.ui().Close(false, "denied")
 		return "", "The user denied this tool call."
 	case choice == "all":
 		s.AutoApprove = true
