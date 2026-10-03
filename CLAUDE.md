@@ -78,7 +78,7 @@ internal/
   context/
     enricher.go      → the <context> block: cwd, capped listing, AGENTS.md/CLAUDE.md (git root → cwd, 12KB), shell history (opt-in)
   session/
-    session.go       → saved chats: ~/.docsgpt/sessions/<slug>-<hash>/<time>_<id>.jsonl (slug = last ≤48 chars of the cwd, non-[A-Za-z0-9_] runs as `-`; hash = 8 hex of sha256(cwd); 0600, dirs 0700); header + message/state lines, each Record one append; List keeps the files whose header cwd is this cwd; Load/Turns
+    session.go       → saved chats: ~/.docsgpt/sessions/<slug>-<hash>/<time>_<id>.jsonl (slug = last ≤48 chars of the cwd, non-[A-Za-z0-9_] runs as `-`; hash = 8 hex of sha256(cwd); 0600, dirs 0700); header + message/state/name lines, each Record one append; List keeps the files whose header cwd is this cwd; Load/Turns (each with its server, key, conversation and index there), Usage, SetName, Delete, Fork
   display/
     theme.go         → semantic palette (pi's OKHSL tones: hex + 256 + 16-color fallbacks,
                        dark/light; plain under NO_COLOR; tool block backgrounds a step
@@ -298,8 +298,9 @@ or with TERM=dumb it refuses.
   back to legacy bytes (Shift+Enter → `\n` = ctrl+j, Ctrl+C → 0x03, Esc → ESC, …),
   holds an unfinished CSI (keys, SGR mouse reports) across reads, passes bracketed
   pastes through untouched.
-- Editor: dim rules above and below the text, a dim footer (left `~/dir (branch)`,
-  right `key · host`, then `+N command outputs`, `think on`, then `auto-approve` in the warning color; it is dim as a whole,
+- Editor: dim rules above and below the text, a dim footer (left `~/dir (branch)`
+  and ` · <name>` of a named chat, right `↑in ↓out (Σ ↑in ↓out)` tokens of the last
+  exchange and the session once known, `key · host`, then `+N command outputs`, `think on`, then `auto-approve` in the warning color; it is dim as a whole,
   so a differently styled item goes last; the left is cut from its start).
   Enter sends; Shift+Enter / Ctrl+J / Alt+Enter / a trailing `\` insert a newline; ↑/↓ move by visual row, history at the edges
   (`~/.docsgpt/history`, JSON string per line, 0600, 500 entries, entries ≤16KB and
@@ -310,7 +311,9 @@ or with TERM=dumb it refuses.
   Typing `/` opens the command popup (prefix then fuzzy matches, under the editor); Tab
   completes, Enter runs the exact or selected command at once, Esc closes it.
 - Commands (`chatCommands`, one table for popup, /help, dispatch): /new (/clear:
-  the transcript starts over), /resume, /copy (whole answer, or a pick of its code
+  the transcript starts over), /resume, /name [title], /edit (also Esc twice on an
+  empty idle input: `ScreenOptions.EscEsc`), /retry, /good, /bad (see Fork and
+  feedback below), /copy (whole answer, or a pick of its code
   blocks), /export [file] (markdown, default `docsgpt-<date>.md`; `~/` expanded; an
   existing file only after a confirmation, default No), /think, /approve (toggles
   the tools Session's AutoApprove; "Always allow" choices are kept), /key (switch
@@ -324,8 +327,11 @@ or with TERM=dumb it refuses.
   conversation, an older one from the messages. Each answer segment is a
   `display.Answer` block (a new one after every tool call); tool calls go through
   `screenTools` (a ToolBlock per call, approvals as an inline Select in the panel).
-  A failed or interrupted turn is dropped (`Interrupted.` note); a failed one also
-  drops the conversation id. Sources follow as a block.
+  A failed or interrupted turn is dropped (`Interrupted.` note) together with the
+  conversation id (the server may keep a stopped exchange the history leaves
+  out), and kept as `unanswered` for /retry. Sources follow as a block;
+  `RunResult.Usage` (summed over tool rounds) goes on the last assistant
+  message's `usage` and into the footer.
 - Context: the server treats `system` messages as a prompt override that agents
   ignore by default, so ask and chat put a `<context>` block (cwd, first 50 entries
   with `/` on dirs, AGENTS.md or else CLAUDE.md of every dir from the git root down
@@ -341,6 +347,28 @@ or with TERM=dumb it refuses.
   conversation id and the last context block; a chat of another key switches to it
   when stored (and no --key/env override), else warns and goes on in a new
   conversation; another server likewise. /new and /key start a new session.
+  `name` lines (/name, picker Ctrl+R; "" clears; do not bump Updated) name a
+  chat: footer, picker label, window title. The picker (`Screen.SelectAction`,
+  `Select.Actions`) renames (Ctrl+R, an Input) or deletes (Ctrl+D, confirm, never
+  the current chat) and reopens on the same row.
+- Fork and feedback (`cmd/chat_fork.go`, `cmd/chat_feedback.go`): /edit picks a
+  message (newest first), `Session.Fork(i)` copies the messages before it into a
+  new unsaved session (header `parent`, state lines kept, written with its first
+  record; the old file stays), the history is replayed without a conversation id,
+  the transcript is redrawn with `── edited from message N ──`, and the text goes
+  into the editor (`Screen.SetInput`). /retry re-sends the unanswered message, or
+  forks at the last question and sends it. /good and /bad POST `/api/feedback`
+  (`like`/`dislike`, `api_key`, `conversation_id`, `question_index` = `Turn.Index`,
+  counted per server conversation: a new id restarts at 0). The server accepts any
+  index (200 even when no message is there) and inserts compression summaries as
+  messages, so a very long conversation can be rated off by those; no comment field.
+- Title and notifications (`ui/terminal.go`): `Screen.Title` pushes the terminal
+  title (CSI 22;0t), sets `docsgpt · <name or first question> · <dir>` (OSC 0,
+  printable only, ≤80), pops it after Run and around Ctrl+Z. Focus reports
+  (`tea.WithReportFocus`; ttyInput takes CSI I/O out of the input) feed
+  `Screen.Notify`, which only fires while blurred: OSC 9 (iTerm2), OSC 99 (kitty),
+  OSC 777 (Ghostty, WezTerm, foot, rxvt, VTE), else BEL (also in tmux/screen). The
+  chat notifies on an answer, a failure and an approval, unless `notify` is off.
 In ask, the approval prompt is a bubbletea program on stderr; it reads keys in raw mode, so Ctrl+C there cancels the run at once.
 
 ### Auto-update flow

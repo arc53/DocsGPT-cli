@@ -112,6 +112,7 @@ docsgpt-cli config path                       # ~/.docsgpt/config.json
 | `banner` | `always`, `once`, `never` | `once` |
 | `theme` | `auto`, `dark`, `light` | `auto` |
 | `mouse` | `on`, `off`: scroll the chat with the wheel and select text to copy it ([Scrolling](chat.md#scrolling), [Selecting text](chat.md#selecting-text)) | `on` |
+| `notify` | `on`, `off`: notify when an answer or an approval waits and the terminal is not focused ([Notifications](chat.md#window-title-and-notifications)) | `on` |
 | `send_current_directory` | `true`, `false` | `true` |
 | `send_directory_contents` | `true`, `false` | `true` |
 | `send_project_instructions` | `true`, `false` (AGENTS.md / CLAUDE.md) | `true` |
