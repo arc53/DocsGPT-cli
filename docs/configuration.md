@@ -117,6 +117,7 @@ docsgpt-cli config path                       # ~/.docsgpt/config.json
 | `hyperlinks` | `auto`, `on`, `off`: links in answers are clickable, without their URL ([Links](chat.md#links)) | `auto` |
 | `retry` | `on`, `off`: send a request again when it fails before its answer starts (429, 502-504, a refused or dropped connection), up to 3 times after 2s, 4s and 8s or the server's `Retry-After` (a refused connection once); the chat counts the wait down, Esc cancels it | `on` |
 | `whats_new` | `on`, `off`: after an update, the next chat starts with the first lines of the release notes (`/changelog` shows them all) | `on` |
+| `notify` | `on`, `off`: notify when an answer or an approval waits and the terminal is not focused ([Notifications](chat.md#window-title-and-notifications)) | `on` |
 | `send_current_directory` | `true`, `false` | `true` |
 | `send_directory_contents` | `true`, `false` | `true` |
 | `send_project_instructions` | `true`, `false` (AGENTS.md / CLAUDE.md) | `true` |

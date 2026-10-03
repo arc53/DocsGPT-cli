@@ -53,6 +53,7 @@ type Settings struct {
 	Banner                  string `json:"banner,omitempty"`               // "always", "once", "never"
 	Mouse                   string `json:"mouse,omitempty"`                // "on" (the default), "off": the chat scrolls with the wheel and selects text to copy
 	Hyperlinks              string `json:"hyperlinks,omitempty"`           // "auto" (the default), "on", "off": links in answers are clickable (OSC 8)
+	Notify                  string `json:"notify,omitempty"`               // "on" (the default), "off": the chat notifies when an answer or approval waits and the terminal is not focused
 	AutoUpdate              string `json:"auto_update,omitempty"`          // "on", "notify", "off"
 	DisableUpdateCheck      bool   `json:"disable_update_check,omitempty"` // legacy, superseded by auto_update
 	Retry                   string `json:"retry,omitempty"`                // "on" (the default), "off": send a chat request that failed before its answer again

@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -48,6 +49,10 @@ type ttyInput struct {
 	*os.File
 	held  []byte // an unfinished sequence, completed by the next read
 	paste bool   // inside a bracketed paste, passed on as it is
+	// blurred takes the terminal's focus reports (CSI I, CSI O), which
+	// go no further: bubbletea knows one only when a read holds nothing
+	// else.
+	blurred *atomic.Bool
 }
 
 // newTTYInput returns nil on Windows, where bubbletea reads console events.
@@ -118,6 +123,8 @@ func (t *ttyInput) translate(b []byte) (out, held []byte) {
 			out = append(out, legacyKey(params, false)...)
 		case final == '~' && strings.HasPrefix(params, "27;"):
 			out = append(out, legacyKey(params, true)...)
+		case params == "" && (final == 'I' || final == 'O') && t.blurred != nil:
+			t.blurred.Store(final == 'O')
 		default:
 			out = append(out, seq...)
 		}

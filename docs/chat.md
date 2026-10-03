@@ -14,8 +14,10 @@ terminal. Answers stream in as markdown, followed by a short **Sources** list
 The chat takes the whole window, like a full-screen program: a short header
 opens the conversation (version, keys, and the `AGENTS.md` / `CLAUDE.md` files
 the context sends), and the input stays at the bottom with a line under it: the
-directory and its git branch on the left, the key and the server (and what is
-on, such as `think on`) on the right. You can type while an answer streams in;
+directory, its git branch and the chat's name on the left; on the right the
+tokens of the last answer, sent and received (`↑2.5k ↓45`, followed by the
+chat's total, `(Σ ↑12k ↓3.4k)`, once there are more), the key and the server
+(and what is on, such as `think on`). You can type while an answer streams in;
 Enter then queues your message until the answer is done. Queued messages are
 listed above the input; Alt+↑ takes them back into it to edit, while the
 answer goes on. When you leave, the
@@ -92,6 +94,7 @@ wheel then does whatever the terminal does on a full-screen program: many send
 | Ctrl+- | Undo: a word, a run of deletions, a paste or a recalled message at a time |
 | Alt+↑ | Take the queued messages back into the input (the answer goes on) |
 | Esc | Clear the selection; else stop the answer or the command that runs |
+| Esc Esc | On an empty input: edit an earlier message and send it again ([Editing a message](#editing-a-message)) |
 | Ctrl+C | Stop the answer, or clear the input; twice on an empty input quits |
 | Ctrl+D | Quit |
 | Ctrl+Z | Suspend (`fg` to come back) |
@@ -120,7 +123,11 @@ Type `/` to see them, filtered as you type. Tab completes, Enter runs.
 | Command | Action |
 |---|---|
 | `/new` (`/clear`) | Start a new conversation |
-| `/resume` | Pick an earlier chat in this directory |
+| `/resume` | Pick an earlier chat in this directory (Ctrl+R renames it, Ctrl+D deletes it) |
+| `/name [title]` | Name the chat; without a title, shows the name to change or clear |
+| `/edit` | Edit an earlier message and send it again (also Esc Esc) |
+| `/retry` | Send the last message again: one that failed or was stopped, else the last question |
+| `/good`, `/bad` | Rate the last answer for the agent's owner ([Feedback](#feedback)) |
 | `/copy` | Copy the last answer, or one of its code blocks |
 | `/export [file]` | Save the conversation as markdown (default `docsgpt-<date>.md`; `~/` is your home directory; asks before overwriting a file, No by default) |
 | `/think` | Show or hide the model's reasoning |
@@ -156,6 +163,51 @@ in; the list shows only the chats recorded for it.
   server are the same. Otherwise it continues in a new conversation, with the
   saved messages as history.
 - When you leave, the CLI reminds you of `docsgpt-cli -c`.
+- `/name Deploy notes` names the chat: the name shows in the footer, in the
+  terminal's title and in the `/resume` list instead of the first message.
+  `/name` alone shows it to change, or to clear by emptying it.
+- In the `/resume` list, Ctrl+R renames the highlighted chat and Ctrl+D deletes
+  it (after a confirmation; not the chat you are in).
+- The token counts of each answer are saved too, so a resumed chat's footer
+  shows its total again.
+
+### Editing a message
+
+Esc twice on an empty input (or `/edit`) lists your messages, newest first
+(type to filter). The one you pick goes back into the input, and the chat goes
+back to before it: the transcript is drawn again up to there, under
+`── edited from message 3 ──`. Change it and send it, and the chat goes on from
+there in a new session that starts with a copy of the earlier exchanges; the
+whole chat as it was stays in `/resume`. The agent gets the earlier messages
+again as the history of a new server conversation.
+
+`/retry` sends your last message again: the one that failed or that you
+stopped, else your last question, going back to before its answer the same
+way.
+
+### Feedback
+
+`/good` and `/bad` rate the last answer. The rating goes to the server with the
+key the answer came with, and the agent's owner sees it with the conversation
+in DocsGPT; the line `✓ Feedback sent` confirms it. The server keeps only the
+rating: text after the command is not sent. An answer that the server kept no
+conversation for (an older server) cannot be rated.
+
+## Window title and notifications
+
+While the chat runs, the terminal's title (its tab) reads
+`docsgpt · <name or first message> · <directory>`; the title from before comes
+back when you leave or suspend the chat (in terminals that keep a title stack,
+such as xterm, iTerm2, kitty, WezTerm, Ghostty and tmux).
+
+When an answer is ready, fails, or a tool call waits for your approval while
+the terminal is not focused, the chat sends a notification: a desktop
+notification in iTerm2, kitty, Ghostty, WezTerm, foot, rxvt and VTE terminals
+(GNOME Terminal and others), else the terminal's bell (Terminal.app bounces its
+Dock icon). It needs the terminal's focus reports; in tmux, add
+`set -g focus-events on` to `~/.tmux.conf` (tmux then turns the bell into its
+window alert). `docsgpt-cli config set notify off` (or `/settings`) turns
+notifications off.
 
 ## Stopping
 

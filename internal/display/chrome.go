@@ -68,14 +68,62 @@ func chatHeader(width int, version, newline string, files []string) string {
 }
 
 // ChatFooter is the left of the line under the chat input: the working
-// directory and its git branch, fitted beside right.
-func ChatFooter(cwd, right string) string {
+// directory, its git branch and the chat's name, fitted beside right.
+func ChatFooter(cwd, name, right string) string {
 	branch := ""
 	if b := gitBranch(cwd); b != "" {
 		branch = " (" + Safe(b) + ")"
 	}
+	if name != "" {
+		branch += " · " + ansi.Truncate(Safe(name), 40, "…")
+	}
 	room := termWidth() - lipgloss.Width(right) - 2 - lipgloss.Width(branch)
 	return shortenPath(abbreviateHome(cwd), max(8, room)) + branch
+}
+
+// TokenUsage is the footer's count of tokens sent (↑) and received (↓):
+// the last exchange's, then the chat's when there were more ("↑2.1k ↓45
+// (Σ ↑12k ↓3.4k)"); "" before any.
+func TokenUsage(lastIn, lastOut, totalIn, totalOut int) string {
+	if totalIn+totalOut == 0 {
+		return ""
+	}
+	s := "↑" + Tokens(lastIn) + " ↓" + Tokens(lastOut)
+	if totalIn != lastIn || totalOut != lastOut {
+		s += " (Σ ↑" + Tokens(totalIn) + " ↓" + Tokens(totalOut) + ")"
+	}
+	return s
+}
+
+// Tokens renders a count compactly: 950, 1.2k, 12k, 1.5M.
+func Tokens(n int) string {
+	switch {
+	case n < 1000:
+		return fmt.Sprint(n)
+	case n < 10_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1000), ".0") + "k"
+	case n < 999_500:
+		return fmt.Sprintf("%dk", (n+500)/1000)
+	case n < 10_000_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1e6), ".0") + "M"
+	}
+	return fmt.Sprintf("%dM", (n+500_000)/1_000_000)
+}
+
+// WindowTitle is the terminal title of a chat: "docsgpt · <title> ·
+// <directory>", the chat's title (its name or first question) cut short.
+func WindowTitle(title, cwd string) string {
+	parts := []string{"docsgpt"}
+	if title = strings.Join(strings.Fields(StripControls(title)), " "); title != "" {
+		if r := []rune(title); len(r) > 40 {
+			title = strings.TrimSpace(string(r[:39])) + "…"
+		}
+		parts = append(parts, title)
+	}
+	if dir := filepath.Base(cwd); dir != "" && dir != "." && dir != string(filepath.Separator) {
+		parts = append(parts, dir)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // gitBranch returns the branch checked out in the repository holding dir

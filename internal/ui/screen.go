@@ -41,6 +41,9 @@ type ScreenOptions struct {
 	Commands []Command // the editor's slash commands
 	History  *History
 	Mouse    bool // scroll with the wheel and select text to copy it
+	// EscEsc is sent as a message (a command) for Esc pressed twice on an
+	// empty input while nothing runs; "" for nothing.
+	EscEsc string
 	// Headless keeps the blocks without a terminal, prompts failing with
 	// ErrNotInteractive (for tests).
 	Headless bool
@@ -68,7 +71,7 @@ const (
 
 // NewScreen sets up a Screen; Run shows it.
 func NewScreen(o ScreenOptions) *Screen {
-	m := &screenModel{ed: newEditorModel(o.Commands, o.History), follow: true, mouse: o.Mouse, width: 80, height: 24}
+	m := &screenModel{ed: newEditorModel(o.Commands, o.History), follow: true, mouse: o.Mouse, width: 80, height: 24, escCmd: o.EscEsc}
 	s := &Screen{m: m, headless: o.Headless, done: make(chan struct{})}
 	if o.Headless {
 		return s
@@ -77,11 +80,12 @@ func NewScreen(o ScreenOptions) *Screen {
 		m.width, m.height = w, h
 	}
 	m.out = &termOutput{File: os.Stdout}
-	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithOutput(m.out), tea.WithoutSignalHandler()}
+	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithOutput(m.out), tea.WithoutSignalHandler(), tea.WithReportFocus()}
 	if o.Mouse {
 		opts = append(opts, tea.WithMouseCellMotion())
 	}
 	if in := newTTYInput(); in != nil {
+		in.blurred = &m.blurred
 		opts, m.keys = append(opts, tea.WithInput(in)), true
 	}
 	s.p = tea.NewProgram(m, opts...)
@@ -123,6 +127,9 @@ func (s *Screen) Run() error {
 	close(ended)
 	if s.m.keys {
 		os.Stdout.WriteString(keysOff)
+	}
+	if s.m.titled {
+		os.Stdout.WriteString(titlePop)
 	}
 	select {
 	case sig := <-got:
@@ -288,16 +295,21 @@ func (s *Screen) Input(in Input) (string, error) {
 }
 
 func (s *Screen) ask(p *panel) (string, error) {
+	r := s.answer(p)
+	return r.value, r.err
+}
+
+func (s *Screen) answer(p *panel) result {
 	if s.headless {
-		return "", ErrNotInteractive
+		return result{err: ErrNotInteractive}
 	}
 	p.reply = make(chan result, 1)
 	s.do(func(m *screenModel) tea.Cmd { return m.open(p) })
 	select {
 	case r := <-p.reply:
-		return r.value, r.err
+		return r
 	case <-s.done:
-		return "", ErrCancelled
+		return result{err: ErrCancelled}
 	}
 }
 
@@ -321,8 +333,9 @@ type panel struct {
 }
 
 type result struct {
-	value string
-	err   error
+	value  string
+	action string // the Select action that chose it
+	err    error
 }
 
 type (
@@ -374,6 +387,12 @@ type screenModel struct {
 	keys   bool // modified keys are asked for (not on Windows)
 	out    *termOutput
 	redraw atomic.Bool // Changed has a redraw on its way
+
+	escCmd  string      // see ScreenOptions.EscEsc
+	escAt   time.Time   // the first Esc of a pair
+	title   string      // the terminal title set, "" for none
+	titled  bool        // the terminal's own title is saved, to come back
+	blurred atomic.Bool // the terminal reported losing focus
 }
 
 // Init asks for modified keys once on the alternate screen: kitty keeps
@@ -440,10 +459,15 @@ func (m *screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spin++
 		return m, spinTick()
 	case resumedMsg:
+		m.retitle(true)
 		return m, m.reclaim()
 	case editedMsg:
+		m.retitle(false) // $EDITOR may have set its own
 		cmd, _ := m.ed.update(msg)
 		return m, tea.Batch(cmd, m.reclaim())
+	case tea.FocusMsg, tea.BlurMsg: // where ttyInput does not take them
+		_, blur := msg.(tea.BlurMsg)
+		m.blurred.Store(blur)
 	case hintMsg:
 		m.ed.update(msg)
 	case tickMsg, validatedMsg:
@@ -523,6 +547,9 @@ func (m *screenModel) key(k tea.KeyMsg) tea.Cmd {
 	m.typed = time.Now()
 	if (s == "ctrl+c" || s == "esc" && m.ed.popup == nil) && m.cancel != nil {
 		m.interrupt()
+		return nil
+	}
+	if m.escEsc(s) {
 		return nil
 	}
 	cmd, act := m.ed.update(k)
@@ -694,7 +721,7 @@ func (m *screenModel) panelKey(k tea.KeyMsg) tea.Cmd {
 		if p.sel.done {
 			r := result{err: ErrCancelled}
 			if p.sel.chosen != nil {
-				r = result{value: p.sel.chosen.value()}
+				r = result{value: p.sel.chosen.value(), action: p.sel.action}
 			}
 			m.close(r)
 		}
@@ -980,7 +1007,14 @@ func (m *screenModel) suspend() tea.Cmd {
 	if suspendProcess == nil {
 		return nil
 	}
-	return tea.Exec(handoff(func() error { suspendProcess(); return nil }), func(error) tea.Msg { return resumedMsg{} })
+	return tea.Exec(handoff(func() error {
+		if m.titled { // the shell's title while stopped
+			os.Stdout.WriteString(titlePop)
+			m.titled = false
+		}
+		suspendProcess()
+		return nil
+	}), func(error) tea.Msg { return resumedMsg{} })
 }
 
 // termOutput is stdout for a Screen: every write is one synchronized
