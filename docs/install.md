@@ -82,6 +82,33 @@ make build
 Source builds report version `dev` and do not update themselves; update them
 with `git pull && make build`.
 
+## Shell completion
+
+`docsgpt-cli completion <shell>` prints a completion script. It completes the
+commands and flags, and from your config the names of your stored keys
+(`--key`, `logout`), the settings of `config get` / `config set` and their
+values. It never goes over the network.
+
+```bash
+# bash (needs the bash-completion package)
+echo 'source <(docsgpt-cli completion bash)' >> ~/.bashrc
+
+# zsh (compinit must be on; oh-my-zsh and most setups do it)
+echo 'source <(docsgpt-cli completion zsh)' >> ~/.zshrc
+
+# fish
+docsgpt-cli completion fish > ~/.config/fish/completions/docsgpt-cli.fish
+```
+
+```powershell
+# PowerShell
+docsgpt-cli completion powershell | Out-String | Invoke-Expression
+# to keep it, add that line to $PROFILE
+```
+
+macOS ships bash 3.2, where `source <(…)` does nothing: use
+`eval "$(docsgpt-cli completion bash)"` there, or a newer bash.
+
 ## Updating
 
 `docsgpt-cli` checks GitHub for a new

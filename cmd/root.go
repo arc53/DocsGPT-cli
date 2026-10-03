@@ -230,7 +230,7 @@ func groupCommand(c *cobra.Command) {
 const groupAnnotation = "docsgpt/group"
 
 func Execute() {
-	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	setupCompletion()
 	questionArgs()
 
 	if err := config.MigrateIfNeeded(); err != nil {
@@ -274,7 +274,7 @@ func Execute() {
 // build, or the update/host commands (which run their own update logic).
 // Installs we cannot swap (Homebrew, unwritable dir) downgrade on → notify.
 func updateGate() (mode string, exePath string) {
-	if os.Getenv("DOCSGPT_NO_UPDATE_CHECK") != "" {
+	if os.Getenv("DOCSGPT_NO_UPDATE_CHECK") != "" || completing() {
 		return "", ""
 	}
 	if !isatty.IsTerminal(os.Stderr.Fd()) {
