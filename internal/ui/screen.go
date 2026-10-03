@@ -651,22 +651,29 @@ func (m *screenModel) spans() [][]string {
 
 func (m *screenModel) View() string {
 	w, h := m.width, m.height
+	// A panel gets the room it needs, short of the status row and the
+	// footer; the editor's text goes first when the window is too short.
 	var panel []string
 	if p := m.panel; p != nil {
+		room := max(1, h-2)
 		var v string
 		if p.sel != nil {
-			p.sel.setSize(w, h-8)
+			p.sel.setSize(w, min(room, h/2+4)+1)
 			v = p.sel.View()
 		} else {
 			p.in.setSize(w, h)
 			v = p.in.View()
 		}
 		panel = strings.Split(v, "\n")
-		panel = panel[clamp(len(panel)-(h-6), 0, len(panel)):]
+		panel = panel[clamp(len(panel)-room, 0, len(panel)):]
 	}
 	m.ed.setSize(w, h)
-	editor := m.ed.view(w, max(4, h-2-len(panel)), m.panel == nil)
-	rows := max(0, h-1-len(panel)-len(editor))
+	rest := h - 1 - len(panel)
+	editor := m.ed.view(w, max(4, rest-1), m.panel == nil)
+	if m.panel != nil && rest < len(editor) {
+		editor = editor[len(editor)-1:]
+	}
+	rows := max(0, rest-len(editor))
 
 	spans := m.spans()
 	total := 0
