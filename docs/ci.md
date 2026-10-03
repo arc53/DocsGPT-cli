@@ -121,7 +121,8 @@ jq -r '.sources[].url' answer.json
   "conversation_id": "45f38376-80e8-42b1-a2f3-da84320a800d",
   "model": "gpt-5.1",
   "usage": {"prompt_tokens": 2220, "completion_tokens": 30, "total_tokens": 2250},
-  "tool_calls": [{"name": "read_file", "arguments": {"path": "go.mod"}, "result": "module …", "approved": true}]
+  "tool_calls": [{"name": "read_file", "arguments": {"path": "go.mod"}, "result": "module …", "approved": true}],
+  "attachments": [{"path": "/work/shot.png", "type": "image", "bytes": 245760, "sha256": "8018…"}]
 }
 ```
 
@@ -131,6 +132,9 @@ jq -r '.sources[].url' answer.json
   reported none; `model` is the model that answered.
 - `tool_calls` lists the calls the agent made, with `approved: false` for one
   that was denied or not run.
+- `attachments` lists the files the question's `@path`s attached
+  ([Ask once](quickstart.md#attach-files)): `type` is `image` or `file`, with
+  the size and the sha256 of what was sent.
 - On failure the object also has `error` (the same one-line message as on a
   terminal), the fields hold what arrived before it, and the exit code is `1`
   (`2` for a usage error such as no question, `130` when interrupted).

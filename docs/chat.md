@@ -87,6 +87,7 @@ wheel then does whatever the terminal does on a full-screen program: many send
 | Shift+Enter, Ctrl+J, Alt+Enter, or a line ending in `\` | New line |
 | ↑ / ↓ | Move between lines; on the first or last line, browse earlier messages |
 | Ctrl+G | Edit the message in `$VISUAL` / `$EDITOR` (vi by default) |
+| Ctrl+V | Attach the clipboard's image, or the files copied; else paste its text ([Attachments](#attachments)) |
 | Ctrl+A / Ctrl+E, Home / End | Start / end of the line |
 | Alt+← / Alt+→ (Ctrl+← / Ctrl+→) | Previous / next word |
 | Ctrl+W, Alt+Backspace | Delete the previous word |
@@ -115,6 +116,45 @@ never stops inside it, and deleting any part of it deletes all of it.
 
 Your messages are kept in `~/.docsgpt/history` for ↑; lines that look like
 keys or tokens are left out.
+
+## Attachments
+
+A message can carry images and files: a screenshot of an error, a PDF, a
+spreadsheet. They show in the input as one-piece markers, like a long
+paste: `[image #1 · 240 KB]`, `[file #2 · spec.pdf · 1.2 MB]`.
+
+- **Ctrl+V** attaches the image on the clipboard (a screenshot taken with
+  Cmd+Ctrl+Shift+4, an image copied from a browser or an app), or the files
+  copied in Finder or Explorer. With neither, it pastes the clipboard's text.
+  Cmd+V in iTerm2 and Terminal.app is the terminal's own paste and only
+  pastes text, so use Ctrl+V for images. On Linux it needs `wl-paste`
+  (Wayland) or `xclip` (X11); on Windows it uses PowerShell. Over SSH the
+  clipboard read is the remote machine's.
+- **Drop files** on the terminal window: the paths the terminal pastes
+  (`/Users/me/My\ Shot.png`, quoted, or `file://` URLs) become attachments
+  when the paste is nothing but paths of existing files. In a `!command` or
+  a `/command` they stay paths.
+- **`@path`** in a message attaches that file when you send it: `what does
+  @docs/install.md miss?` (relative to the working directory; `@"My
+  Shot.png"` for a name with spaces). An `@word` that names no file stays
+  text. The transcript shows it as a marker.
+
+The marker deletes as one piece, Ctrl+- brings it back, and Alt+↑ keeps the
+files of queued messages. Images go as PNG, JPEG, WebP or GIF (the first
+frame, as a PNG); documents as the server reads them: PDF, Office and
+OpenDocument files, EPUB, HTML, Markdown, CSV, JSON, XML and any text file.
+A file may be up to 100 MB, a message carry 100 MB and 20 files in all;
+a file that cannot go is named in the status row, and a message that cannot
+go is not sent and comes back into the input. Whether the agent sees an
+image depends on its model reading images.
+
+The server keeps the files with the conversation, so later messages can ask
+about them without sending them again. ↑ recalls a message with its markers
+as text, not the files. The saved chat keeps each file's path, size and
+sha256, not its bytes; a resumed chat shows the markers, and `/edit` or
+`/retry` attach the files again while they are still there. An image from
+the clipboard is saved in the system's temporary directory
+(`docsgpt-clipboard/`).
 
 ## Slash commands
 

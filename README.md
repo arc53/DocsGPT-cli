@@ -48,6 +48,9 @@ More in the [quickstart](docs/quickstart.md).
   conversation in your scrollback when you quit.
   Multi-line input, prompt history, `$EDITOR`, `/` commands and `!cmd` to share
   a command's output. [Chat](docs/chat.md)
+- **Images and files.** Paste a screenshot with Ctrl+V, drop files on the
+  window, or name them: `docsgpt-cli "why?" @shot.png @spec.pdf`.
+  [Attachments](docs/chat.md#attachments)
 - **Sessions.** Every chat is saved per directory; `-c` continues the latest,
   `-r` picks one. [Sessions](docs/chat.md#sessions)
 - **Local tools.** The agent can run commands and read and write files, after

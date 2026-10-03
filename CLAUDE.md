@@ -24,6 +24,9 @@ sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, pa
                        Retry-After capped by MaxDelay, x-should-retry, never once a
                        stream has started; a blocking OnRetry counts towards the wait)
                        — OpenAI-compatible types and the tool-call loop;
+                       Message.Parts (ContentPart: TextPart/ImagePart/FilePart/
+                       AttachmentPart, data URLs) marshal as the content array,
+                       Content first as a text part; read back into Parts, Text();
                        results carry conversation id, sources, model and usage. A stream
                        without [DONE] and without a finish_reason is an error, and so is a
                        tool_calls index outside 0-63. Stdlib-only, tagged sdk/vX.Y.Z
@@ -41,7 +44,8 @@ examples/            → agents/ (sample definition), bench/ (suite, one case pe
 deployment/          → install.sh / install.ps1 (attached to every release)
 cmd/
   root.go            → Root command = the entry point (chat on a TTY, else one-shot ask), typo guard + questionArgs (extra words after a command: exit 2 with `To ask it as a question: docsgpt-cli -- "…"`), global flags (--url, --key, --token), chat flags (+ --no-stdin), help groups + usage template, Execute (startup config, update gate)
-  ask.go             → Single-shot Q&A with streaming + tool support (hidden alias; the root runs it); --json (askResult on stdout, errors in it + errReported exit)
+  ask.go             → Single-shot Q&A with streaming + tool support (hidden alias; the root runs it); --json (askResult on stdout, errors in it + errReported exit); @paths of the args attach files (attachFiles; a bad file = exit 2), --json `attachments`
+  attach.go          → attachFiles: a message's marker files + the files its @paths name, numbered after them, read into content parts
   errors.go          → explainChatError: one actionable line per failure (401/403 → login, 404 → url, 429, 5xx, can't reach: refused/DNS/TLS/timeout); DOCSGPT_DEBUG=1 adds the raw error
   retry.go           → retrying(): a per-run client copy whose retry waits count down on a status ("Retrying (1/3) in 4s… (502 Bad Gateway)"); the retry setting
   completion.go      → cobra's completion command (under Tools) + config-only completions: key names, settings and their values; completing() keeps __complete off the update gate
@@ -86,6 +90,21 @@ internal/
     transport.go     → Signed polling + SSE session transport; invocation.go runs and streams commands (approval decided server-side; its own denylist floor); pairing.go, device.go, revoke.go
   context/
     enricher.go      → the <context> block: cwd, capped listing, AGENTS.md/CLAUDE.md (git root → cwd, 12KB), shell history (opt-in)
+  attach/
+    attach.go        → File (id, path, name, image, size, sha256, ref, clipboard; Marker
+                       `[image #1 · 240 KB]` / `[file #2 · spec.pdf · 1.2 MB]`), Open
+                       (regular, non-empty, ≤100 MB; image by its bytes, a document
+                       by the server's parser extensions, else text-sniffed like the
+                       server), Parts (≤20 files, ≤100 MB in all, sha256, GIF → PNG)
+    paths.go         → Paths (a paste that is only absolute paths of existing files:
+                       shell escapes, quotes, file:// URLs; no backslash escapes on
+                       Windows), Refs (@path / @"a b" naming existing files, trailing
+                       punctuation dropped), Show (@path → marker, for the transcript)
+    clipboard.go     → Clipboard interface + System: macOS osascript JXA (file URLs,
+                       else public.png, else any NSImage → PNG), Linux wl-paste/xclip
+                       (text/uri-list, image/png, JPEG → PNG), Windows PowerShell -STA
+                       (FileDropList, GetImage); text via atotto. Paste saves the image
+                       in $TMPDIR/docsgpt-clipboard
   session/
     session.go       → saved chats: ~/.docsgpt/sessions/<slug>-<hash>/<time>_<id>.jsonl (slug = last ≤48 chars of the cwd, non-[A-Za-z0-9_] runs as `-`; hash = 8 hex of sha256(cwd); 0600, dirs 0700); header + message/state/name lines, each Record one append; List keeps the files whose header cwd is this cwd; Load/Turns (each with its server, key, conversation and index there), Usage, SetName, Delete, Fork
   display/
@@ -347,6 +366,13 @@ or with TERM=dumb it refuses.
   `[paste #N +L lines]` markers (one unit: the cursor never rests inside one, any
   deletion that reaches into one removes it whole; expanded on send, shown
   collapsed in the transcript); Ctrl+A/E/K/U/W, Alt+←/→; Ctrl+G opens $VISUAL/$EDITOR.
+  Attachments: `files` beside `pastes` (FileMarker, same one-unit rules, in
+  undo states, renumbered by requeue, kept for the $EDITOR result and the
+  draft while browsing history); Ctrl+V runs attach.Paste in a tea.Cmd
+  (clipMsg; `clip` is swappable for tests), a bracketed paste that is only
+  file paths attaches them (not when the input starts with ! or /), errors
+  go to the status row (`notice`). Screen.Next returns a ui.Message (Text,
+  Shown, Files); SetInput takes files; PutBack returns an unsent message.
   Ctrl+- (0x1f = ctrl+_; keys.go maps kitty/modifyOtherKeys Ctrl+- and Ctrl+/ to
   it) undoes, pi's way: a stack of (lines, cursor, pastes) states, 100 deep,
   cleared on send; a typed word is one step with the space before it, a run of
@@ -373,7 +399,14 @@ or with TERM=dumb it refuses.
   `screenTools` (a ToolBlock per call, approvals as an inline Select in the panel).
   A failed or interrupted turn is dropped (`Interrupted.` note) together with the
   conversation id (the server may keep a stopped exchange the history leaves
-  out), and kept as `unanswered` for /retry. Sources follow as a block;
+  out), and kept as `unanswered` for /retry. Attachments (route: inline /v1
+  content parts — the server stores them as the conversation's attachment
+  rows, deduped by sha256, so a later turn with the conversation id sees
+  them): sent once with their message (re-sent within its tool rounds),
+  then dropped from the history (Parts=nil); the session's user entry gets
+  `attachments` (paths + hashes, never bytes), Turn.Files; resume shows
+  markers (attach.Show), /edit and /retry re-attach marker files still on
+  disk; a file that cannot go puts the message back (PutBack). Sources follow as a block;
   `RunResult.Usage` (summed over tool rounds) goes on the last assistant
   message's `usage` and into the footer.
 - Context: the server treats `system` messages as a prompt override that agents

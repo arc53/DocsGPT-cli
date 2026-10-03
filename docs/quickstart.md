@@ -93,13 +93,37 @@ docsgpt-cli < question.txt
 - A single word that looks like a mistyped command (`docsgpt-cli agnets`) is
   refused with a hint. `docsgpt-cli -- <words>` always sends the words as a
   question.
-- `--json` prints one JSON object instead, with the sources, usage and tool
-  calls too (plain output off a terminal leaves them out); see
+- `--json` prints one JSON object instead, with the sources, usage, tool
+  calls and attachments too (plain output off a terminal leaves them out); see
   [CI](ci.md#json-output) for its fields:
 
 ```bash
 docsgpt-cli --json "how do I rotate the API key?" | jq -r '.answer, (.sources[] | "- \(.title) \(.url)")'
 ```
+
+### Attach files
+
+An `@path` in the question attaches that file: a screenshot, a PDF, a
+spreadsheet, a log.
+
+```bash
+docsgpt-cli "why does this fail?" @shot.png @spec.pdf
+docsgpt-cli "summarize @docs/install.md"
+docsgpt-cli "compare @\"Q3 report.xlsx\" with @q2.xlsx"
+```
+
+- Images: PNG, JPEG, WebP and GIF (sent as a PNG of its first frame). The
+  agent's model must read images to see them.
+- Documents: PDF, Word, PowerPoint, Excel and OpenDocument files, EPUB,
+  HTML, Markdown, CSV, JSON, XML, and any text file (code, logs).
+- At most 100 MB a file and 100 MB in all, 20 files. A file that cannot go
+  (too large, a type the server cannot read) stops the command with exit
+  code `2` before anything is sent.
+- A path is relative to the working directory, `~/` is your home directory;
+  quote one with spaces (`@"My Shot.png"`). An `@word` that names no file,
+  or a directory, stays text.
+- The files go with the question to the server, which keeps them with the
+  conversation. Piped input is never searched for `@paths`.
 
 ## Tip: a terminal prompt
 

@@ -9,8 +9,8 @@ New here? Start with the [Quickstart](quickstart.md).
 
 - [Install and update](install.md): install script, Homebrew, `go install`,
   auto-update and rollback
-- [Quickstart](quickstart.md): sign in, chat, ask once, pipe input
-- [Chat](chat.md): editor keys, slash commands, `!cmd`, sessions, context
+- [Quickstart](quickstart.md): sign in, chat, ask once, pipe input, attach files
+- [Chat](chat.md): editor keys, attachments, slash commands, `!cmd`, sessions, context
 - [Tools and approval](tools.md): what the agent can do on your machine, and
   what you are asked
 - [Configuration](configuration.md): config file, credentials, environment
