@@ -52,7 +52,11 @@ func Apply(rel *Release, targetPath, currentVersion string) error {
 	if err != nil {
 		return err
 	}
-	return swapBinary(binary, targetPath, currentVersion)
+	if err := swapBinary(binary, targetPath, currentVersion); err != nil {
+		return err
+	}
+	MarkUpdated(rel.TagName)
+	return nil
 }
 
 // CheckAndApply is the host daemon's update pass: check for a release,

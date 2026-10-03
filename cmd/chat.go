@@ -96,6 +96,7 @@ func init() {
 		{name: "approve", desc: "Run tool calls without asking, or ask again", run: (*chatSession).toggleApprove},
 		{name: "key", desc: "Switch to another agent API key", run: (*chatSession).switchKey},
 		{name: "settings", desc: "Change settings", run: (*chatSession).settings},
+		{name: "changelog", desc: "Show what's new in the latest release", run: (*chatSession).changelog},
 		{name: "help", desc: "Show commands and keys", run: (*chatSession).help},
 		{name: "quit", desc: "Leave the chat", aliases: []string{"exit"}, run: func(s *chatSession, _ string) { s.quit = true }},
 	}
@@ -207,6 +208,7 @@ func (s *chatSession) loop(first string) {
 	default:
 		s.top()
 	}
+	s.whatsNew()
 	s.footer()
 	if first = strings.TrimSpace(first); first != "" {
 		s.send(first, first)
