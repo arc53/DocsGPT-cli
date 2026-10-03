@@ -88,7 +88,7 @@ On a terminal, the first bash/sh code block of the answer is copied to your clip
 		tty := isatty.IsTerminal(os.Stdout.Fd())
 		if tty {
 			cwd, _ := os.Getwd()
-			fmt.Println(display.RenderHeader("", keyName, baseURL, cwd))
+			fmt.Print(display.RenderHeader("", keyName, baseURL, cwd) + "\n\n")
 		}
 
 		ctx, stop := signalContext()
