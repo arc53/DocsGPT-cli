@@ -27,6 +27,14 @@ type Block interface{ Lines(width int) []string }
 // messages.
 type Prompt interface{ Prompt() }
 
+// Expander is a block that shows part of what it holds (a command's
+// output) unless expanded; Ctrl+O expands or collapses them all. Folds
+// reports whether collapsing it hides anything.
+type Expander interface {
+	Expand(on bool)
+	Folds() bool
+}
+
 // ScreenOptions configures a Screen.
 type ScreenOptions struct {
 	Commands []Command // the editor's slash commands
@@ -160,9 +168,15 @@ func (s *Screen) do(f func(m *screenModel) tea.Cmd) {
 
 type doMsg func(m *screenModel) tea.Cmd
 
-// Add appends a block to the transcript.
+// Add appends a block to the transcript; an Expander as the others are.
 func (s *Screen) Add(b Block) {
-	s.do(func(m *screenModel) tea.Cmd { m.blocks = append(m.blocks, b); return nil })
+	s.do(func(m *screenModel) tea.Cmd {
+		if e, ok := b.(Expander); ok {
+			e.Expand(m.expanded)
+		}
+		m.blocks = append(m.blocks, b)
+		return nil
+	})
 }
 
 // Clear empties the transcript.
@@ -323,6 +337,7 @@ type screenModel struct {
 
 	top      int  // the first transcript line shown
 	follow   bool // the view stays at the end of the transcript
+	expanded bool // Expanders show all they hold (Ctrl+O)
 	leftAt   int  // transcript lines when the view left the end
 	total    int  // transcript lines, as last drawn
 	viewRows int  // transcript rows, as last drawn
@@ -479,6 +494,8 @@ func (m *screenModel) key(k tea.KeyMsg) tea.Cmd {
 		return m.suspend()
 	case "ctrl+l":
 		return tea.ClearScreen
+	case "ctrl+o":
+		return m.expand(!m.expanded)
 	}
 	if s == "esc" && m.sel != nil {
 		m.sel = nil
@@ -514,6 +531,34 @@ func (m *screenModel) key(k tea.KeyMsg) tea.Cmd {
 		return tea.Quit
 	}
 	return cmd
+}
+
+// expand expands or collapses the Expanders, keeping a scrolled-back view
+// in place: on the block at its top, from that block's start when it is
+// one that changed.
+func (m *screenModel) expand(on bool) tea.Cmd {
+	block, line := -1, 0
+	if !m.follow {
+		block, line, _ = m.locate(m.top)
+	}
+	m.expanded = on
+	for i, b := range m.blocks {
+		if e, ok := b.(Expander); ok {
+			e.Expand(on)
+			if i == block && e.Folds() {
+				line = 0
+			}
+		}
+	}
+	if block >= 0 {
+		m.top = m.offset(block) + min(line, max(0, len(m.blocks[block].Lines(m.width))-1))
+		m.leftAt = -1 // the lines are counted anew: none is new
+	}
+	m.sel = nil
+	if on {
+		return m.notify("Tool output expanded", true)
+	}
+	return m.notify("Tool output collapsed", true)
 }
 
 // interrupt cancels what is running. Messages queued meanwhile go back to

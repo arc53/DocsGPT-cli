@@ -314,21 +314,25 @@ func (a *Answer) Lines(width int) []string {
 }
 
 // ToolBlock shows a tool call in the transcript: its title, a preview
-// (a diff), the tail of a command's output and a status line, on a
-// background tinted by how it ended (as the stderr blocks of ask are).
+// (a diff), a command's output and a status line, on a background tinted
+// by how it ended (as the stderr blocks of ask are). Collapsed (the
+// default) it shows the output's last lines, expanded all it keeps: as
+// much as the model gets (2000 lines, 50 KB).
 type ToolBlock struct {
-	mu      sync.Mutex
-	title   string
-	note    string
-	preview []string
-	tail    []string // the last complete output lines
-	part    string   // the output line being written
-	total   int      // complete output lines seen
-	closed  bool
-	ok      bool
-	status  string
-	version int
-	c       struct {
+	mu       sync.Mutex
+	title    string
+	note     string
+	preview  []string
+	out      []string // the last complete output lines
+	size     int      // their bytes
+	part     string   // the output line being written
+	total    int      // complete output lines seen
+	expanded bool
+	closed   bool
+	ok       bool
+	status   string
+	version  int
+	c        struct {
 		width, version int
 		lines          []string
 		logical        string // the text of lines, unwrapped
@@ -352,24 +356,57 @@ func (b *ToolBlock) AddLines(lines []string) {
 	b.version++
 }
 
-// Write adds a command's output; the block shows its last lines.
+// What a ToolBlock keeps of a command's output: what the model gets.
+const (
+	keptLines = 2000
+	keptBytes = 50 * 1024
+	lineBytes = 4096 // of a line, its end (a progress bar redraws there)
+)
+
+// Write adds a command's output.
 func (b *ToolBlock) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	lines := strings.Split(b.part+string(p), "\n")
 	for _, l := range lines[:len(lines)-1] {
+		if len(l) > lineBytes {
+			l = l[len(l)-lineBytes:]
+		}
 		b.total++
-		b.tail = append(b.tail, l)
-		if len(b.tail) > tailRows {
-			b.tail = b.tail[1:]
+		b.out = append(b.out, l)
+		b.size += len(l) + 1
+		for len(b.out) > keptLines || b.size > keptBytes {
+			b.size -= len(b.out[0]) + 1
+			b.out = b.out[1:]
 		}
 	}
 	b.part = lines[len(lines)-1]
-	if len(b.part) > 4096 { // a line without end (binary output, a progress bar)
-		b.part = b.part[len(b.part)-4096:]
+	if len(b.part) > lineBytes { // a line without end (binary output, a progress bar)
+		b.part = b.part[len(b.part)-lineBytes:]
 	}
 	b.version++
 	return len(p), nil
+}
+
+// Expand shows all the output kept (on) or its last lines.
+func (b *ToolBlock) Expand(on bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.expanded != on {
+		b.expanded = on
+		b.version++
+	}
+}
+
+// Folds reports whether collapsing hides output lines.
+func (b *ToolBlock) Folds() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := len(b.out)
+	if b.part != "" {
+		n++
+	}
+	return n > tailRows
 }
 
 // Close ends the block with a status: "✓ status" or "✗ status". An empty
@@ -417,18 +454,22 @@ func (b *ToolBlock) Lines(width int) []string {
 	}
 
 	body := append([]string(nil), b.preview...)
-	tail := b.tail
+	out, shown := b.out, b.total
 	if b.part != "" {
-		tail = append(append([]string(nil), tail...), b.part)[max(0, len(tail)+1-tailRows):]
+		out, shown = append(out[:len(out):len(out)], b.part), shown+1
 	}
-	shown := b.total
-	if b.part != "" {
-		shown++
+	folds := len(out) > tailRows
+	if !b.expanded {
+		out = out[max(0, len(out)-tailRows):]
 	}
-	if hidden := shown - len(tail); hidden > 0 {
-		body = append(body, T.Dim.Render(fmt.Sprintf("… %d earlier %s", hidden, plural(hidden, "line"))))
+	if hidden := shown - len(out); hidden > 0 {
+		hint := ""
+		if folds && !b.expanded {
+			hint = " · ctrl+o to expand"
+		}
+		body = append(body, T.Dim.Render(fmt.Sprintf("… %d earlier %s%s", hidden, plural(hidden, "line"), hint)))
 	}
-	for _, l := range tail {
+	for _, l := range out {
 		body = append(body, T.ToolOutput.Render(ansi.Truncate(cleanLine(l), room, "…")))
 	}
 	if b.closed && b.status != "" {
@@ -436,7 +477,11 @@ func (b *ToolBlock) Lines(width int) []string {
 		if !b.ok {
 			glyph = T.Error.Render("✗")
 		}
-		body = append(body, glyph+" "+T.Dim.Render(Safe(b.status)))
+		status := Safe(b.status)
+		if folds && b.expanded {
+			status += " · ctrl+o to collapse"
+		}
+		body = append(body, glyph+" "+T.Dim.Render(status))
 	}
 	for _, l := range body {
 		logical = append(logical, ansi.Strip(l))

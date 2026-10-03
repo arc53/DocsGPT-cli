@@ -127,8 +127,11 @@ internal/
                        Answer (streamed: reasoning dim italic on top when shown, the
                        finished markdown blocks rendered once via commitPoint, the
                        last one again per frame; one glamour renderer kept per width);
-                       ToolBlock (title + note, preview, last 5 output lines, ✓/✗
-                       status, on toolBox rows tinted by the outcome)
+                       ToolBlock (title + note, preview, output, ✓/✗ status, on
+                       toolBox rows tinted by the outcome; keeps the output the
+                       model gets, 2000 lines / 50 KB, lines cut to their last
+                       4 KB; a ui.Expander: collapsed the last 5 lines under
+                       `… N earlier lines · ctrl+o to expand`, expanded all kept)
     style.go         → Accent/Muted/Dim/Success/Warn helpers, ErrorMsg (stderr)
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
                        (live last-5-lines region), DiffPreview for writes. With
@@ -268,6 +271,10 @@ or with TERM=dumb it refuses.
   editor and no panel, Ctrl+Home/Ctrl+End always. Sending, and a panel opening,
   return to the end. A resize keeps a scrolled-back view on the same block, at
   the same share of it (blocks re-render at the new width).
+- Ctrl+O (pi's app.tools.expand): `expanded` toggles every `ui.Expander` block
+  (ToolBlock; reasoning stays with /think), new ones are added in that state;
+  a scrolled-back view keeps its top line, or goes to the start of the block
+  at its top when that block folds; flash `Tool output expanded/collapsed`.
 - Selection (`ui/selection.go`, pi's fullscreen behaviour): with the mouse on,
   a left press in the transcript starts it, drag events (cell motion, 1002)
   extend it, the release copies it (`ui.Copy`, in a tea.Cmd) and flashes

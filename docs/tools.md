@@ -15,6 +15,11 @@ colors the block sits on a subtle background: gray while it runs, tinted green
 once it succeeded, red when it failed or was denied or cancelled. The model
 gets the output's last 2000 lines or 50 KB, and the exit code.
 
+In the chat a block shows the output's last 5 lines under
+`… 195 earlier lines · ctrl+o to expand`. Ctrl+O expands every tool block to
+the whole output the model got, and collapses them again; it holds for the
+blocks that follow too. A one-shot question shows the last lines only.
+
 ## Approving
 
 ```

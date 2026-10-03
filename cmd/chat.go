@@ -718,6 +718,7 @@ func (s *chatSession) help(string) {
 		{"esc", "clear the selection, stop the answer"},
 		{"ctrl+c", "stop the answer, clear the input; twice to quit"},
 		{"ctrl+d", "quit"},
+		{"ctrl+o", "expand or collapse tool output"},
 		{"ctrl+z", "suspend (fg to come back)"},
 	} {
 		fmt.Fprintf(&b, "  %-20s %s\n", k[0], display.Muted(k[1]))

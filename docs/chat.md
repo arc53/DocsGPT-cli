@@ -91,6 +91,7 @@ wheel then does whatever the terminal does on a full-screen program: many send
 | Ctrl+C | Stop the answer, or clear the input; twice on an empty input quits |
 | Ctrl+D | Quit |
 | Ctrl+Z | Suspend (`fg` to come back) |
+| Ctrl+O | Expand or collapse the output of tool calls ([Tools](tools.md)) |
 | Ctrl+L | Redraw the window |
 
 Shift+Enter needs a terminal that can tell it from Enter: one with the kitty
