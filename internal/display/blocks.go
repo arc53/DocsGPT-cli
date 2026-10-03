@@ -61,9 +61,9 @@ func fit(lines []string, width int) []string {
 			}
 			plain := ansi.Strip(s)
 			indent := min(len(plain)-len(strings.TrimLeft(plain, " ")), width/2)
-			out = append(out, ansi.Cut(s, 0, width))
+			out = append(out, relink(ansi.Cut(s, 0, width)))
 			for at := width; at < w; at += width - indent {
-				out = append(out, strings.Repeat(" ", indent)+ansi.Cut(s, at, at+width-indent))
+				out = append(out, strings.Repeat(" ", indent)+relink(ansi.Cut(s, at, at+width-indent)))
 			}
 		}
 	}

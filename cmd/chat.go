@@ -686,6 +686,7 @@ func (s *chatSession) settings(string) {
 	if cfg, err := config.Load(); err == nil && saved {
 		s.cfg.Settings = cfg.Settings
 		s.scr.Mouse(cfg.Settings.Mouse != "off")
+		display.SetHyperlinks(cfg.Settings.Hyperlinks)
 		if url := cfg.ResolveURL(globalURL); url != s.baseURL {
 			s.baseURL, s.client.BaseURL = url, url
 			s.reset()

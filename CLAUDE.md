@@ -101,7 +101,21 @@ internal/
                        apart), then `rewrap` wraps at spaces only (wrapWords: words
                        never split unless wider than a row, styles carried per row)
                        under indent / quote bars / list hang. Unindented tables go to
-                       a glamour renderer at the width
+                       a glamour renderer at the width. Links (incl. autolinks, bare
+                       URLs) are marked in the AST (`markLinks`: U+FDD0/FDD1 emoji
+                       nodes around the text, destination → "#" so glamour prints no
+                       URL), then `placeLinks` swaps the markers for OSC 8 (ST) or a
+                       dim ` (url)`, and `relink` makes each wrapped row open/close
+                       its own links
+    links.go         → hyperlinks: setting `hyperlinks` auto|on|off (SetHyperlinks in
+                       the root PersistentPreRun) < DOCSGPT_HYPERLINKS=0|1|auto; auto =
+                       pi's list (kitty, Ghostty, WezTerm, Warp, iTerm2 incl.
+                       LC_TERMINAL over ssh, Windows Terminal, Alacritty, VS Code, Zed;
+                       tmux only when `client_termfeatures` has hyperlinks; screen,
+                       Terminal.app, unknown off). linkURL: http(s)/mailto, printable
+                       ASCII (non-ASCII escaped via net/url), else not a hyperlink.
+                       The model's own sequences are gone (StripControls) and the
+                       markers dropped from its text before parsing
     chrome.go        → one dim header line (docsgpt · key · host · cwd) for ask; chat:
                        chatHeader (2-row mark + version, key hints, `Context` files),
                        ChatFooter (cwd + git branch read from .git/HEAD, worktrees and
@@ -135,8 +149,8 @@ internal/
                        chats, the user-message block, /export, error messages)
     copy.go          → how the chat's blocks copy (ui.Plain): joins, markdownPlain,
                        unwrapped (see chat command, Selection)
-    sources.go       → dim numbered "Sources" block, OSC 8 links (printable-ASCII
-                       http(s) URLs only), TTY only
+    sources.go       → dim numbered "Sources" block, OSC 8 links (linkURL, http(s)
+                       only; unless hyperlinks are set off), TTY only
     background*.go   → auto theme: COLORFGBG, else one OSC 11 query (stdout TTY only,
                        150ms max); the answer also feeds glamour and lipgloss
     banner.go        → dino banner, top of the chat's transcript, default "once"
@@ -264,6 +278,9 @@ or with TERM=dumb it refuses.
   transcript scrolls a line per 50ms tick while held. Highlight: reverse video,
   re-set after every SGR, grapheme-aligned (wide chars whole). A click, Esc
   (before anything else it would do), a resize, Clear or mouse off clear it.
+  A click (no drag) on an OSC 8 link opens it (`openURL`: open / xdg-open /
+  rundll32; not over SSH) and flashes `Opened <url>`, as pi does: the
+  terminal cannot while the chat holds the mouse.
   Copy text: `ui.Unwrap` over the rows' `ui.Plain` (Indent = decoration columns
   left out, Wrap + Sep = a soft wrap and what it took out); blocks implementing
   `ui.Plainer` supply it, others copy as shown. display finds it in `copy.go`:

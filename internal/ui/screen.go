@@ -393,14 +393,15 @@ func (m *screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dragTickMsg:
 		return m, m.dragged()
 	case copiedMsg:
-		m.flashID++
-		m.flash, m.flashOK = fmt.Sprintf("Copied %d %s", msg.n, plural(msg.n, "character")), msg.err == nil
-		wait := 2 * time.Second
 		if msg.err != nil {
-			m.flash, wait = "Could not copy: "+msg.err.Error(), 5*time.Second
+			return m, m.notify("Could not copy: "+msg.err.Error(), false)
 		}
-		id := m.flashID
-		return m, tea.Tick(wait, func(time.Time) tea.Msg { return flashMsg{id} })
+		return m, m.notify(fmt.Sprintf("Copied %d %s", msg.n, plural(msg.n, "character")), true)
+	case openedMsg:
+		if msg.err != nil {
+			return m, m.notify("Could not open the link: "+msg.err.Error(), false)
+		}
+		return m, m.notify("Opened "+msg.url, true)
 	case flashMsg:
 		if msg.id == m.flashID {
 			m.flash = ""
@@ -428,6 +429,19 @@ func (m *screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// notify shows a notice in the status row for a while: 2s, 5s when it is
+// an error.
+func (m *screenModel) notify(text string, ok bool) tea.Cmd {
+	m.flashID++
+	m.flash, m.flashOK = text, ok
+	wait := 2 * time.Second
+	if !ok {
+		wait = 5 * time.Second
+	}
+	id := m.flashID
+	return tea.Tick(wait, func(time.Time) tea.Msg { return flashMsg{id} })
 }
 
 // perLineWheel: a terminal on macOS reports a wheel event per line, the

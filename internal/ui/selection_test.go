@@ -168,3 +168,57 @@ func TestHighlight(t *testing.T) {
 		t.Fatal("highlighted the padding")
 	}
 }
+
+// TestScreenLinks: a click on a hyperlink opens it (not over SSH); a drag
+// over one copies its text.
+func TestScreenLinks(t *testing.T) {
+	copied := stubClipboard(t)
+	for _, k := range []string{"SSH_TTY", "SSH_CONNECTION", "SSH_CLIENT"} {
+		t.Setenv(k, "")
+	}
+	var opened []string
+	open := openURL
+	openURL = func(u string) error { opened = append(opened, u); return nil }
+	t.Cleanup(func() { openURL = open })
+
+	link := "see \x1b[4m\x1b]8;;https://a.example/x\x1b\\the 中文 docs\x1b]8;;\x1b\\\x1b[0m now"
+	a := &para{rows: []string{link, "next"}}
+	m := testScreen(50, 12, a)
+	rows(m)
+	click := func(x, y int) {
+		m.click.at = time.Time{}
+		mpress(m, x, y)
+		if c := release(m, x, y); c != nil {
+			m.Update(c())
+		}
+	}
+	for x, want := range map[int]string{1: "", 4: "https://a.example/x", 10: "https://a.example/x", 15: "https://a.example/x", 17: "", 30: ""} {
+		opened = nil
+		click(x, 0)
+		if got := strings.Join(opened, " "); got != want {
+			t.Errorf("click at %d opened %q, want %q", x, got, want)
+		}
+	}
+	click(6, 0)
+	if r := rows(m); !strings.Contains(r[m.viewRows], "Opened https://a.example/x") {
+		t.Errorf("status: %q", r[m.viewRows])
+	}
+	if len(*copied) != 0 {
+		t.Errorf("a click copied %q", *copied)
+	}
+
+	m.click.at = time.Time{}
+	mpress(m, 0, 0)
+	drag(m, 20, 0)
+	m.Update(release(m, 20, 0)())
+	if got := (*copied)[0]; got != "see the 中文 docs now" {
+		t.Errorf("copied %q", got)
+	}
+
+	t.Setenv("SSH_TTY", "/dev/pts/1")
+	opened = nil
+	click(6, 0)
+	if len(opened) != 0 {
+		t.Errorf("opened over SSH: %q", opened)
+	}
+}

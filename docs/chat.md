@@ -203,3 +203,22 @@ take `--no-stdin` ([Ask once](quickstart.md#4-ask-once)).
 - Answers are cleaned of terminal control sequences before they are drawn, so
   a model cannot recolour, retitle or clear your terminal or write to your
   clipboard. The same goes for resumed chats and `/export` files.
+
+### Links
+
+Links in answers (`[text](url)`, `<url>` and bare URLs) are underlined, and
+in terminals that support it they are clickable hyperlinks (OSC 8) showing
+just their text. Elsewhere the URL follows the text, dim: `the docs
+(https://…)`. Only `http`, `https` and `mailto` links become clickable.
+
+Clickable links are on by default in iTerm2, kitty, Ghostty, WezTerm, Warp,
+Windows Terminal, Alacritty and VS Code, and in tmux when it passes them on
+(`set -as terminal-features ",*:hyperlinks"` in `~/.tmux.conf`); off in
+Terminal.app and terminals the chat does not recognise, where the URL would
+vanish. `docsgpt-cli config set hyperlinks on|off|auto`, or
+`DOCSGPT_HYPERLINKS=1|0|auto` for one run, decides instead.
+
+In the chat a click on a link opens it in your browser (not over SSH): with
+the mouse on, the chat takes the click, not the terminal. Selecting a link
+copies its text, as shown. The Sources list under an answer is linked too
+unless hyperlinks are off. Piped output of a question stays the raw markdown.
