@@ -31,7 +31,7 @@ type Prompt interface{ Prompt() }
 type ScreenOptions struct {
 	Commands []Command // the editor's slash commands
 	History  *History
-	Mouse    bool // scroll with the wheel; selecting text then takes Shift or Option
+	Mouse    bool // scroll with the wheel and select text to copy it
 	// Headless keeps the blocks without a terminal, prompts failing with
 	// ErrNotInteractive (for tests).
 	Headless bool
@@ -167,7 +167,7 @@ func (s *Screen) Add(b Block) {
 
 // Clear empties the transcript.
 func (s *Screen) Clear() {
-	s.do(func(m *screenModel) tea.Cmd { m.blocks, m.top, m.follow = nil, 0, true; return nil })
+	s.do(func(m *screenModel) tea.Cmd { m.blocks, m.top, m.follow, m.sel = nil, 0, true, nil; return nil })
 }
 
 // Changed redraws the blocks that changed, within a frame's time.
@@ -196,13 +196,13 @@ func (s *Screen) Footer(left, right string) {
 	s.do(func(m *screenModel) tea.Cmd { m.ed.footer, m.ed.status = left, right; return nil })
 }
 
-// Mouse turns wheel scrolling on or off.
+// Mouse turns the wheel and selecting on or off.
 func (s *Screen) Mouse(on bool) {
 	s.do(func(m *screenModel) tea.Cmd {
 		if m.mouse == on {
 			return nil
 		}
-		m.mouse = on
+		m.mouse, m.sel = on, nil
 		if on {
 			return tea.EnableMouseCellMotion
 		}
@@ -336,7 +336,17 @@ type screenModel struct {
 	waiter   chan [2]string // the caller of Next, waiting
 	queue    [][2]string    // messages sent while it was busy
 
-	mouse  bool
+	mouse bool
+	sel   *selection // the text selected with the mouse
+	click struct {   // the last click, to count a double or triple one
+		at   time.Time
+		word [2]point
+		n    int
+	}
+	flash   string // a notice in the status row ("Copied …")
+	flashOK bool
+	flashID int
+
 	keys   bool // modified keys are asked for (not on Windows)
 	out    *termOutput
 	redraw atomic.Bool // Changed has a redraw on its way
@@ -368,13 +378,32 @@ func (m *screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 	case tea.MouseMsg:
-		if msg.Action == tea.MouseActionPress && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
-			n := wheelLines(m.wheel)
-			m.wheel = time.Now()
-			if msg.Button == tea.MouseButtonWheelUp {
-				n = -n
-			}
-			m.scroll(n)
+		if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonWheelUp && msg.Button != tea.MouseButtonWheelDown {
+			return m, m.pointer(msg)
+		}
+		n := wheelLines(m.wheel)
+		m.wheel = time.Now()
+		if msg.Button == tea.MouseButtonWheelUp {
+			n = -n
+		}
+		m.scroll(n)
+		if m.sel != nil && m.sel.held {
+			m.extend()
+		}
+	case dragTickMsg:
+		return m, m.dragged()
+	case copiedMsg:
+		m.flashID++
+		m.flash, m.flashOK = fmt.Sprintf("Copied %d %s", msg.n, plural(msg.n, "character")), msg.err == nil
+		wait := 2 * time.Second
+		if msg.err != nil {
+			m.flash, wait = "Could not copy: "+msg.err.Error(), 5*time.Second
+		}
+		id := m.flashID
+		return m, tea.Tick(wait, func(time.Time) tea.Msg { return flashMsg{id} })
+	case flashMsg:
+		if msg.id == m.flashID {
+			m.flash = ""
 		}
 	case tea.KeyMsg:
 		return m, m.key(msg)
@@ -436,6 +465,10 @@ func (m *screenModel) key(k tea.KeyMsg) tea.Cmd {
 		return m.suspend()
 	case "ctrl+l":
 		return tea.ClearScreen
+	}
+	if s == "esc" && m.sel != nil {
+		m.sel = nil
+		return nil
 	}
 	if m.scrollKey(s) {
 		return nil
@@ -604,6 +637,7 @@ func (m *screenModel) close(r result) {
 // resize keeps the line at the top of a scrolled-back view in place: the
 // same block, as far down it.
 func (m *screenModel) resize(w, h int) {
+	m.sel = nil
 	if w != m.width && !m.follow && m.width > 0 {
 		block, line, n := m.locate(m.top)
 		m.width = w
@@ -705,6 +739,20 @@ func (m *screenModel) View() string {
 
 	lines := make([]string, 0, h)
 	lines = append(lines, window(spans, m.top, rows)...)
+	if s := m.sel; s != nil && !s.empty() {
+		for r := range lines {
+			if i := m.top + r; i >= s.from.line && i <= s.to.line {
+				a, b := 0, endCol
+				if i == s.from.line {
+					a = s.from.col
+				}
+				if i == s.to.line {
+					b = s.to.col
+				}
+				lines[r] = highlight(lines[r], a, b)
+			}
+		}
+	}
 	for len(lines) < rows {
 		lines = append(lines, "")
 	}
@@ -757,6 +805,13 @@ func (m *screenModel) statusLine(width int) string {
 	}
 	if n := len(m.queue); n > 0 {
 		left = append(left, dim.Render(fmt.Sprintf("%d queued", n)))
+	}
+	if m.flash != "" {
+		style := dim
+		if !m.flashOK {
+			style = fg(Colors.Error)
+		}
+		left = append(left, style.Render(m.flash))
 	}
 	l := strings.Join(left, dim.Render(" · "))
 	below := m.total - m.top - m.viewRows

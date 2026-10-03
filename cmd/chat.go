@@ -33,11 +33,12 @@ var chatCmd = &cobra.Command{
 	Long: `Start an interactive multi-turn chat session with DocsGPT.
 
 The chat takes the whole window; the wheel, PgUp/PgDn and Shift+↑/↓ scroll
-it. Type / for the commands, !cmd to run a shell command and send its output
-with your next message (!!cmd to keep it to yourself). Enter sends, Shift+Enter,
-Ctrl+J or Alt+Enter (or a trailing \) starts a new line, ↑/↓ browse earlier
-prompts and Ctrl+G edits the message in $EDITOR. Esc or Ctrl+C stops an
-answer; Ctrl+C clears the input, twice on an empty input (or Ctrl+D) quits.`,
+it, and text selected with the mouse is copied. Type / for the commands,
+!cmd to run a shell command and send its output with your next message
+(!!cmd to keep it to yourself). Enter sends, Shift+Enter, Ctrl+J or
+Alt+Enter (or a trailing \) starts a new line, ↑/↓ browse earlier prompts
+and Ctrl+G edits the message in $EDITOR. Esc or Ctrl+C stops an answer;
+Ctrl+C clears the input, twice on an empty input (or Ctrl+D) quits.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runChat(strings.Join(args, " "))
 	},
@@ -710,15 +711,16 @@ func (s *chatSession) help(string) {
 		{"↑ ↓", "move between lines, browse earlier messages"},
 		{"ctrl+g", "edit the message in $EDITOR"},
 		{"wheel, pgup pgdn", "scroll (shift+↑ ↓ by a line)"},
+		{"drag", "select text and copy it (double click: a word, triple: a line)"},
 		{"ctrl+↑ ctrl+↓", "previous / next message of yours"},
 		{"end, ctrl+end", "back to the end (home, ctrl+home: the start)"},
-		{"esc", "stop the answer"},
+		{"esc", "clear the selection, stop the answer"},
 		{"ctrl+c", "stop the answer, clear the input; twice to quit"},
 		{"ctrl+d", "quit"},
 		{"ctrl+z", "suspend (fg to come back)"},
 	} {
 		fmt.Fprintf(&b, "  %-18s %s\n", k[0], display.Muted(k[1]))
 	}
-	b.WriteString(display.Dim("Select text with Shift-drag (Option-drag in iTerm2), or turn the mouse off in /settings."))
+	b.WriteString(display.Dim("The terminal's own selection: Shift-drag (Option-drag in iTerm2), or turn the mouse off in /settings."))
 	s.scr.Add(display.Text(b.String()))
 }
