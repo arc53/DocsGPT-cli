@@ -273,14 +273,14 @@ func loginInteractive(ctx context.Context, out io.Writer) error {
 			return cfg.Save()
 		}
 	}
-	_, err = addCredential(ctx, &cfg, false, out)
+	_, err = addCredential(ctx, ui.Inline, &cfg, false, out)
 	return err
 }
 
-// addCredential asks for an agent API key (or, unless keysOnly, a personal
-// access token), checks it with the server behind a spinner and stores it.
-// It returns the name the key was stored under ("" for a token).
-func addCredential(ctx context.Context, cfg *config.Config, keysOnly bool, out io.Writer) (string, error) {
+// addCredential asks with p for an agent API key (or, unless keysOnly, a
+// personal access token), checks it with the server behind a spinner and
+// stores it. It returns the name the key was stored under ("" for a token).
+func addCredential(ctx context.Context, p ui.Prompter, cfg *config.Config, keysOnly bool, out io.Writer) (string, error) {
 	baseURL := cfg.ResolveURL(globalURL)
 	title := "Paste an agent API key or a personal access token"
 	if keysOnly {
@@ -291,7 +291,7 @@ func addCredential(ctx context.Context, cfg *config.Config, keysOnly bool, out i
 		verified bool
 		id       *manage.Identity
 	)
-	secret, err := ui.Input{
+	secret, err := p.Input(ui.Input{
 		Title: title,
 		Mask:  true,
 		Validate: func(vctx context.Context, v string) error {
@@ -326,7 +326,7 @@ func addCredential(ctx context.Context, cfg *config.Config, keysOnly bool, out i
 			}
 			return "API key " + config.RedactKey(v)
 		},
-	}.Run()
+	})
 	if err != nil {
 		return "", err
 	}
@@ -337,7 +337,7 @@ func addCredential(ctx context.Context, cfg *config.Config, keysOnly bool, out i
 
 	name := storedKeyName(*cfg, secret)
 	if name == "" {
-		name, err = ui.Input{
+		name, err = p.Input(ui.Input{
 			Title: "Name for this key",
 			Value: freeKeyName(*cfg, agent),
 			Validate: func(_ context.Context, v string) error {
@@ -350,7 +350,7 @@ func addCredential(ctx context.Context, cfg *config.Config, keysOnly bool, out i
 				}
 				return nil
 			},
-		}.Run()
+		})
 		if err != nil {
 			return "", err
 		}
@@ -358,7 +358,7 @@ func addCredential(ctx context.Context, cfg *config.Config, keysOnly bool, out i
 	}
 	makeDefault := len(cfg.Keys) == 0 || cfg.DefaultKey == "" || cfg.DefaultKey == name
 	if !makeDefault {
-		if makeDefault, err = ui.Confirm("Make it the default?", true); err != nil {
+		if makeDefault, err = ui.ConfirmWith(p, "Make it the default?", true); err != nil {
 			return "", err
 		}
 	}
@@ -470,7 +470,7 @@ func chatKey(cfg *config.Config) (name, key string, err error) {
 		return "", "", fmt.Errorf("No API key. Run 'docsgpt-cli login' or set %s.", config.EnvAPIKey)
 	}
 	fmt.Fprintln(os.Stderr, display.Muted("No API key yet — paste one from DocsGPT → Agent settings → API key"))
-	if name, err = addCredential(context.Background(), cfg, true, os.Stderr); err != nil {
+	if name, err = addCredential(context.Background(), ui.Inline, cfg, true, os.Stderr); err != nil {
 		return "", "", err
 	}
 	fmt.Fprintln(os.Stderr)

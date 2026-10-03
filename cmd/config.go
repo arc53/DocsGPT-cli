@@ -190,7 +190,7 @@ var configCmd = &cobra.Command{
 		if !ui.Interactive() {
 			return cmd.Help()
 		}
-		_, err := runConfigMenu(os.Stdout)
+		_, err := runConfigMenu(ui.Inline, os.Stdout)
 		return err
 	},
 }
@@ -318,10 +318,10 @@ func runConfigShow(cfg config.Config, asJSON bool, out io.Writer) error {
 	return nil
 }
 
-// runConfigMenu shows the settings with their values until Esc: choosing one
-// cycles a fixed set of values or asks for a new one. It reports whether
-// anything was saved.
-func runConfigMenu(out io.Writer) (saved bool, err error) {
+// runConfigMenu shows the settings with their values with p until Esc:
+// choosing one cycles a fixed set of values or asks for a new one. It
+// reports whether anything was saved.
+func runConfigMenu(p ui.Prompter, out io.Writer) (saved bool, err error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return false, err
@@ -338,7 +338,7 @@ func runConfigMenu(out io.Writer) (saved bool, err error) {
 		for i, s := range menu {
 			items[i] = ui.Item{Label: s.title, Description: s.get(&cfg), Value: s.key}
 		}
-		key, err := ui.Select{Title: "Settings", Items: items, Default: cursor, Summary: func(ui.Item) string { return "" }}.Run()
+		key, err := p.Select(ui.Select{Title: "Settings", Items: items, Default: cursor, Summary: func(ui.Item) string { return "" }})
 		if errors.Is(err, ui.ErrCancelled) {
 			break
 		}
@@ -351,7 +351,7 @@ func runConfigMenu(out io.Writer) (saved bool, err error) {
 		if s.values != nil {
 			value = s.values[(slices.Index(s.values, s.get(&cfg))+1)%len(s.values)]
 		} else {
-			value, err = ui.Input{
+			value, err = p.Input(ui.Input{
 				Title: s.title,
 				Value: s.get(&cfg),
 				Validate: func(_ context.Context, v string) error {
@@ -359,7 +359,7 @@ func runConfigMenu(out io.Writer) (saved bool, err error) {
 					return s.set(&probe, strings.TrimSpace(v))
 				},
 				Summary: func(string) string { return "" },
-			}.Run()
+			})
 			if errors.Is(err, ui.ErrCancelled) {
 				continue
 			}

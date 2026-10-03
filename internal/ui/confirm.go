@@ -2,8 +2,11 @@ package ui
 
 // Confirm asks a yes/no question on one line (y/n, ←/→, Enter takes the
 // highlighted answer, def initially).
-func Confirm(title string, def bool) (bool, error) {
-	v, err := confirmSelect(title, def).Run()
+func Confirm(title string, def bool) (bool, error) { return ConfirmWith(Inline, title, def) }
+
+// ConfirmWith asks the yes/no question with p.
+func ConfirmWith(p Prompter, title string, def bool) (bool, error) {
+	v, err := p.Select(confirmSelect(title, def))
 	return v == "Yes", err
 }
 

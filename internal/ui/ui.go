@@ -82,6 +82,20 @@ func Interactive() bool {
 // the real terminal width (the first WindowSizeMsg arrives after it).
 type sizer interface{ setSize(w, h int) }
 
+// Prompter shows prompts: Inline, or in a Screen's panel.
+type Prompter interface {
+	Select(Select) (string, error)
+	Input(Input) (string, error)
+}
+
+// Inline shows prompts inline (Select.Run, Input.Run).
+var Inline Prompter = inline{}
+
+type inline struct{}
+
+func (inline) Select(s Select) (string, error) { return s.Run() }
+func (inline) Input(in Input) (string, error)  { return in.Run() }
+
 // run drives one prompt inline on stdout, or on stderr when toStderr is
 // set, and returns its final model. With in, it reads stdin through in, the
 // terminal reporting modified keys meanwhile.

@@ -556,7 +556,7 @@ func (s *chatSession) switchKey(string) {
 	}
 	if name == "\x00add" {
 		cfg := s.cfg
-		if name, err = addCredential(context.Background(), &cfg, true, os.Stdout); err != nil {
+		if name, err = addCredential(context.Background(), ui.Inline, &cfg, true, os.Stdout); err != nil {
 			if !errors.Is(err, ui.ErrCancelled) {
 				printError(err.Error())
 			}
@@ -574,7 +574,7 @@ func (s *chatSession) switchKey(string) {
 }
 
 func (s *chatSession) settings(string) {
-	saved, err := runConfigMenu(os.Stdout)
+	saved, err := runConfigMenu(ui.Inline, os.Stdout)
 	if err != nil {
 		printError(err.Error())
 	}
