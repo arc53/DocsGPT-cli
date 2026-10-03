@@ -97,7 +97,8 @@ command would wait for it. Tools are not offered unless you pass
 
 A request that fails before its answer starts (429, 502, 503, 504, a refused
 or dropped connection, a timeout) is retried up to 3 times, after 2s, 4s and
-8s, or after the server's `Retry-After` when it gives one (up to a minute).
+8s, or after the server's `Retry-After` when it gives one (up to a minute);
+a refused connection, more often a wrong URL than a restart, only once.
 An answer that breaks off mid-way is not retried. `docsgpt-cli config set retry
 off` turns retries off. Errors are one line saying what to do;
 `DOCSGPT_DEBUG=1` adds the error as the server or the network gave it.

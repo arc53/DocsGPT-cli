@@ -89,6 +89,10 @@ func (p RetryPolicy) delay(attempt int, err error) (time.Duration, bool) {
 	if attempt >= p.MaxRetries || !Retryable(err) {
 		return 0, false
 	}
+	// Nothing listening is more often a wrong URL than a restart: one try.
+	if attempt > 0 && errors.Is(err, syscall.ECONNREFUSED) {
+		return 0, false
+	}
 	d := p.BaseDelay << attempt
 	var apiErr *APIError
 	if errors.As(err, &apiErr) && apiErr.RetryAfter > 0 {

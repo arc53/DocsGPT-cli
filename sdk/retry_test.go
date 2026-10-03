@@ -170,7 +170,7 @@ func TestHonoursRetryAfter(t *testing.T) {
 	}
 }
 
-func TestRetriesRefusedConnections(t *testing.T) {
+func TestRetriesARefusedConnectionOnce(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	url := srv.URL
 	srv.Close()
@@ -180,8 +180,8 @@ func TestRetriesRefusedConnections(t *testing.T) {
 	if _, err := c.Send(context.Background(), ChatRequest{}); err == nil {
 		t.Fatal("no error")
 	}
-	if len(events) != 3 {
-		t.Fatalf("events = %d, want 3 retries", len(events))
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1 retry", len(events))
 	}
 }
 
