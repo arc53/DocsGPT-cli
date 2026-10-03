@@ -111,7 +111,7 @@ docsgpt-cli config path                       # ~/.docsgpt/config.json
 | `auto_update` | `on`, `notify`, `off` ([Updating](install.md#updating)) | `on` |
 | `banner` | `always`, `once`, `never` | `once` |
 | `theme` | `auto`, `dark`, `light` | `auto` |
-| `mouse` | `on`, `off`: scroll the chat with the wheel ([Scrolling](chat.md#scrolling)) | `on` |
+| `mouse` | `on`, `off`: scroll the chat with the wheel and select text to copy it ([Scrolling](chat.md#scrolling), [Selecting text](chat.md#selecting-text)) | `on` |
 | `send_current_directory` | `true`, `false` | `true` |
 | `send_directory_contents` | `true`, `false` | `true` |
 | `send_project_instructions` | `true`, `false` (AGENTS.md / CLAUDE.md) | `true` |

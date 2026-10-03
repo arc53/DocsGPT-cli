@@ -44,7 +44,8 @@ More in the [quickstart](docs/quickstart.md).
 ## What you get
 
 - **A full-screen chat.** It scrolls with the wheel and the keys while answers
-  stream in, and leaves the conversation in your scrollback when you quit.
+  stream in, copies the text you select with the mouse, and leaves the
+  conversation in your scrollback when you quit.
   Multi-line input, prompt history, `$EDITOR`, `/` commands and `!cmd` to share
   a command's output. [Chat](docs/chat.md)
 - **Sessions.** Every chat is saved per directory; `-c` continues the latest,

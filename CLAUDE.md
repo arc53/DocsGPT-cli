@@ -125,6 +125,8 @@ internal/
                        StripControls: removes ESC/OSC/DCS/C1 sequences whole and other
                        controls but \n \t, for text read as text (answers, resumed
                        chats, the user-message block, /export, error messages)
+    copy.go          → how the chat's blocks copy (ui.Plain): joins, markdownPlain,
+                       unwrapped (see chat command, Selection)
     sources.go       → dim numbered "Sources" block, OSC 8 links (printable-ASCII
                        http(s) URLs only), TTY only
     background*.go   → auto theme: COLORFGBG, else one OSC 11 query (stdout TTY only,
@@ -136,6 +138,9 @@ internal/
                        ui.Signal; Stderr option for prompts drawn while stdout carries
                        an answer; Prompter (Inline, or a Screen's panel).
                        screen.go: the chat's full-screen program (see chat command);
+                       selection.go: mouse selection; plain.go: Plain/Plainer,
+                       Unwrap (how lines copy);
+                       clipboard.go: Copy (system clipboard, else OSC 52);
                        editor.go: its input (editorModel, embedded); keys.go: ttyInput
                        (keyboard protocol → legacy bytes), NewlineKey; history.go:
                        prompt history file; fuzzy.go: popup/filter matching;
@@ -241,6 +246,29 @@ or with TERM=dumb it refuses.
   editor and no panel, Ctrl+Home/Ctrl+End always. Sending, and a panel opening,
   return to the end. A resize keeps a scrolled-back view on the same block, at
   the same share of it (blocks re-render at the new width).
+- Selection (`ui/selection.go`, pi's fullscreen behaviour): with the mouse on,
+  a left press in the transcript starts it, drag events (cell motion, 1002)
+  extend it, the release copies it (`ui.Copy`, in a tea.Cmd) and flashes
+  `Copied N characters` in the status row (2s; errors 5s). 2/3 presses within
+  500ms on the same word: word (letters/digits/_ joined by / and -, . and '
+  inside) / logical line. Points are transcript (line, col), so it stays on its
+  text while streaming; the top row (reached from below) or under the
+  transcript scrolls a line per 50ms tick while held. Highlight: reverse video,
+  re-set after every SGR, grapheme-aligned (wide chars whole). A click, Esc
+  (before anything else it would do), a resize, Clear or mouse off clear it.
+  Copy text: `ui.Unwrap` over the rows' `ui.Plain` (Indent = decoration columns
+  left out, Wrap + Sep = a soft wrap and what it took out); blocks implementing
+  `ui.Plainer` supply it, others copy as shown. display finds it in `copy.go`:
+  `joins` matches each row's text into the block's unwrapped text (a message's
+  source; markdown rendered by `unwrapped` at its longest paragraph's width +
+  64, at copy time only, cached per version) — a row that follows the row
+  above across only whitespace is a wrap, with that whitespace as Sep (so
+  hyphen and `.` breaks and fit-cut code join exactly); `markdownPlain` adds
+  the code indent (2, between our fences) and quote bars. Tables copy as shown.
+- Clipboard (`ui.Copy`, also /copy and ask): system clipboard (atotto), else or
+  over SSH (`SSH_TTY`/`SSH_CONNECTION`/`SSH_CLIENT`) OSC 52 written through the
+  screen's `termOutput` (base64 capped at 100 000 bytes → an error); tmux needs
+  `set-clipboard on`.
 - Input: the editor always takes keys (typing while an answer streams); Enter while
   the chat is busy queues the message (sent after; Esc/Ctrl+C put the queue back
   into the editor). Esc or Ctrl+C with something cancellable running cancels it;
@@ -381,6 +409,7 @@ Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on fi
 - `charmbracelet/bubbletea` (v1) — every interactive prompt, and the full-screen chat
 - `charmbracelet/x/ansi`, `muesli/termenv`, `mattn/go-isatty`, `x/term`, `x/sys` — widths and wrapping, color profile, TTY checks, raw mode / echo off
 - `atotto/clipboard` — clipboard access
+- `rivo/uniseg` — grapheme widths for the chat's mouse selection
 - `minio/selfupdate` — atomic binary replacement for the update command
 - `golang.org/x/mod/semver` — version comparison
 - `gopkg.in/yaml.v3` — bench suite/case files

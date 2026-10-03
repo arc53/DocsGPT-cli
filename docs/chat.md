@@ -42,16 +42,38 @@ everything again at the new width.
 
 ### Selecting text
 
-The chat takes the mouse for the wheel, so the terminal's own selection needs a
-modifier: Shift-drag in most terminals (kitty, WezTerm, Ghostty, Alacritty,
-Windows Terminal, GNOME Terminal, xterm, and tmux), Option-drag in iTerm2,
-Fn-drag in Terminal.app. `/copy` copies the last answer, or one of its code
-blocks.
+Drag over the conversation with the mouse to select text; when you let go it
+is copied, and the line above the input says so (`Copied 312 characters`).
+A double click selects a word (a path or a URL counts as one), a triple click
+the whole line as it was written: a paragraph, a list item, a line of code.
+Both copy at once. Dragging onto the top row or below the conversation
+scrolls it while you hold the button. The selection stays highlighted until
+the next click, Esc or a resize, and stays on its text while an answer
+streams in.
+
+What is copied is plain text: no colours, no indentation the chat adds (the
+two columns before code, a message's padding, a quote's bar), no spaces at
+the ends of lines. Lines the chat wrapped to fit the window are joined again,
+so a paragraph pastes as one line and a long line of code as one line. Across
+messages, the parts are a blank line apart. `/copy` copies the last answer,
+or one of its code blocks.
+
+The text goes to the system clipboard. Over SSH (`SSH_TTY` or
+`SSH_CONNECTION` set), or when there is no system clipboard (Linux without
+`xclip`, `xsel` or `wl-copy`), it goes to your terminal's clipboard instead,
+through the OSC 52 sequence, up to about 75 KB of text. Most terminals take it
+(in iTerm2, turn on *Applications in terminal may access clipboard* under
+Settings → General → Selection; Terminal.app has no support for it). In tmux, add `set -g set-clipboard on` to
+`~/.tmux.conf` so tmux passes it on to the terminal.
+
+The terminal's own selection still works with a modifier: Shift-drag in most
+terminals (kitty, WezTerm, Ghostty, Alacritty, Windows Terminal, GNOME
+Terminal, xterm, and tmux), Option-drag in iTerm2, Fn-drag in Terminal.app.
 
 `docsgpt-cli config set mouse off` (or `/settings`) leaves the mouse to the
-terminal: selection works as usual and the keys above still scroll. The wheel
-then does whatever the terminal does on a full-screen program: many send ↑ and
-↓, which browse your earlier messages in the input.
+terminal: its selection works as usual and the keys above still scroll. The
+wheel then does whatever the terminal does on a full-screen program: many send
+↑ and ↓, which browse your earlier messages in the input.
 
 ## Editor
 
@@ -65,7 +87,7 @@ then does whatever the terminal does on a full-screen program: many send ↑ and
 | Alt+← / Alt+→ (Ctrl+← / Ctrl+→) | Previous / next word |
 | Ctrl+W, Alt+Backspace | Delete the previous word |
 | Ctrl+U / Ctrl+K | Delete to the start / end of the line |
-| Esc | Stop the answer or the command that runs |
+| Esc | Clear the selection; else stop the answer or the command that runs |
 | Ctrl+C | Stop the answer, or clear the input; twice on an empty input quits |
 | Ctrl+D | Quit |
 | Ctrl+Z | Suspend (`fg` to come back) |
