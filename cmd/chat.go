@@ -701,7 +701,7 @@ func (s *chatSession) help(string) {
 		if c.args != "" {
 			name += " " + c.args
 		}
-		fmt.Fprintf(&b, "  %-18s %s\n", name, display.Muted(c.desc))
+		fmt.Fprintf(&b, "  %-20s %s\n", name, display.Muted(c.desc))
 	}
 	b.WriteString("\nKeys\n")
 	for _, k := range [][2]string{
@@ -719,7 +719,7 @@ func (s *chatSession) help(string) {
 		{"ctrl+d", "quit"},
 		{"ctrl+z", "suspend (fg to come back)"},
 	} {
-		fmt.Fprintf(&b, "  %-18s %s\n", k[0], display.Muted(k[1]))
+		fmt.Fprintf(&b, "  %-20s %s\n", k[0], display.Muted(k[1]))
 	}
 	b.WriteString(display.Dim("The terminal's own selection: Shift-drag (Option-drag in iTerm2), or turn the mouse off in /settings."))
 	s.scr.Add(display.Text(b.String()))
