@@ -52,6 +52,7 @@ type Settings struct {
 	Theme                   string `json:"theme,omitempty"`                // "auto", "dark", "light"
 	Banner                  string `json:"banner,omitempty"`               // "always", "once", "never"
 	Mouse                   string `json:"mouse,omitempty"`                // "on" (the default), "off": the chat scrolls with the wheel and selects text to copy
+	Notify                  string `json:"notify,omitempty"`               // "on" (the default), "off": the chat notifies when an answer or approval waits and the terminal is not focused
 	AutoUpdate              string `json:"auto_update,omitempty"`          // "on", "notify", "off"
 	DisableUpdateCheck      bool   `json:"disable_update_check,omitempty"` // legacy, superseded by auto_update
 }
