@@ -68,12 +68,17 @@ func indent(plain []ui.Plain, rows []string, n int) []ui.Plain {
 
 // markdownPlain tells how the rows of rendered markdown copy, given the
 // markdown rendered unwrapped: code lines without the two columns
-// codeBlock indents them by, quotes without their bars.
+// codeBlock indents them by, quotes without their bars, tables as shown.
 func markdownPlain(rows []string, unwrapped string) []ui.Plain {
 	plain := joins(rows, unwrapped)
-	code := false
+	code, table := false, false
 	for i, r := range rows {
 		row := ansi.Strip(r)
+		if !code && (strings.HasPrefix(row, "┌") || table) {
+			table = !strings.HasPrefix(row, "└")
+			plain[i] = ui.Plain{}
+			continue
+		}
 		if strings.HasPrefix(row, "```") {
 			code = !code
 			continue

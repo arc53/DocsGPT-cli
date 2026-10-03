@@ -448,7 +448,7 @@ func TestSessionFileCalls(t *testing.T) {
 
 	s := &Session{Timeout: time.Minute}
 	call := func(name, args string) string {
-		return s.Handle(context.Background(), func() {}, docsgpt.ToolCall{Function: docsgpt.FunctionCall{Name: name, Arguments: args}})
+		return s.Handle(context.Background(), func() {}, docsgpt.ToolCall{Function: docsgpt.FunctionCall{Name: name, Arguments: args}}).Content
 	}
 	if got := call("read_file", `{"path":"notes.txt"}`); got != "hello\n" {
 		t.Errorf("read in the working directory: %q", got)

@@ -28,7 +28,7 @@ func TestBuild(t *testing.T) {
 
 	s := config.DefaultConfig().Settings
 	s.SendLastCommands = true
-	got := Build(s)
+	got := Build(s, false)
 	for _, want := range []string{
 		"<context>\n", "Working directory: " + sub, "Files in it: CLAUDE.md, dir/, f00", "(+5 more)",
 		"from ../AGENTS.md:\n<instructions>\nroot rules\n</instructions>\nProject instructions from CLAUDE.md:\n<instructions>\nsub rules",
@@ -40,8 +40,22 @@ func TestBuild(t *testing.T) {
 	if strings.Contains(got, "shell") {
 		t.Errorf("Build() mentions shell history it could not read:\n%s", got)
 	}
-	if got := Build(config.Settings{}); got != "" {
+	if strings.Contains(got, "run_command") || strings.Contains(got, "System:") {
+		t.Errorf("Build() without tools describes them:\n%s", got)
+	}
+	if got := Build(config.Settings{}, false); got != "" {
 		t.Errorf("Build() with nothing enabled = %q", got)
+	}
+	// With tools, the system, the shell and the guides go too, even with
+	// nothing else enabled.
+	got = Build(config.Settings{}, true)
+	for _, want := range []string{"System: ", "run_command runs commands with ", "<tools_guide>", "edit_file", "<coding_guide>"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Build() with tools lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Working directory") {
+		t.Errorf("Build() with tools sends what the settings keep back:\n%s", got)
 	}
 	if got := Prepend("", "q"); got != "q" {
 		t.Errorf("Prepend without context = %q", got)

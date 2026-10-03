@@ -1,16 +1,20 @@
 # Tools and approval
 
-In chats and one-shot answers, the agent can work on your machine through three
+In chats and one-shot answers, the agent can work on your machine through four
 tools:
 
 | Tool | What it does | Asks you |
 |---|---|---|
 | `run_command` | Runs a command with `sh -c` (`cmd /C` on Windows) | Always |
-| `read_file` | Reads a text file, in pages of up to 2000 lines or 50 KB | Only outside the working directory, or for files that may hold secrets |
-| `write_file` | Writes a file, creating missing directories | Always, with a short diff first |
+| `read_file` | Reads a text file, in pages of up to 2000 lines or 50 KB, or shows the model an image | Only outside the working directory, or for files that may hold secrets |
+| `edit_file` | Replaces exact pieces of text in a file | Always, with the diff first |
+| `write_file` | Writes a whole file, creating missing directories | Always, with a short diff first |
+
+Paths may start with `~` (your home directory).
 
 Each call shows as a block: the command or path, the output's last lines while
-it runs, then `✓ exit 0 · 1.2s` or `✗ exit 1 · 0.3s`. In a terminal with
+it runs, with `running · 12s` under them once it has taken a second, then
+`✓ exit 0 · 1.2s` or `✗ exit 1 · 0.3s`. In a terminal with
 colors the block sits on a subtle background: gray while it runs, tinted green
 once it succeeded, red when it failed or was denied or cancelled. The model
 gets the output's last 2000 lines or 50 KB, and the exit code.
@@ -18,7 +22,8 @@ gets the output's last 2000 lines or 50 KB, and the exit code.
 In the chat a block shows the output's last 5 lines under
 `… 195 earlier lines · ctrl+o to expand`. Ctrl+O expands every tool block to
 the whole output the model got, and collapses them again; it holds for the
-blocks that follow too. A one-shot question shows the last lines only.
+blocks that follow too. With the mouse on, a click on a block expands or
+collapses that one alone. A one-shot question shows the last lines only.
 
 ## Approving
 
@@ -44,8 +49,10 @@ input; what you were typing as they appeared stays in the input instead of
 answering them.
 
 Commands run without your terminal: one that asks for a password fails instead
-of waiting. They get `--tool-timeout` seconds (default 30) and are killed with
-their child processes on timeout or Ctrl+C. On Windows they run through
+of waiting. They get `--tool-timeout` seconds (default 30), or the timeout the
+model asks for (at most an hour, or `--tool-timeout` when that is longer;
+the title then shows it, `· timeout 10m`), and are killed with their child
+processes on timeout or Ctrl+C. On Windows they run through
 `cmd /C` with `NoDefaultCurrentDirectoryInExePath` set, so a program name never
 resolves to a file in the working directory (`git` is never `.\git.exe`).
 
@@ -53,7 +60,11 @@ resolves to a file in the working directory (`git` is never `.\git.exe`).
 
 "Always allow" lasts until the chat (or the one-shot run) ends.
 
-- **Reads and writes:** covers every later read (or write).
+- **Reads:** covers every later read.
+- **Writes:** covers later writes and edits of files in the working
+  directory. Those that would ask as a read would (outside it, or a path that
+  may hold secrets) and those inside a `.git` directory, whose hooks run code,
+  still ask, and are not offered "Always allow writes".
 - **Commands:** covers later commands with the same key, shown on the choice:
   the program and its subcommand, such as `git status` or `npm test`. Programs
   that only read and have no subcommands (`ls`, `cat`, `grep`, `rg`, `head`,
@@ -76,6 +87,9 @@ same key and passes the same checks. These always ask, and are never offered
   `npm install`, `docker run`;
 - a path argument that may leave the working directory: absolute, from `~`, or
   through `..` (`cat ../.env`, `ls ~/.ssh`, `git diff --output=/tmp/x`);
+- a command the model runs in another directory (`working_directory`) outside
+  the working directory, or one that may hold secrets: "Always allow cat"
+  covers `cat` here, not in `~/.ssh`;
 - options before the subcommand, except a few known to take no value
   (`git --no-pager`, `git -P`, `npm -s`): `git --namespace status push` would
   run `git push`.
@@ -110,6 +124,26 @@ Reading a file inside the working directory runs right away. These ask first:
   `*.tfstate`, `*.tfvars`, shell histories and similar.
 
 Devices, pipes and directories are refused, and binary files are not sent.
+
+PNG, JPEG, GIF, WebP and BMP images (told by their bytes, up to 20 MB) go to
+the model as images: the block shows `✓ PNG · 1280×800 · 240 KB`. The server
+scales them down for the model, and tells a model that reads no images what it
+missed. This needs a DocsGPT server with images in tool results (October
+2026); an older one gets the image as text, cut to its limit. In a chat, the
+image goes with that answer only: the history and the saved session keep the
+note naming the file, not its bytes.
+
+## Edits
+
+`edit_file` takes a path and a list of `old_text` → `new_text` replacements.
+Each `old_text` must match one place in the file as it is, and no two may
+overlap; all of them are matched before any applies. When the exact text is
+not there, it matches again ignoring what models often get wrong: spaces at
+the end of lines, `\r\n`, typographic quotes, dashes and spaces. The file keeps
+its byte order mark, its `\r\n` line breaks (the new text gets them too) and
+its permissions. You approve the change as a diff, and if the file changes
+while the prompt waits, nothing is written and the model is told to read it
+again. Files over 10 MB and binary files are refused.
 
 ## Turning tools off or on
 

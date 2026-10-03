@@ -31,10 +31,12 @@ type Block interface{ Lines(width int) []string }
 type Prompt interface{ Prompt() }
 
 // Expander is a block that shows part of what it holds (a command's
-// output) unless expanded; Ctrl+O expands or collapses them all. Folds
-// reports whether collapsing it hides anything.
+// output) unless expanded; Ctrl+O expands or collapses them all, a click
+// on one that folds that one alone. Folds reports whether collapsing it
+// hides anything.
 type Expander interface {
 	Expand(on bool)
+	Expanded() bool
 	Folds() bool
 }
 
@@ -384,9 +386,10 @@ type screenModel struct {
 	mouse bool
 	sel   *selection // the text selected with the mouse
 	click struct {   // the last click, to count a double or triple one
-		at   time.Time
-		word [2]point
-		n    int
+		at     time.Time
+		word   [2]point
+		n      int
+		toggle int // the click a block waits for to toggle (toggleMsg)
 	}
 	flash   string // a notice in the status row ("Copied …")
 	flashOK bool
@@ -443,6 +446,10 @@ func (m *screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case dragTickMsg:
 		return m, m.dragged()
+	case toggleMsg:
+		if msg.id == m.click.toggle {
+			return m, m.toggle(msg.block)
+		}
 	case copiedMsg:
 		if msg.err != nil {
 			return m, m.notify("Could not copy: "+msg.err.Error(), false)

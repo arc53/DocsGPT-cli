@@ -355,3 +355,42 @@ func TestRunWithToolsCompat(t *testing.T) {
 		t.Fatalf("history = %+v", msgs)
 	}
 }
+
+func TestRunToolResultParts(t *testing.T) {
+	turns := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		turns++
+		if turns == 1 {
+			fmt.Fprint(w, `{"choices":[{"message":{"tool_calls":[{"id":"t1","type":"function","function":{"name":"read_file","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
+			return
+		}
+		var raw struct {
+			Messages []json.RawMessage `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Fatal(err)
+		}
+		last := string(raw.Messages[len(raw.Messages)-1])
+		for _, want := range []string{`"role":"tool"`, `"tool_call_id":"t1"`, `{"type":"text","text":"an image"}`, `"url":"data:image/png;base64,`} {
+			if !strings.Contains(last, want) {
+				t.Errorf("tool message %s lacks %s", last, want)
+			}
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"done"},"finish_reason":"stop"}]}`)
+	}))
+	defer srv.Close()
+
+	png := []byte("\x89PNG\r\n\x1a\n")
+	_, err := NewClient(srv.URL, "k").Run(context.Background(), []Message{{Role: "user", Content: "go"}}, RunOptions{
+		OnToolCall: func(ToolCall) string { t.Error("OnToolCall called with OnToolResult set"); return "" },
+		OnToolResult: func(ToolCall) ToolResult {
+			return ToolResult{Content: "an image", Parts: []ContentPart{ImagePart("image/png", png)}}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turns != 2 {
+		t.Errorf("made %d requests, want 2", turns)
+	}
+}

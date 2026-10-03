@@ -7,7 +7,6 @@ import (
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
@@ -29,24 +28,14 @@ import (
 // word wrapper miscounts hyphens and a second pass re-wraps the overlong
 // rows, so words and punctuation end up alone on a row, quote rows lose
 // their bar), so prose is rendered unwrapped and rewrap wraps it; tables
-// are laid out by glamour at the width.
+// are laid out by renderTable (table.go).
 type markdown struct {
-	prose  goldmark.Markdown
-	tables *glamour.TermRenderer
+	prose goldmark.Markdown
 }
 
 // newMarkdown returns a markdown renderer for the active theme at width.
-// Nil when glamour refuses the options.
 func newMarkdown(width int) *markdown {
 	style := markdownStyle(width)
-	tables, err := glamour.NewTermRenderer(
-		glamour.WithStyles(style),
-		glamour.WithWordWrap(width),
-		glamour.WithColorProfile(termenv.ColorProfile()),
-	)
-	if err != nil {
-		return nil
-	}
 	// As glamour.NewTermRenderer, plus layout and without wrapping.
 	prose := goldmark.New(
 		goldmark.WithExtensions(extension.GFM, extension.DefinitionList),
@@ -54,7 +43,7 @@ func newMarkdown(width int) *markdown {
 	)
 	prose.SetRenderer(renderer.NewRenderer(renderer.WithNodeRenderers(util.Prioritized(
 		ansi.NewRenderer(ansi.Options{ColorProfile: termenv.ColorProfile(), Styles: style}), 1000))))
-	return &markdown{prose: prose, tables: tables}
+	return &markdown{prose: prose}
 }
 
 // layout prepares the tree for rendering without wrapping: soft line breaks
@@ -294,7 +283,8 @@ func markdownStyle(width int) ansi.StyleConfig {
 		ImageText:   ansi.StylePrimitive{Color: color(colDim), Format: "Image: {{.text}} →"},
 		Code:        ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: color(colAccent)}},
 		// Fences inside list items; the top-level ones are drawn by codeBlock.
-		CodeBlock:             ansi.StyleCodeBlock{StyleBlock: ansi.StyleBlock{Margin: ptr(uint(2))}},
+		CodeBlock: ansi.StyleCodeBlock{StyleBlock: ansi.StyleBlock{Margin: ptr(uint(2))}},
+		// Tables inside list items and quotes; the top-level ones are drawn by renderTable.
 		Table:                 ansi.StyleTable{CenterSeparator: ptr("┼"), ColumnSeparator: ptr("│"), RowSeparator: ptr("─")},
 		DefinitionDescription: ansi.StylePrimitive{BlockPrefix: "\n→ "},
 	}
@@ -306,7 +296,7 @@ func ptr[T any](v T) *T { return &v }
 // and tidies the output: no padding at the end of a line, no blank lines
 // around or doubled, text wrapped at spaces under its indent, quote bars or
 // list marker. Unindented code fences are drawn by codeBlock, between dim
-// fence lines; unindented tables are laid out by glamour at the width.
+// fence lines; unindented tables are laid out by renderTable at the width.
 // list, when md is a block of a streamed answer, tells how the block before
 // it ended, and is set to how md ends.
 func renderMarkdown(m *markdown, width int, md string, list *olist) string {
@@ -371,13 +361,11 @@ func renderMarkdown(m *markdown, width int, md string, list *olist) string {
 			for end < len(lines) && strings.Contains(lines[end], "|") && strings.TrimSpace(lines[end]) != "" {
 				end++
 			}
-			flush(strings.Join(lines[start:i], ""))
-			table := strings.Join(lines[i:end], "")
-			if out, err := m.tables.Render(table); err == nil {
-				table = out
+			if out, ok := m.renderTable(strings.Join(lines[i:end], ""), width); ok {
+				flush(strings.Join(lines[start:i], ""))
+				add(out)
+				start, i = end, end-1
 			}
-			add(tidy(table))
-			start, i = end, end-1
 		}
 	}
 	if start < len(lines) {

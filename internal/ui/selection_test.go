@@ -222,3 +222,76 @@ func TestScreenLinks(t *testing.T) {
 		t.Errorf("opened over SSH: %q", opened)
 	}
 }
+
+// TestScreenClickToggles: a click on a tool block that folds expands or
+// collapses it alone, once no second click came; its first line stays on
+// its row. A click elsewhere, a double click or a drag toggles nothing.
+func TestScreenClickToggles(t *testing.T) {
+	stubClipboard(t)
+	f1, f2 := &fold{name: "f1", n: 20}, &fold{name: "f2", n: 2}
+	m := testScreen(70, 12, &numbered{"a", 2}, f1, f2, &numbered{"b", 2}) // 7 transcript rows
+	m.top, m.follow = 0, false
+	rows(m) // a 0, a 1, "", $ f1, f1 out 17 …
+	click := func(x, y int) tea.Cmd {
+		m.click.at = time.Time{}
+		mpress(m, x, y)
+		return release(m, x, y)
+	}
+
+	cmd := click(3, 4) // f1 out 17
+	if cmd == nil {
+		t.Fatal("a click on a block that folds did nothing")
+	}
+	if f1.expanded {
+		t.Fatal("toggled before a second click could come")
+	}
+	m.Update(cmd())
+	r := rows(m)
+	if !f1.expanded || f2.expanded || r[3] != "$ f1" || r[4] != "f1 out 0" || !strings.Contains(r[7], "Tool output expanded") {
+		t.Fatalf("expanded: %v %v %q / %q", f1.expanded, f2.expanded, r[:7], r[7])
+	}
+	// (As the tick of a click would, without the wait.)
+	toggled := func(cmd tea.Cmd, b Block) {
+		t.Helper()
+		if cmd == nil {
+			t.Fatal("no toggle pending")
+		}
+		m.Update(toggleMsg{m.click.toggle, b})
+	}
+	toggled(click(3, 3), f1)
+	if r = rows(m); f1.expanded || r[3] != "$ f1" || !strings.Contains(r[7], "Tool output collapsed") {
+		t.Fatalf("collapsed: %q / %q", r[:7], r[7])
+	}
+
+	// Started above the view: its first line comes to the top.
+	toggled(click(3, 3), f1)
+	m.top = m.offset(1) + 5
+	rows(m)
+	m.Update(toggleMsg{m.click.toggle, f1})
+	if r = rows(m); f1.expanded || r[0] != "$ f1" {
+		t.Fatalf("collapsed from below its start: %q", r[:3])
+	}
+
+	// A second click (a double click) cancels the first's toggle.
+	m.click.at = time.Time{}
+	mpress(m, 3, 1)
+	if release(m, 3, 1) == nil {
+		t.Fatal("no toggle pending")
+	}
+	first := m.click.toggle
+	mpress(m, 3, 1)
+	release(m, 3, 1)
+	m.Update(toggleMsg{first, f1})
+	if f1.expanded {
+		t.Fatal("a double click toggled the block")
+	}
+
+	// A block that does not fold, another block, the blank between them.
+	m.top = m.offset(2)
+	rows(m) // $ f2, f2 out 0, f2 out 1, "", b 0 …
+	for _, y := range []int{0, 1, 3, 4} {
+		if click(3, y) != nil {
+			t.Fatalf("a click on row %d would toggle", y)
+		}
+	}
+}

@@ -65,6 +65,8 @@ type editorModel struct {
 	height   int
 	undo     []state // the states before the edits, the last one last
 	last     string  // the kind of the last edit (see editKind), "" after a move
+	ring     []kill  // the kill ring, the latest kill last (killring.go)
+	yankFrom state   // the state before the last yank, which Alt+Y goes back to
 }
 
 // state is what an undo goes back to.
@@ -391,25 +393,41 @@ func (m *editorModel) key(k tea.KeyMsg) (tea.Cmd, editorAction) {
 	case "backspace", "ctrl+h":
 		if m.col > 0 {
 			m.cut(m.col-1, m.col)
-		} else if m.row > 0 {
-			prev := m.lines[m.row-1]
-			m.col = len(prev)
-			m.lines[m.row-1] = append(prev, line...)
-			m.lines = slices.Delete(m.lines, m.row, m.row+1)
-			m.row--
+		} else {
+			m.joinPrevious()
 		}
 	case "delete":
 		m.deleteForward()
+	// The kills: at the start of a line a backward one joins it to the
+	// line above, at the end a forward one joins the next line, the line
+	// break killed (as in pi).
 	case "ctrl+u":
-		m.cut(0, m.col)
-	case "ctrl+k":
-		if m.col == len(line) {
-			m.deleteForward()
-		} else {
-			m.cut(m.col, len(line))
+		if m.col > 0 {
+			m.kill(0, m.col, true)
+		} else if m.joinPrevious() {
+			m.killed("\n", true)
 		}
 	case "ctrl+w", "alt+backspace":
-		m.cut(wordStart(line, m.col), m.col)
+		if m.col > 0 {
+			m.kill(wordStart(line, m.col), m.col, true)
+		} else if m.joinPrevious() {
+			m.killed("\n", true)
+		}
+	case "ctrl+k", "alt+d", "alt+delete":
+		end := len(line)
+		if s != "ctrl+k" {
+			end = wordEnd(line, m.col)
+		}
+		if m.col < len(line) {
+			m.kill(m.col, end, false)
+		} else if m.row < len(m.lines)-1 {
+			m.deleteForward()
+			m.killed("\n", false)
+		}
+	case "ctrl+y":
+		m.yank()
+	case "alt+y":
+		m.yankPop()
 	case "ctrl+g":
 		return m.externalEditor(), editNothing
 	case "ctrl+v":
@@ -570,6 +588,20 @@ func (m *editorModel) pasteClip(c clipMsg) {
 	m.changed()
 }
 
+// joinPrevious joins the cursor's line to the one above, the cursor
+// where they meet, and reports whether there was one.
+func (m *editorModel) joinPrevious() bool {
+	if m.row == 0 {
+		return false
+	}
+	prev := m.lines[m.row-1]
+	m.col = len(prev)
+	m.lines[m.row-1] = append(prev, m.lines[m.row]...)
+	m.lines = slices.Delete(m.lines, m.row, m.row+1)
+	m.row--
+	return true
+}
+
 func (m *editorModel) deleteForward() {
 	line := m.lines[m.row]
 	if m.col < len(line) {
@@ -584,15 +616,18 @@ func (m *editorModel) deleteForward() {
 // the cursor never rests inside one.
 
 // cut deletes runes [start, end) of the current line, widened to the paste
-// markers it reaches into, and leaves the cursor at the start.
-func (m *editorModel) cut(start, end int) {
+// markers it reaches into, leaves the cursor at the start and returns what
+// it deleted.
+func (m *editorModel) cut(start, end int) string {
 	for _, r := range m.markers() {
 		if r[0] < end && start < r[1] {
 			start, end = min(start, r[0]), max(end, r[1])
 		}
 	}
+	gone := string(m.lines[m.row][start:end])
 	m.lines[m.row] = slices.Delete(m.lines[m.row], start, end)
 	m.col = start
+	return gone
 }
 
 // snap moves a cursor that landed inside a paste marker to its start or

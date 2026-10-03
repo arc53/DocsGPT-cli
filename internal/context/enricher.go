@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
@@ -18,8 +19,10 @@ const (
 )
 
 // Build returns the context block for the working directory, or "" when
-// the settings send nothing.
-func Build(s config.Settings) string {
+// the settings send nothing and tools are off. With tools, it also says
+// which system and shell the commands run on and how to use the tools
+// (toolGuide).
+func Build(s config.Settings, tools bool) string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = ""
@@ -27,6 +30,9 @@ func Build(s config.Settings) string {
 	var b strings.Builder
 	if s.SendCurrentDirectory && cwd != "" {
 		fmt.Fprintf(&b, "Working directory: %s\n", cwd)
+	}
+	if tools {
+		fmt.Fprintf(&b, "System: %s; run_command runs %s, without a terminal\n", system(), shell())
 	}
 	if s.SendDirectoryContents && cwd != "" {
 		if l := listing(cwd); l != "" {
@@ -49,7 +55,45 @@ func Build(s config.Settings) string {
 	if b.Len() == 0 {
 		return ""
 	}
+	if tools {
+		b.WriteString(toolGuide)
+	}
 	return "<context>\nThe user is asking from a terminal (docsgpt-cli). Their environment:\n" + b.String() + "</context>"
+}
+
+// toolGuide tells the model how to work on the user's machine with the
+// CLI's tools (run_command, read_file, edit_file, write_file), which run
+// there, each command and change approved by the user.
+const toolGuide = `<tools_guide>
+You can work on the user's machine with run_command, read_file, edit_file and write_file. They run there, in the working directory; the user approves each command and file change, and may deny one: then don't retry it, ask or take another way.
+- Explore before you change anything: list and search with run_command (git ls-files, rg, ls), and read files with read_file rather than cat or sed. Read only what the task needs.
+- Change a file with edit_file: old_text copied exactly from the file as you read it, small but unique; several changes to one file in one call. Use write_file only for new files or complete rewrites.
+- read_file also shows you images (screenshots, diagrams).
+- Commands have no terminal: anything that waits for input fails, so use non-interactive flags. Give long installs, builds and test runs a timeout.
+</tools_guide>
+<coding_guide>
+- Follow the project's instructions above and the style of the code around your change; keep changes to what was asked, without unrelated refactors or new dependencies.
+- Don't guess at APIs, files or command output: check them. After a change, run the project's build or tests when it has them, and fix what you broke.
+- Don't commit, push, delete files or run anything destructive unless the user asks.
+- When you are done, say briefly what you changed, naming the files.
+</coding_guide>
+`
+
+// system names the operating system and architecture.
+func system() string {
+	name := map[string]string{"darwin": "macOS", "linux": "Linux", "windows": "Windows"}[runtime.GOOS]
+	if name == "" {
+		name = runtime.GOOS
+	}
+	return name + " (" + runtime.GOOS + "/" + runtime.GOARCH + ")"
+}
+
+// shell names what run_command runs a command with.
+func shell() string {
+	if runtime.GOOS == "windows" {
+		return "commands with cmd.exe /C"
+	}
+	return "commands with sh -c"
 }
 
 // Files names the instruction files Build sends, relative to the working

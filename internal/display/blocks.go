@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/ui"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
@@ -328,12 +329,14 @@ type ToolBlock struct {
 	part     string   // the output line being written
 	total    int      // complete output lines seen
 	expanded bool
+	started  time.Time // when the command started running (Start)
 	closed   bool
 	ok       bool
 	status   string
 	version  int
 	c        struct {
 		width, version int
+		secs           int // the running time shown, in seconds
 		lines          []string
 		logical        string // the text of lines, unwrapped
 	}
@@ -388,6 +391,24 @@ func (b *ToolBlock) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Start marks the command as running: until Close the block shows for how
+// long ("running · 3s"), from its first second, each time it is drawn.
+func (b *ToolBlock) Start() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.started.IsZero() {
+		b.started = now()
+		b.version++
+	}
+}
+
+// Expanded reports whether the block shows all the output kept.
+func (b *ToolBlock) Expanded() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.expanded
+}
+
 // Expand shows all the output kept (on) or its last lines.
 func (b *ToolBlock) Expand(on bool) {
 	b.mu.Lock()
@@ -421,7 +442,13 @@ func (b *ToolBlock) Close(ok bool, status string) {
 func (b *ToolBlock) Lines(width int) []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.c.width == width && b.c.version == b.version {
+	secs := -1 // not running, or not for a second yet
+	if !b.started.IsZero() && !b.closed {
+		if d := now().Sub(b.started); d >= time.Second {
+			secs = int(d / time.Second)
+		}
+	}
+	if b.c.width == width && b.c.version == b.version && b.c.secs == secs {
 		return b.c.lines
 	}
 	box := (*toolBox)(nil)
@@ -482,6 +509,8 @@ func (b *ToolBlock) Lines(width int) []string {
 			status += " · ctrl+o to collapse"
 		}
 		body = append(body, glyph+" "+T.Dim.Render(status))
+	} else if secs >= 0 {
+		body = append(body, "  "+T.Dim.Render("running · "+Elapsed(time.Duration(secs)*time.Second)))
 	}
 	for _, l := range body {
 		logical = append(logical, ansi.Strip(l))
@@ -508,7 +537,7 @@ func (b *ToolBlock) Lines(width int) []string {
 		}
 		lines = append(lines, box.row(bg, ""))
 	}
-	b.c.width, b.c.version, b.c.lines, b.c.logical = width, b.version, lines, strings.Join(logical, "\n")
+	b.c.width, b.c.version, b.c.secs, b.c.lines, b.c.logical = width, b.version, secs, lines, strings.Join(logical, "\n")
 	return lines
 }
 

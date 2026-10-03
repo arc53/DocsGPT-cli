@@ -196,6 +196,17 @@ func (c *Client) SendStream(ctx context.Context, req ChatRequest, onDelta Stream
 // It receives the tool call and should return the result string.
 type ToolCallHandler func(tc ToolCall) string
 
+// ToolResult is what a tool call gives back to the model: its text, and
+// Parts for images (ImagePart) the model should see. A DocsGPT server
+// shows those images to the model rather than sending them as text.
+type ToolResult struct {
+	Content string
+	Parts   []ContentPart
+}
+
+// ToolResultHandler is a ToolCallHandler whose result may carry images.
+type ToolResultHandler func(tc ToolCall) ToolResult
+
 // RunOptions configures Run.
 type RunOptions struct {
 	Tools []Tool
@@ -207,6 +218,8 @@ type RunOptions struct {
 	ConversationID string
 	OnDelta        StreamHandler
 	OnToolCall     ToolCallHandler
+	// OnToolResult is used instead of OnToolCall when set.
+	OnToolResult ToolResultHandler
 }
 
 // RunResult is the outcome of Run.
@@ -227,8 +240,9 @@ type RunResult struct {
 }
 
 // Run sends a chat request and handles tool call loops.
-// When the model returns tool_calls, OnToolCall is invoked for each one,
-// and results are sent back in a continuation request. This repeats
+// When the model returns tool_calls, OnToolResult (or OnToolCall) is
+// invoked for each one, and results are sent back in a continuation
+// request. This repeats
 // until the model returns finish_reason "stop" (or non-tool_calls).
 func (c *Client) Run(ctx context.Context, messages []Message, opts RunOptions) (*RunResult, error) {
 	res := &RunResult{
@@ -284,14 +298,20 @@ func (c *Client) Run(ctx context.Context, messages []Message, opts RunOptions) (
 			ToolCalls: choice.Message.ToolCalls,
 		})
 
-		if choice.FinishReason != "tool_calls" || len(choice.Message.ToolCalls) == 0 || opts.OnToolCall == nil {
+		handle := opts.OnToolResult
+		if handle == nil && opts.OnToolCall != nil {
+			handle = func(tc ToolCall) ToolResult { return ToolResult{Content: opts.OnToolCall(tc)} }
+		}
+		if choice.FinishReason != "tool_calls" || len(choice.Message.ToolCalls) == 0 || handle == nil {
 			return res, nil
 		}
 
 		for _, tc := range choice.Message.ToolCalls {
+			r := handle(tc)
 			res.Messages = append(res.Messages, Message{
 				Role:       "tool",
-				Content:    opts.OnToolCall(tc),
+				Content:    r.Content,
+				Parts:      r.Parts,
 				ToolCallID: tc.ID,
 			})
 		}
