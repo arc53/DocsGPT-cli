@@ -140,7 +140,7 @@ func runChat(first string) error {
 	s.scr = ui.NewScreen(ui.ScreenOptions{
 		Commands: commands,
 		History:  ui.LoadHistory(filepath.Join(config.Dir(), "history")),
-		Mouse:    true,
+		Mouse:    cfg.Settings.Mouse != "off",
 	})
 	s.tools.UI = &screenTools{scr: s.scr}
 
@@ -684,6 +684,7 @@ func (s *chatSession) settings(string) {
 	}
 	if cfg, err := config.Load(); err == nil && saved {
 		s.cfg.Settings = cfg.Settings
+		s.scr.Mouse(cfg.Settings.Mouse != "off")
 		if url := cfg.ResolveURL(globalURL); url != s.baseURL {
 			s.baseURL, s.client.BaseURL = url, url
 			s.reset()
@@ -718,6 +719,6 @@ func (s *chatSession) help(string) {
 	} {
 		fmt.Fprintf(&b, "  %-18s %s\n", k[0], display.Muted(k[1]))
 	}
-	b.WriteString(display.Dim("Select text with Shift-drag (Option-drag in iTerm2)."))
+	b.WriteString(display.Dim("Select text with Shift-drag (Option-drag in iTerm2), or turn the mouse off in /settings."))
 	s.scr.Add(display.Text(b.String()))
 }

@@ -51,6 +51,7 @@ type Settings struct {
 	NumberOfLastCommands    int    `json:"number_of_last_commands"`
 	Theme                   string `json:"theme,omitempty"`                // "auto", "dark", "light"
 	Banner                  string `json:"banner,omitempty"`               // "always", "once", "never"
+	Mouse                   string `json:"mouse,omitempty"`                // "on" (the default), "off": the chat scrolls with the wheel
 	AutoUpdate              string `json:"auto_update,omitempty"`          // "on", "notify", "off"
 	DisableUpdateCheck      bool   `json:"disable_update_check,omitempty"` // legacy, superseded by auto_update
 }
