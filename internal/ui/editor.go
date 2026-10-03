@@ -142,6 +142,7 @@ func (m *editorModel) update(msg tea.Msg) (tea.Cmd, editorAction) {
 		os.Remove(msg.path)
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+_" { // Ctrl+-
+			m.quitAt = time.Time{}
 			m.undoLast()
 			return nil, editNothing
 		}

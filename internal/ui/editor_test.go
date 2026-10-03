@@ -179,6 +179,9 @@ func TestEditorCtrlC(t *testing.T) {
 	if press(m, key(tea.KeyCtrlC)) != editQuit {
 		t.Fatal("second ctrl+c did not quit")
 	}
+	if press(m, key(tea.KeyCtrlUnderscore), key(tea.KeyCtrlC)) != editNothing {
+		t.Fatal("ctrl+c after an undo quit")
+	}
 	m = testEditor()
 	if press(m, key(tea.KeyCtrlD)) != editQuit {
 		t.Fatal("ctrl+d on empty input did not quit")
