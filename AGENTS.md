@@ -1,155 +1,51 @@
-# DocsGPT-cli
+# Development rules
 
-Go CLI tool for interacting with the DocsGPT API from the terminal (v1.0.0).
+The architecture and behaviour reference (layout, command contracts, config,
+release flow) is `CLAUDE.md`; user docs are `README.md` (short) and `docs/`.
+These are the rules for changing the code.
 
-## Project structure
+## Code
 
-```
-cmd/docsgpt-cli/     → Entry point (package main), calls cmd.Execute(). Lives here
-                       so `go install .../cmd/docsgpt-cli@latest` names the binary
-                       docsgpt-cli rather than DocsGPT-cli (the module path's last
-                       element)
-sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, package
-                       docsgpt: the public chat client (Client, Send, SendStream,
-                       RunWithTools, StreamHandler, APIError) — OpenAI-compatible
-                       types and the tool-call loop. Stdlib-only, tagged sdk/vX.Y.Z
-                       independently of the CLI, currently pre-v1. The CLI depends
-                       on it through a pinned require in go.mod (imported as
-                       `docsgpt "…/sdk"`, since the package name is not the last
-                       path element); go.work points local builds at ./sdk, and
-                       release builds set GOWORK=off to use the pinned version
-cmd/
-  root.go            → Cobra root command, global flags (--url, --key, --token, --no-stream, --no-context, --auto-approve, --timeout)
-  ask.go             → Single-shot Q&A with streaming + tool support
-  chat.go            → Interactive multi-turn chat REPL with tool support
-  config.go          → Config management (set-url, show)
-  keys.go            → API key management (add/delete/set default)
-  install.go         → Cross-platform install to system PATH
-  update.go          → Self-update to latest GitHub release (--check, --yes, --rollback, hidden --worker)
-  bench.go           → Benchmark suites vs agents (bench / bench record / bench init; --model, --matrix, --run-tag, --agent-id)
-  manage.go          → Shared plumbing of the account-level (PAT) commands: client construction, exit codes (0/1/2), banner/usage suppression, confirmations
-  login.go           → login / logout / whoami (personal access token in config.json)
-  agents.go          → agents list / export / plan / apply / delete (agents as code), agents trigger (incoming webhook)
-  sources.go         → sources list / upload / delete, prompts list, tools list
-  utils.go           → printError, extractCommand, copyToClipboard
-internal/
-  config/
-    config.go        → Unified config load/save/migrate from ~/.docsgpt/config.json; token/URL resolution (flag > env > config), token redaction
-  manage/
-    client.go        → PAT HTTP client (Bearer dgpt_pat_…, docsgpt-cli/<ver> User-Agent, context timeouts), typed APIError (message, error code, required_scope)
-    agents.go        → /api/user/me, get_agents, export_agent, import_agent/plan + import_agent (Plan, Resolution, ApplyResult), delete_agent
-    sources.go       → /api/sources, /api/upload (multipart, Idempotency-Key, deterministic default key), /api/task_status polling with backoff, delete_old
-    catalog.go       → get_prompts, get_tools
-    webhooks.go      → agent incoming webhooks: URL parsing/redaction (Webhook), /api/agent_webhook lookup, webhook POST (no Authorization, Idempotency-Key), agent run result decoding
-    documents.go     → -f expansion: files / directories / stdin, verbatim multi-document YAML splitting, kind: Agent validation
-    resolve.go       → --resolve parsing, mapping onto the server `resolution` object, missing/unavailable gating
-  context/
-    enricher.go      → Context building: cwd, dir contents, shell history
-  display/
-    renderer.go      → StreamDelta: prints content + reasoning tokens (dim)
-  tools/
-    definitions.go   → Tool schemas: run_command, read_file, write_file
-    executor.go      → Local tool execution with timeout
-    approval.go      → User approval prompt: [A]pprove [D]eny [E]dit
-    safety.go        → Command blocklist, output truncation (10KB)
-  update/
-    update.go        → GitHub latest-release lookup, semver comparison, mode constants
-    apply.go         → Asset download, sha256 verify, binary swap + backup, Rollback, host CheckAndApply
-    stage.go         → Staged updates in ~/.docsgpt/staging (download now, apply next launch)
-    worker.go        → Detached background worker (`update --worker`): check + stage
-    notify.go        → Check state in ~/.docsgpt/update_check.json (latest, skip version)
-    restart_*.go     → Post-update restart: exec(2) on Unix, exit(3) on Windows
-    detach_*.go      → Platform detach for the worker process
-```
+- Understand the code you change: read the whole file, and the callers, before
+  a non-trivial edit. Do not rely on search snippets.
+- `cmd/` declares commands, parses flags and prints. Logic lives in `internal/`
+  (and the public chat client in the separate `sdk/` module).
+- Keep it simple: fewer concepts, small functions, match the surrounding style.
+  Inline single-line helpers that have one call site.
+- Delete dead code instead of keeping it around. No backward-compatibility
+  shims, aliases or flags unless asked for.
+- Comments are short and only where the code is not obvious.
+- Errors go to stderr; stdout is the answer or the data (tables, JSON, YAML),
+  so it stays pipeable. Exit codes: 0 ok, 1 failure, 2 usage.
+- A user-facing change updates its page in `docs/` (and `CLAUDE.md` when a
+  contract or the layout changes).
+- Never print secrets: tokens are redacted (`config.RedactToken`), webhook
+  URLs render as `.../api/webhooks/agents/...`.
 
-## How it works
+## Checks
 
-### ask command
-1. Loads config from `~/.docsgpt/config.json`
-2. Resolves API key (Bearer auth) and base URL
-3. Optionally enriches question with context (cwd, dir listing, shell history)
-4. Sends to `POST {base_url}/v1/chat/completions` with streaming
-5. Handles tool calls (run_command, read_file, write_file) with user approval loop
-6. Extracts bash/sh code blocks and copies to clipboard
-
-### chat command
-Interactive REPL with multi-turn conversation history. Same API + tool support.
-Special commands: `/quit`, `/clear`, `/copy`.
-
-### Auto-update flow
-Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set-auto-update`); env kill switch `DOCSGPT_NO_UPDATE_CHECK`.
-1. On TTY launches, `updateGate` in root.go decides the mode (skips dev builds, the update/host commands; Homebrew or unwritable installs downgrade on → notify)
-2. A detached worker (`update --worker`) refreshes the release cache daily and, in "on" mode, downloads + sha256-verifies the new binary into ~/.docsgpt/staging
-3. The next launch validates the staged manifest and swaps it in near-instantly; the old binary is kept in ~/.docsgpt/backup for `update --rollback`
-4. Rollback records a skip version so auto-update won't reinstall it; a manual `update` clears the skip
-5. Host daemons check every ~12h while idle (10 min boot delay), apply directly, then restart: exec(2) on Unix (same PID), exit(3) on Windows (Task Scheduler RestartOnFailure); all shipped service configs restart only on failure since a revoke exits 0
-6. Everything is stamped release-version-only: `update` refuses "dev"/git-describe builds and Homebrew-managed binaries
-
-### Personal access tokens (account-level commands)
-1. A PAT (`dgpt_pat_…`) is created in the web app; the CLI only consumes one (`/api/user/tokens` is closed to tokens). Resolution: `--token` > `DOCSGPT_TOKEN` > `config.json` `token`; base URL: `--url` > `DOCSGPT_URL` > config. Tokens are only ever printed redacted (`config.RedactToken`, first 15 chars + `…`)
-2. `login` reads the token from `--token`, piped stdin, or a hidden prompt, validates it with `GET /api/user/me` and stores it together with the base URL that validated it, whether that came from `--url`, `DOCSGPT_URL` or the config (config stays 0600). `whoami` prints user, token name, scopes and resource restrictions; `logout` removes the stored token
-3. `internal/manage` sends `Authorization: Bearer <PAT>`; server failures become `*manage.APIError` — `{success:false,message}`, 401 `invalid_token`, 403 `insufficient_scope` (+ `required_scope`), `resource_not_allowed`, `not_available_to_tokens`
-4. `agents plan|apply -f`: files, directories (`*.yaml`/`*.yml`, sorted, not recursive) and `-`; multi-document files are split textually (the server gets each document verbatim); non-`Agent` kinds are rejected before any request. ALL documents are planned first (`POST /api/import_agent/plan {"yaml"}`, scope `agents:write`); if any reference is `missing`/`unavailable` and not covered by `--resolve`, nothing is applied and the exit code is 1. Then `POST /api/import_agent {"yaml","resolution"}` per document, stopping at the first failure. `plan` = `apply --dry-run`
-5. `--resolve <kind>:<selector>=<value>` → server `resolution`: `source:<name>=<id>` → `sources[name]`; `tool:<sel>=reuse:<id>|create|skip` and `tool:<sel>.secret.<field>=<v>` → `tools["tool-N"] = {decision, tool_id, secrets}`; `model:<display_name>=<api_key>` → `models[name] = {api_key}`. `source:…=skip` / `model:…=skip` are CLI-side acknowledgements (the server has no such decision; it just leaves the reference off) and are never sent. `<sel>` = `tool-N` or an unambiguous tool name/type; positional keys are refused across several documents; an entry matching nothing is a usage error
-6. `sources upload`: multipart `user` (legacy, required by the server), `name`, repeated `file`, with an explicit Content-Length and streamed file bodies. Default `Idempotency-Key` = `docsgpt-cli-upload-` + sha256(name + sorted (basename, file sha256)), so CI retries dedupe; `--wait` polls `/api/task_status` (1s → 10s backoff, 503 = transient, progress on stderr) until SUCCESS / FAILURE / `--timeout`; the `deduplicated` task id sentinel is not polled. `--replace` (needs `--wait`) then deletes the caller's older same-named sources (never the new one, never team-shared, never without a reported `source_id`, and never unless that id is in the current listing: a content revert repeats the Idempotency-Key, and the deduplicated reply then names the earlier, already deleted source; the command fails with exit 1 instead of deleting the only live one): the server resolves an agent's source name to the OLDEST match, so without it agents stay pinned to the first upload; `agents apply` must run after
-7. `agents trigger`: payload from `-f <file|->`, validated as JSON (not null) before any request. Target = `--webhook-url` (else `DOCSGPT_WEBHOOK_URL` when no agent id is given; no PAT needed) XOR `<agent-id>` (PAT, scope `agents:keys`, `GET /api/agent_webhook?id=`; the returned token is re-rooted on the configured base URL, since the server builds the URL from its `API_URL`). The webhook POST never carries the PAT (the server denies tokens on that route). `--wait` polls `/api/task_status` anonymously (the server does not require auth there) and falls back to the PAT on 401/403 only when the PAT's base URL has the webhook's origin; SUCCESS whose result is not `status: success` (`quota_exceeded`, idempotency guard) is a failure. The webhook token is never printed (`Webhook.String` redacts; errors pass through `Webhook.Redact`)
-8. Exit codes mirror bench: 0 ok, 1 failure/blocked/timeout, 2 usage or validation (`exitError` in cmd/manage.go, mapped in `Execute`). These commands skip the banner, never dump usage on runtime errors, print errors to stderr, and refuse destructive actions without `--yes` when stdin is not a terminal
-
-### bench with a personal access token
-The `stream` and `answer` targets can address an agent by id: `agent_id:` (suite or case; mutually exclusive with `agent:`) or `--agent-id` sends `agent_id` in the body plus `Authorization: Bearer <PAT>` (scope `chat:run`) instead of an agent `api_key`; attachment uploads and the `/api/models` pricing fetch carry the PAT too. `v1`/`webhook` reject `agent_id` with a clear error; api_key runs are unchanged.
-
-### Tool call flow
-1. CLI sends `tools` array in request
-2. If model returns `finish_reason: "tool_calls"`, CLI shows approval prompt
-3. On approve: executes locally, sends result back as `role: "tool"` message
-4. Model continues with tool results — loop repeats until `finish_reason: "stop"`
-
-## Config
-
-Single file: `~/.docsgpt/config.json`
-
-```json
-{
-  "base_url": "https://gptcloud.arc53.com",
-  "default_key": "my-agent",
-  "keys": { "my-agent": "abc-123-key" },
-  "token": "dgpt_pat_…",
-  "settings": {
-    "send_current_directory": true,
-    "send_directory_contents": true,
-    "send_last_commands": true,
-    "number_of_last_commands": 3,
-    "auto_update": "on"
-  }
-}
-```
-
-`token` is optional (written by `login`, removed by `logout`, omitted when empty); the file is always saved with mode 0600. Environment overrides: `DOCSGPT_TOKEN`, `DOCSGPT_URL`.
-
-Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on first run.
-
-## Key dependencies
-
-- `spf13/cobra` — CLI framework
-- `fatih/color` — colored output
-- `atotto/clipboard` — clipboard access
-- `manifoldco/promptui` — interactive prompts (used by install)
-- `minio/selfupdate` — atomic binary replacement for the update command
-- `golang.org/x/mod/semver` — version comparison
-
-## Build & run
+Run before every commit and fix everything they report:
 
 ```bash
-go build -o docsgpt-cli ./cmd/docsgpt-cli
-./docsgpt-cli --help
+gofmt -l .                       # must print nothing
+go build ./... && go vet ./... && go test ./...
+(cd sdk && go test ./...)        # when sdk/ changed
 ```
 
-## Notes
+- Build binaries outside the repo: `go build -o /tmp/dg ./cmd/docsgpt-cli`.
+- Tests and manual runs never touch the real `~/.docsgpt`: use a throwaway
+  `HOME`, `httptest` servers or a local mock instead of live APIs.
+- Do not edit the `require .../sdk` version in `go.mod`; the release workflow
+  bumps it.
 
-- Module path is `github.com/arc53/DocsGPT-cli` (mixed case, matching the repo; the Go proxy escapes it as `!docs!g!p!t-cli`, which users never type). `go.work` is committed and spans `.` and `./sdk`
-- `cmd.Version` is stamped by ldflags for release and `make build`; `resolveVersion` in root.go recovers it from `debug.ReadBuildInfo` for `go install` builds, which carry no ldflags and would otherwise report "dev" and disable their own update checks
-- Releases: `.github/workflows/release.yml` (dispatch, or a hand-pushed `v*` tag) → GoReleaser builds linux/darwin/windows (amd64+arm64) archives + checksums.txt with stable asset names, attaches `deployment/install.sh`/`install.ps1`, and commits a Homebrew **cask** to `arc53/homebrew-DocsGPT-cli` with `HOMEBREW_TAP_TOKEN` (`skip_upload: auto` keeps prereleases out of brew; the job only runs on `arc53/DocsGPT-cli`). Cut from Actions → Release → Run workflow (a `cli`/`sdk` bump input; one run tags the sdk, pushes the `go.mod` pin bump, then tags and releases the CLI in that order) — there is no local release target; see `RELEASING.md`
-- Install script: `docs.ac/install-cli` redirects to `releases/latest/download/install.sh`, so the live installer is whatever the newest release carries — a fix lands only on the next tag. Both installers verify the archive against `checksums.txt`, then hand off to `docsgpt-cli install`, which owns the PATH logic for every platform
-- SSE streaming parsed with stdlib bufio.Scanner (no external SSE lib)
-- Shell history: zsh, bash, fish
-- Cross-platform: Unix + Windows
+## Git
+
+- Several sessions may share the checkout: stage explicit paths
+  (`git add <path>`), never `git add -A` / `git add .`, and only commit files
+  you changed. Never `git reset --hard`, `git checkout .`, `git clean` or a
+  bare `git stash`.
+- Small, focused commits with conventional messages:
+  `fix(chat): …`, `feat(bench): …`, `refactor(host): …`, `docs: …`,
+  `chore: …`.
+- Do not push, tag or release; releases are cut from the Release workflow
+  (see `RELEASING.md`).

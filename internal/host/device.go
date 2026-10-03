@@ -25,7 +25,7 @@ type DeviceMe struct {
 
 // FetchDeviceMe queries the live server-side view of this device. A nil
 // device with unauthorized=false means the server was unreachable;
-// unauthorized=true means the device has been revoked. ``timeout`` bounds
+// unauthorized=true means the device has been revoked. `timeout` bounds
 // the request — callers that must not block (e.g. the startup banner) pass
 // a short one.
 func FetchDeviceMe(cfg HostConfig, timeout time.Duration) (d *DeviceMe, unauthorized bool, err error) {

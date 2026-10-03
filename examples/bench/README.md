@@ -69,7 +69,7 @@ Case features worth knowing:
 
 Cases in this suite: `01-basic-answer`, `02-json-output`, `03-attachment`,
 `04-webhook`, `05-multi-turn`, `06-negative-error`, `07-stream-integrity`,
-`08-answer-endpoint`.
+`08-answer-endpoint`, `09-agent-id`.
 
 Exit codes: `0` all passed, `1` failures, `2` configuration error — so
 `docsgpt-cli bench` drops straight into CI.

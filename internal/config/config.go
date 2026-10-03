@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ const DefaultBaseURL = "https://gptcloud.arc53.com"
 // Environment variables consulted by the resolvers below. They let CI jobs
 // run the CLI without a config file.
 const (
+	EnvAPIKey     = "DOCSGPT_API_KEY"     // agent API key, over the stored default
 	EnvToken      = "DOCSGPT_TOKEN"       // personal access token (dgpt_pat_…)
 	EnvURL        = "DOCSGPT_URL"         // API base URL
 	EnvWebhookURL = "DOCSGPT_WEBHOOK_URL" // agent incoming webhook URL (agents trigger)
@@ -40,14 +42,22 @@ type Config struct {
 }
 
 type Settings struct {
-	SendCurrentDirectory  bool   `json:"send_current_directory"`
-	SendDirectoryContents bool   `json:"send_directory_contents"`
-	SendLastCommands      bool   `json:"send_last_commands"`
-	NumberOfLastCommands  int    `json:"number_of_last_commands"`
-	Theme                 string `json:"theme,omitempty"`                // "auto", "dark", "light"
-	Banner                string `json:"banner,omitempty"`               // "always", "once", "never"
-	AutoUpdate            string `json:"auto_update,omitempty"`          // "on", "notify", "off"
-	DisableUpdateCheck    bool   `json:"disable_update_check,omitempty"` // legacy, superseded by auto_update
+	SendCurrentDirectory  bool `json:"send_current_directory"`
+	SendDirectoryContents bool `json:"send_directory_contents"`
+	SendLastCommands      bool `json:"send_last_commands"`
+	// SendProjectInstructions sends AGENTS.md (or CLAUDE.md) files; a
+	// config written before it existed gets the default.
+	SendProjectInstructions bool   `json:"send_project_instructions"`
+	NumberOfLastCommands    int    `json:"number_of_last_commands"`
+	Theme                   string `json:"theme,omitempty"`                // "auto", "dark", "light"
+	Banner                  string `json:"banner,omitempty"`               // "always", "once", "never"
+	Mouse                   string `json:"mouse,omitempty"`                // "on" (the default), "off": the chat scrolls with the wheel and selects text to copy
+	Hyperlinks              string `json:"hyperlinks,omitempty"`           // "auto" (the default), "on", "off": links in answers are clickable (OSC 8)
+	Notify                  string `json:"notify,omitempty"`               // "on" (the default), "off": the chat notifies when an answer or approval waits and the terminal is not focused
+	AutoUpdate              string `json:"auto_update,omitempty"`          // "on", "notify", "off"
+	DisableUpdateCheck      bool   `json:"disable_update_check,omitempty"` // legacy, superseded by auto_update
+	Retry                   string `json:"retry,omitempty"`                // "on" (the default), "off": send a chat request that failed before its answer again
+	WhatsNew                string `json:"whats_new,omitempty"`            // "on" (the default), "off": show the release notes in the chat after an update
 }
 
 // AutoUpdateMode resolves the effective auto-update mode: "on" (stage and
@@ -70,10 +80,10 @@ func DefaultConfig() Config {
 		DefaultKey: "",
 		Keys:       make(map[string]string),
 		Settings: Settings{
-			SendCurrentDirectory:  true,
-			SendDirectoryContents: true,
-			SendLastCommands:      true,
-			NumberOfLastCommands:  3,
+			SendCurrentDirectory:    true,
+			SendDirectoryContents:   true,
+			SendProjectInstructions: true,
+			NumberOfLastCommands:    3,
 		},
 	}
 }
@@ -84,13 +94,14 @@ func Dir() string {
 	return filepath.Join(homeDir, ".docsgpt")
 }
 
-func configPath() string {
+// Path returns the config file (~/.docsgpt/config.json).
+func Path() string {
 	return filepath.Join(Dir(), "config.json")
 }
 
 func Load() (Config, error) {
 	cfg := DefaultConfig()
-	data, err := os.ReadFile(configPath())
+	data, err := os.ReadFile(Path())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return cfg, nil
@@ -136,18 +147,7 @@ func (c *Config) Save() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, configPath())
-}
-
-func (c *Config) ActiveKey() (string, error) {
-	if c.DefaultKey == "" {
-		return "", fmt.Errorf("no default key set. Use 'keys' to set one")
-	}
-	key, ok := c.Keys[c.DefaultKey]
-	if !ok {
-		return "", fmt.Errorf("default key %q not found in keys", c.DefaultKey)
-	}
-	return key, nil
+	return os.Rename(tmpPath, Path())
 }
 
 // ResolveURL returns the base URL: override (the --url flag) > DOCSGPT_URL >
@@ -193,26 +193,43 @@ func RedactToken(token string) string {
 	return string(r[:keep]) + "…"
 }
 
-// ResolveKey returns the API key value, with a named override taking precedence.
-func (c *Config) ResolveKey(overrideName string) (string, string, error) {
-	name := c.DefaultKey
-	if overrideName != "" {
-		name = overrideName
+// ErrNoKey is returned by ResolveKey when no agent API key is configured.
+var ErrNoKey = errors.New("no API key")
+
+// ResolveKey returns the agent API key to chat with and a name to show for
+// it: the stored key named override (the --key flag) > DOCSGPT_API_KEY >
+// the stored default key.
+func (c *Config) ResolveKey(override string) (name, key string, err error) {
+	if override != "" {
+		key, ok := c.Keys[override]
+		if !ok {
+			return "", "", fmt.Errorf("no stored key named %q (see 'docsgpt-cli login')", override)
+		}
+		return override, key, nil
 	}
-	if name == "" {
-		return "", "", fmt.Errorf("no key specified. Use 'keys' to add one")
+	if k := strings.TrimSpace(os.Getenv(EnvAPIKey)); k != "" {
+		return EnvAPIKey, k, nil
 	}
-	key, ok := c.Keys[name]
-	if !ok {
-		return "", "", fmt.Errorf("key %q not found", name)
+	if key, ok := c.Keys[c.DefaultKey]; ok && c.DefaultKey != "" {
+		return c.DefaultKey, key, nil
 	}
-	return name, key, nil
+	return "", "", ErrNoKey
+}
+
+// RedactKey renders an agent API key for display: its first and last four
+// characters. Short values are fully hidden.
+func RedactKey(key string) string {
+	r := []rune(key)
+	if len(r) < 16 {
+		return "…"
+	}
+	return string(r[:4]) + "…" + string(r[len(r)-4:])
 }
 
 // MigrateIfNeeded checks for old config files and migrates them.
 func MigrateIfNeeded() error {
 	// If new config already exists, nothing to do
-	if _, err := os.Stat(configPath()); err == nil {
+	if _, err := os.Stat(Path()); err == nil {
 		return nil
 	}
 

@@ -1,12 +1,8 @@
 package display
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"time"
-
-	"github.com/mattn/go-isatty"
 )
 
 // Pixel-art T-rex silhouette inspired by the Chrome offline runner sprite.
@@ -46,76 +42,37 @@ var wordmark = []string{
 
 var tagline = `              ━━━━━━━  Terminal AI Assistant  ━━━━━━━`
 
-// ShowBanner displays the animated startup banner.
-// setting: "always", "once", "never" (empty defaults to "once").
-func ShowBanner(setting string, noMotion bool) {
-	if setting == "" {
-		setting = "always"
+// showBanner reports whether a chat shows the banner, per setting:
+// "always", "once" (the default: the first chat only) or "never".
+func showBanner(setting string) bool {
+	switch setting {
+	case "never":
+		return false
+	case "always":
+		return true
 	}
-	if setting == "never" {
-		return
+	if bannerShown() {
+		return false
 	}
+	markBannerShown()
+	return true
+}
 
-	// Skip for non-TTY, screen readers, dumb terminals
-	if !isatty.IsTerminal(os.Stdout.Fd()) && !isatty.IsCygwinTerminal(os.Stdout.Fd()) {
-		return
-	}
-	if os.Getenv("TERM") == "dumb" {
-		return
-	}
-
-	if setting == "once" && bannerShown() {
-		return
-	}
-
-	accent := T.Accent
-	accentBold := T.Accent.Bold(true)
-	muted := T.Muted
-
-	// No-motion: print everything at once
-	if noMotion || os.Getenv("NO_MOTION") != "" {
-		for _, line := range dinoArt {
-			fmt.Println(accent.Render(line))
-		}
-		fmt.Println()
-		for _, line := range wordmark {
-			fmt.Println(accentBold.Render(line))
-		}
-		fmt.Println(muted.Render(tagline))
-		fmt.Println()
-		if setting == "once" {
-			markBannerShown()
-		}
-		return
-	}
-
-	// === Animated version ===
-	fmt.Print("\033[?25l") // hide cursor
-	defer fmt.Print("\033[?25h")
-
-	// Phase 1: Dino reveals line by line
+// bannerLines is the banner in width columns: the wordmark needs 80, so
+// narrower terminals get the dino alone.
+func bannerLines(width int) []string {
+	var lines []string
 	for _, line := range dinoArt {
-		fmt.Println(accent.Render(line))
-		time.Sleep(22 * time.Millisecond)
+		lines = append(lines, T.Accent.Render(line))
 	}
-
-	time.Sleep(40 * time.Millisecond)
-
-	// Phase 2: Wordmark
-	fmt.Println()
-	for _, line := range wordmark {
-		fmt.Println(accentBold.Render(line))
-		time.Sleep(30 * time.Millisecond)
+	if width >= 80 {
+		lines = append(lines, "")
+		for _, line := range wordmark {
+			lines = append(lines, T.Accent.Bold(true).Render(line))
+		}
+		lines = append(lines, T.Muted.Render(tagline))
 	}
-	time.Sleep(80 * time.Millisecond)
-	fmt.Println(muted.Render(tagline))
-
-	time.Sleep(150 * time.Millisecond)
-	fmt.Println()
-
-	if setting == "once" {
-		markBannerShown()
-	}
+	return lines
 }
 
 func bannerShown() bool {

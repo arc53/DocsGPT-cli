@@ -62,7 +62,7 @@ func TestV1TargetInlineFiles(t *testing.T) {
 	pdf := filepath.Join(dir, "report.pdf")
 	png := filepath.Join(dir, "chart.png")
 	os.WriteFile(pdf, []byte("%PDF-1.4 fake"), 0o644)
-	os.WriteFile(png, []byte{0x89, 'P', 'N', 'G'}, 0o644)
+	os.WriteFile(png, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0o644)
 
 	var gotBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1,10 +1,8 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -40,42 +38,33 @@ var (
 	agentsTriggerJSON    bool
 )
 
-const resolveHelp = `Unresolved references are settled with --resolve <kind>:<selector>=<value>
-(repeatable), which maps onto the import API's "resolution" object:
+const resolveHelp = `A reference the server cannot match is settled with --resolve (repeatable):
 
-  source:<name>=<source-id>            attach this existing source for the named spec source
-  source:<name>=skip                   accept that the source stays unattached
-  tool:<sel>=reuse:<tool-id>           link one of your existing tools
-  tool:<sel>=create                    create a new tool even if a (type, name) match exists
-  tool:<sel>=skip                      leave the tool off the agent
-  tool:<sel>.secret.<field>=<value>    secret used when the tool is created (e.g. token)
-  model:<display-name>=<api-key>       API key used to create a custom model
-  model:<id-or-name>=skip              accept that the model is dropped
+  source:<name>=<source-id>|skip
+  tool:<sel>=reuse:<tool-id>|create|skip
+  tool:<sel>.secret.<field>=<value>
+  model:<name>=<api-key>|skip
 
-<sel> is the plan key (tool-0, tool-1, ... = position in spec.tools) or, when
-unambiguous, the tool's name or type. Positional keys are rejected when several
-documents are processed at once.`
+<sel> is tool-N (its position in spec.tools) or the tool's name or type.`
 
 var agentsCmd = &cobra.Command{
 	Use:   "agents",
-	Short: "List, export, plan, apply and delete agents (personal access token)",
-	Long: `Manage agents as code with a personal access token.
-
-  docsgpt-cli agents list
-  docsgpt-cli agents export <id> -o agents/support.yaml
+	Short: "Manage agents as code: list, export, apply (access token)",
+	Long: `Manage agents as YAML you can keep in git. Needs a personal access token
+(see 'docsgpt-cli login') with agents:read to list and export, agents:write to
+plan, apply and delete, and agents:keys to trigger an agent by id.`,
+	Example: `  docsgpt-cli agents export <id> -o agents/support.yaml
   docsgpt-cli agents plan -f agents/
   docsgpt-cli agents apply -f agents/ --resolve "source:Handbook=<source-id>"
-  docsgpt-cli agents delete <id> --yes
-  docsgpt-cli agents trigger --webhook-url "$DOCSGPT_WEBHOOK_URL" -f payload.json
-
-Scopes: agents:read (list, export), agents:write (plan, apply, delete) and
-agents:keys (trigger <id>; trigger --webhook-url needs no token).`,
+  docsgpt-cli agents trigger <id> -f payload.json --wait`,
 }
 
 var agentsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List your agents",
-	Args:  usageArgs(cobra.NoArgs),
+	Example: `  docsgpt-cli agents list
+  docsgpt-cli agents list --json | jq -r '.[] | select(.status == "published") | .id'`,
+	Args: usageArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withClient(func(ctx context.Context, c *manage.Client) error {
 			return runAgentsList(ctx, c, agentsListJSON, os.Stdout)
@@ -99,10 +88,9 @@ file is safe to commit.`,
 
 var agentsPlanCmd = &cobra.Command{
 	Use:   "plan -f <file|dir|->",
-	Short: "Show what applying agent YAML would do (nothing is written)",
-	Long: `Resolve every reference of the given agent documents against your account
-and print the plan. Equivalent to 'agents apply --dry-run': exits 1 when a
-reference is missing/unavailable and not covered by --resolve.
+	Short: "Show what apply would do, without writing anything",
+	Long: `Match every reference of the agent YAML against your account and print the
+plan, like 'agents apply --dry-run'. Exits 1 when a reference is unresolved.
 
 ` + resolveHelp,
 	Args: usageArgs(cobra.NoArgs),
@@ -118,20 +106,16 @@ reference is missing/unavailable and not covered by --resolve.
 var agentsApplyCmd = &cobra.Command{
 	Use:   "apply -f <file|dir|-> [-f ...]",
 	Short: "Create or update agents from YAML",
-	Long: `Apply agent documents. -f accepts a file, a directory (its *.yaml/*.yml
-files, sorted) or - for stdin, and may be repeated; multi-document files are
-applied document by document. Only kind: Agent is accepted.
+	Long: `Create or update agents from YAML (kind: Agent). -f takes a file, a directory
+of *.yaml files, or - for stdin, and can be repeated.
 
-Every document is planned first and the plan is printed. If any document has a
-missing or unavailable reference that --resolve does not cover, NOTHING is
-applied and the command exits 1. An agent is matched by metadata.id, then
-metadata.slug: a match is updated in place (keeping its status and API key),
-anything else is created as a draft.
+Everything is planned first; if any reference is unresolved, nothing is
+applied. An agent is matched by metadata.id, then metadata.slug, and updated
+in place; anything else is created as a draft.
 
 ` + resolveHelp + `
 
-Exit codes: 0 applied (or a clean --dry-run), 1 blocked or failed, 2 usage or
-validation error.`,
+Exit codes: 0 applied, 1 blocked or failed, 2 usage error.`,
 	Args: usageArgs(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withClient(func(ctx context.Context, c *manage.Client) error {
@@ -145,11 +129,14 @@ validation error.`,
 var agentsDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
 	Short: "Delete an agent",
-	Args:  usageArgs(cobra.ExactArgs(1)),
+	Long:  "Delete an agent. It asks first; without a terminal it needs --yes.",
+	Example: `  docsgpt-cli agents delete <id>
+  docsgpt-cli agents delete <id> --yes   # in CI`,
+	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return withClient(func(ctx context.Context, c *manage.Client) error {
 			if !agentsDeleteYes {
-				if err := confirmDestructive(os.Stdin, os.Stderr, stdinIsTerminal(), "Delete agent "+args[0]+"?"); err != nil {
+				if err := confirmDestructive("Delete agent " + args[0] + "?"); err != nil {
 					return err
 				}
 			}
@@ -165,35 +152,18 @@ var agentsDeleteCmd = &cobra.Command{
 var agentsTriggerCmd = &cobra.Command{
 	Use:   "trigger [<agent-id>] -f <file|->",
 	Short: "Run an agent through its incoming webhook with a JSON payload",
-	Long: `Post a JSON payload to an agent's incoming webhook. The whole payload becomes
-the agent's input; the agent runs asynchronously and the task id is printed.
---wait polls the run until it finishes and prints the agent's answer.
+	Long: `Post a JSON payload to an agent's incoming webhook; the payload becomes the
+agent's input. The run is queued and its task id printed; --wait waits for it
+and prints the answer.
 
-Address the agent in exactly one way:
+Name the agent by its webhook URL (--webhook-url, else ` + config.EnvWebhookURL + `;
+no token needed, and the URL is never printed) or by <agent-id> (looked up
+with a personal access token, scope agents:keys).
 
-  --webhook-url <url>   the webhook URL itself, or ` + config.EnvWebhookURL + ` when
-                        neither the flag nor an agent id is given. No personal
-                        access token is needed: the URL is the secret.
-  <agent-id>            look the webhook up with a personal access token (scope
-                        agents:keys). The server creates the webhook if the
-                        agent has none yet.
-
-  docsgpt-cli agents trigger --webhook-url "$TRIAGE_WEBHOOK_URL" -f payload.json
+Exit codes: 0 ok, 1 the call or the run failed or timed out, 2 usage error.`,
+	Example: `  docsgpt-cli agents trigger --webhook-url "$TRIAGE_WEBHOOK_URL" -f payload.json
   echo '{"event":"deploy"}' | docsgpt-cli agents trigger <agent-id> -f - --wait
-  docsgpt-cli agents trigger <agent-id> -f payload.json --wait --json | jq -r .answer
-
-The webhook URL is never printed: output and errors show it as
-<base>/api/webhooks/agents/...
-
---idempotency-key makes retries safe: a repeat with the same key within about
-24 hours returns the original task instead of running the agent again.
-
---wait reads /api/task_status without credentials. If the server requires
-them, the personal access token is used (it needs chat:run, sources:read or
-sources:write), and only when it is configured for the webhook's host.
-
-Exit codes: 0 ok, 1 the webhook call or the agent run failed or timed out,
-2 usage error.`,
+  docsgpt-cli agents trigger <agent-id> -f payload.json --wait --json | jq -r .answer`,
 	Args: usageArgs(cobra.MaximumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		opts := triggerOptions{
@@ -250,8 +220,9 @@ func init() {
 	tf.DurationVar(&agentsTriggerTO, "timeout", 10*time.Minute, "How long --wait polls before giving up (e.g. 90s, 15m)")
 	tf.BoolVar(&agentsTriggerJSON, "json", false, "Print the result as JSON on stdout")
 
-	agentsCmd.AddCommand(agentsListCmd, agentsExportCmd, agentsPlanCmd, agentsApplyCmd, agentsDeleteCmd, agentsTriggerCmd)
-	markManagement(agentsCmd)
+	agentsCmd.AddCommand(agentsListCmd, agentsExportCmd, agentsPlanCmd, agentsApplyCmd, agentsDeleteCmd, agentsTriggerCmd,
+		agentsPromptsCmd, agentsToolsCmd)
+	groupCommand(agentsCmd)
 }
 
 // withClient builds the account-level client and runs fn under an
@@ -281,7 +252,7 @@ func runAgentsList(ctx context.Context, c *manage.Client, asJSON bool, out io.Wr
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tNAME\tTYPE\tSTATUS\tSLUG\tOWNERSHIP")
 	for _, a := range agents {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", a.ID, textOrDash(a.Name), textOrDash(a.AgentType),
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", textOrDash(a.ID), textOrDash(a.Name), textOrDash(a.AgentType),
 			textOrDash(a.Status), textOrDash(a.Slug), textOrDash(a.Ownership))
 	}
 	return tw.Flush()
@@ -426,7 +397,7 @@ func runAgentsApply(ctx context.Context, c *manage.Client, opts applyOptions, st
 		report.Applied++
 		report.Documents[i].Result = res
 		fmt.Fprintf(human, "%s %s: agent %s %s (status %s, slug %s)\n", display.Success("applied"),
-			p.doc.Label(), res.AgentID, res.Action, textOrDash(res.Status), textOrDash(res.Slug))
+			p.doc.Label(), textOrDash(res.AgentID), textOrDash(res.Action), textOrDash(res.Status), textOrDash(res.Slug))
 		for _, w := range res.Warnings {
 			warnLine(human, w)
 		}
@@ -442,7 +413,7 @@ func printPlan(w io.Writer, doc manage.Document, plan *manage.Plan, d *manage.De
 
 	switch plan.Target.Action {
 	case "update":
-		fmt.Fprintf(tw, "  agent\tUPDATE\t%s\tmatched by %s, status %s (kept)\n", plan.Target.AgentID,
+		fmt.Fprintf(tw, "  agent\tUPDATE\t%s\tmatched by %s, status %s (kept)\n", textOrDash(plan.Target.AgentID),
 			textOrDash(plan.Target.MatchedBy), textOrDash(plan.Target.Status))
 	default:
 		fmt.Fprintf(tw, "  agent\tCREATE\t%s\tnew draft agent\n", doc.Name)
@@ -467,14 +438,14 @@ func printPlan(w io.Writer, doc manage.Document, plan *manage.Plan, d *manage.De
 		if t.Status == manage.StatusCreate && len(t.RequiresSecrets) > 0 {
 			note = "needs secrets: " + strings.Join(t.RequiresSecrets, ", ")
 		}
-		fmt.Fprintf(tw, "  tool %s\t%s\t%s\t%s\n", t.Key, statusText(t.Status), label, detail(note, d.Covered["tool:"+t.Key]))
+		fmt.Fprintf(tw, "  tool %s\t%s\t%s\t%s\n", display.Safe(t.Key), statusText(t.Status), display.Safe(label), detail(note, d.Covered["tool:"+t.Key]))
 	}
 	for _, m := range plan.Models {
 		note := ""
 		if m.Status == manage.StatusCreate && len(m.RequiresSecrets) > 0 {
 			note = "needs secrets: " + strings.Join(m.RequiresSecrets, ", ")
 		}
-		fmt.Fprintf(tw, "  model\t%s\t%s\t%s\n", statusText(m.Status), m.Label(), detail(note, d.Covered["model:"+m.Label()]))
+		fmt.Fprintf(tw, "  model\t%s\t%s\t%s\n", statusText(m.Status), display.Safe(m.Label()), detail(note, d.Covered["model:"+m.Label()]))
 	}
 	if wf := plan.Workflow; wf != nil {
 		note := fmt.Sprintf("%d nodes, %d edges", wf.Nodes, wf.Edges)
@@ -500,7 +471,7 @@ func statusText(status string) string {
 	case manage.StatusMissing, manage.StatusUnavailable:
 		return strings.ToUpper(status)
 	}
-	return status
+	return display.Safe(status)
 }
 
 func idNote(id string) string {
@@ -517,7 +488,7 @@ func detail(parts ...string) string {
 			out = append(out, p)
 		}
 	}
-	return strings.Join(out, "; ")
+	return display.Safe(strings.Join(out, "; "))
 }
 
 // triggerOptions are the inputs of `agents trigger`.
@@ -534,30 +505,14 @@ type triggerOptions struct {
 	Token     string // --token > DOCSGPT_TOKEN > config; "" when none
 	UserAgent string
 
-	// Poll tunes the --wait backoff; zero values use triggerPoll.
+	// Poll tunes the --wait backoff; zero values use manage.TriggerPoll.
 	Poll manage.WaitOptions
-}
-
-// triggerPoll is the --wait cadence: agent runs finish in seconds to minutes,
-// so the backoff tops out sooner than an ingest's.
-var triggerPoll = manage.WaitOptions{Initial: time.Second, Max: 5 * time.Second}
-
-// triggerReport is the --json document of `agents trigger`.
-type triggerReport struct {
-	TaskID         string          `json:"task_id"`
-	IdempotencyKey string          `json:"idempotency_key,omitempty"`
-	Deduplicated   bool            `json:"deduplicated,omitempty"`
-	Waited         bool            `json:"waited"`
-	Status         string          `json:"status,omitempty"`
-	Answer         string          `json:"answer,omitempty"`
-	Result         json.RawMessage `json:"result,omitempty"` // the task's result, verbatim
-	Error          string          `json:"error,omitempty"`
 }
 
 // runAgentsTrigger posts the payload to the agent's webhook and, with Wait,
 // polls the run. Progress goes to stderr; stdout carries the task id, the
 // answer, or the JSON report. The webhook URL never reaches either stream.
-func runAgentsTrigger(ctx context.Context, opts triggerOptions, stdin io.Reader, stdout, stderr io.Writer) (err error) {
+func runAgentsTrigger(ctx context.Context, opts triggerOptions, stdin io.Reader, stdout, stderr io.Writer) error {
 	switch {
 	case opts.AgentID != "" && opts.WebhookURL != "":
 		return usageErrf("pass either an agent id or --webhook-url, not both")
@@ -570,184 +525,42 @@ func runAgentsTrigger(ctx context.Context, opts triggerOptions, stdin io.Reader,
 	case len(opts.Key) > manage.IdempotencyKeyMaxLen:
 		return usageErrf("--idempotency-key exceeds %d characters", manage.IdempotencyKeyMaxLen)
 	}
-	payload, err := readTriggerPayload(opts.File, stdin)
+	payload, err := manage.ReadPayload(opts.File, stdin)
 	if err != nil {
 		return usageErr(err)
 	}
 
-	var authed *manage.Client
-	if opts.Token != "" {
-		authed = manage.New(opts.BaseURL, opts.Token, opts.UserAgent)
-	}
-	var hook *manage.Webhook
-	if opts.WebhookURL != "" {
-		if hook, err = manage.ParseWebhookURL(opts.WebhookURL); err != nil {
-			return usageErrf("--webhook-url / %s: %w", config.EnvWebhookURL, err)
-		}
-	} else {
-		if authed == nil {
-			return usageErrf("no personal access token configured: an agent id is looked up with a token "+
-				"(scope agents:keys): run 'docsgpt-cli login', set %s or pass --token — or pass --webhook-url", config.EnvToken)
-		}
-		if hook, err = authed.AgentWebhook(ctx, opts.AgentID); err != nil {
-			return fmt.Errorf("look up the webhook of agent %s: %w", opts.AgentID, err)
-		}
-	}
-	// Belt and braces: whatever a server or transport error echoes, the
-	// token in the webhook URL does not leave this function.
-	defer func() {
-		if err != nil {
-			err = &redactedError{err: err, hook: hook}
-		}
-	}()
-
-	// The webhook and task_status are called without credentials.
-	anon := manage.New(hook.BaseURL(), "", opts.UserAgent)
-	fmt.Fprintf(stderr, "triggering %s (%d-byte payload)...\n", hook, len(payload))
-	res, err := anon.TriggerWebhook(ctx, hook, payload, opts.Key)
-	if err != nil {
+	report, err := manage.Trigger(ctx, manage.TriggerOptions{
+		AgentID: opts.AgentID, WebhookURL: opts.WebhookURL, Payload: payload, Key: opts.Key,
+		Wait: opts.Wait, Timeout: opts.Timeout, Poll: opts.Poll,
+		BaseURL: opts.BaseURL, Token: opts.Token, UserAgent: opts.UserAgent, Log: stderr,
+	})
+	if report == nil {
 		return err
 	}
-	report := triggerReport{TaskID: res.TaskID, IdempotencyKey: opts.Key}
-
-	finish := func(runErr error) error {
-		if runErr != nil {
-			report.Error = hook.Redact(runErr.Error())
+	if err == nil && report.Waited {
+		summary := fmt.Sprintf("done in %.0fs", report.Elapsed.Seconds())
+		if report.ToolCalls > 0 {
+			summary += fmt.Sprintf(", %d tool call(s)", report.ToolCalls)
 		}
-		if opts.JSON {
-			if err := writeJSON(stdout, report); err != nil && runErr == nil {
-				return err
+		fmt.Fprintln(stderr, display.Success("ok"), summary)
+	}
+	if opts.JSON {
+		if jsonErr := writeJSON(stdout, report); jsonErr != nil && err == nil {
+			return jsonErr
+		}
+		return err
+	}
+	if err == nil {
+		switch {
+		case report.Deduplicated:
+		case report.Waited:
+			if answer := strings.TrimRight(report.Answer, "\n"); answer != "" {
+				fmt.Fprintln(stdout, answer)
 			}
-			return runErr
+		default:
+			fmt.Fprintln(stdout, report.TaskID)
 		}
-		if runErr == nil {
-			switch {
-			case report.Deduplicated:
-			case report.Waited:
-				answer := strings.TrimRight(report.Answer, "\n")
-				if answer != "" {
-					fmt.Fprintln(stdout, answer)
-				}
-			default:
-				fmt.Fprintln(stdout, report.TaskID)
-			}
-		}
-		return runErr
 	}
-
-	if res.TaskID == manage.DeduplicatedTaskID {
-		// The key matched an earlier request whose task record is gone: that
-		// run already happened and there is nothing to poll.
-		report.TaskID = ""
-		report.Deduplicated = true
-		fmt.Fprintln(stderr, "the server deduplicated this request (same Idempotency-Key as an earlier one); the agent did not run again")
-		return finish(nil)
-	}
-	if !opts.Wait {
-		fmt.Fprintf(stderr, "agent run queued as task %s; pass --wait to wait for the answer\n", res.TaskID)
-		return finish(nil)
-	}
-
-	waitCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
-	defer cancel()
-	poll := opts.Poll
-	if poll.Initial == 0 && poll.Max == 0 {
-		poll.Initial, poll.Max = triggerPoll.Initial, triggerPoll.Max
-	}
-	started := time.Now()
-	lastLine := ""
-	poll.OnUpdate = func(status string, _ *manage.TaskStatus) {
-		if status == lastLine {
-			return
-		}
-		lastLine = status
-		fmt.Fprintf(stderr, "  [%4.0fs] %s\n", time.Since(started).Seconds(), status)
-	}
-	report.Waited = true
-	st, err := waitForRun(waitCtx, anon, authed, hook, res.TaskID, poll, stderr)
-	if st != nil {
-		report.Status = st.Status
-		report.Result = st.Result
-	}
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			err = fmt.Errorf("timed out after %s waiting for the agent run (task %s is still running server-side): %w", opts.Timeout, res.TaskID, err)
-		}
-		return finish(err)
-	}
-	run, err := manage.AgentRunResult(res.TaskID, st)
-	if err != nil {
-		return finish(err)
-	}
-	report.Answer = run.Answer
-	summary := fmt.Sprintf("done in %.0fs", time.Since(started).Seconds())
-	if run.ToolCalls > 0 {
-		summary += fmt.Sprintf(", %d tool call(s)", run.ToolCalls)
-	}
-	fmt.Fprintln(stderr, display.Success("ok"), summary)
-	return finish(nil)
+	return err
 }
-
-// waitForRun polls the run's task without credentials, as DocsGPT serves
-// /api/task_status. If the server requires them anyway, it polls again with
-// the personal access token, which is only ever sent to the configured base
-// URL: never to a webhook host the token was not configured for.
-func waitForRun(ctx context.Context, anon, authed *manage.Client, hook *manage.Webhook, taskID string, poll manage.WaitOptions, stderr io.Writer) (*manage.TaskStatus, error) {
-	st, err := anon.WaitTask(ctx, taskID, poll)
-	var ae *manage.APIError
-	if err == nil || !errors.As(err, &ae) || (ae.Status != 401 && ae.Status != 403) {
-		return st, err
-	}
-	statusURL := hook.BaseURL() + "/api/task_status"
-	switch {
-	case authed == nil:
-		return nil, usageErrf("the agent run was queued as task %s, but %s requires authentication to report on it: "+
-			"pass --token, set %s or run 'docsgpt-cli login' (the token needs chat:run, sources:read or sources:write)",
-			taskID, statusURL, config.EnvToken)
-	case !hook.SameOrigin(authed.BaseURL):
-		return nil, usageErrf("the agent run was queued as task %s, but %s requires authentication to report on it, "+
-			"and the personal access token is only sent to %s: pass --url %s",
-			taskID, statusURL, authed.BaseURL, hook.BaseURL())
-	}
-	fmt.Fprintln(stderr, "task status requires authentication; polling with the personal access token")
-	return authed.WaitTask(ctx, taskID, poll)
-}
-
-// readTriggerPayload reads the payload from a file or stdin ("-") and checks
-// it is JSON the webhook accepts: the server refuses a missing body and null.
-func readTriggerPayload(file string, stdin io.Reader) ([]byte, error) {
-	label := file
-	var data []byte
-	var err error
-	if file == "-" {
-		label = "stdin"
-		data, err = io.ReadAll(stdin)
-	} else {
-		data, err = os.ReadFile(file)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read payload: %w", err)
-	}
-	data = bytes.TrimSpace(data)
-	if len(data) == 0 {
-		return nil, fmt.Errorf("payload from %s is empty: the webhook needs a JSON value", label)
-	}
-	var v any
-	if err := json.Unmarshal(data, &v); err != nil {
-		return nil, fmt.Errorf("payload from %s is not valid JSON: %v", label, err)
-	}
-	if v == nil {
-		return nil, fmt.Errorf("payload from %s is JSON null: the webhook needs a value (usually an object)", label)
-	}
-	return data, nil
-}
-
-// redactedError keeps the webhook token out of an error message while
-// preserving the chain the exit code is read from.
-type redactedError struct {
-	err  error
-	hook *manage.Webhook
-}
-
-func (e *redactedError) Error() string { return e.hook.Redact(e.err.Error()) }
-func (e *redactedError) Unwrap() error { return e.err }

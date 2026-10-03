@@ -4,12 +4,37 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
-
-	"github.com/arc53/DocsGPT-cli/internal/tools"
 )
+
+// denylist is the host's safety floor: invocations run without a person at
+// the device to approve them.
+var denylist = []string{
+	"rm -rf /",
+	"rm -rf /*",
+	"mkfs",
+	"dd if=",
+	"> /dev/sd",
+	"> /dev/nvme",
+	"shutdown",
+	"reboot",
+	":(){ :|:& };:",
+}
+
+// blocked returns the denylist pattern command contains, or "".
+func blocked(command string) string {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	for _, p := range denylist {
+		if strings.Contains(lower, p) {
+			return fmt.Sprintf("blocked pattern: %q", p)
+		}
+	}
+	return ""
+}
 
 // ExecuteAndStream runs the invocation locally and streams stdout/stderr to
 // the server via chunked POST.
@@ -21,7 +46,7 @@ func ExecuteAndStream(ctx context.Context, t *Transport, sessionID string, inv I
 	if v, ok := inv.Params["timeout_ms"].(float64); ok {
 		timeoutMs = int(v)
 	}
-	if safe, reason := tools.IsSafe(command); !safe {
+	if reason := blocked(command); reason != "" {
 		_ = t.PostAck(ctx, sessionID, inv.InvocationID, "denied", "denied_by_safety")
 		_ = postControl(ctx, t, sessionID, inv.InvocationID, 0, "command_blocked_by_denylist", reason)
 		return
@@ -177,4 +202,3 @@ func postControlFull(ctx context.Context, t *Transport, sessionID, invocationID 
 	body, _ := json.Marshal(payload)
 	return t.PostOutput(ctx, sessionID, invocationID, append(body, '\n'))
 }
-

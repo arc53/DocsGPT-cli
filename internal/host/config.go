@@ -11,12 +11,12 @@ import (
 
 // HostConfig is the persistent state at ~/.docsgpt/host.yml.
 type HostConfig struct {
-	DeviceID      string `yaml:"device_id"`
-	SessionToken  string `yaml:"session_token"`
-	BaseURL       string `yaml:"base_url"`
-	PollInterval  string `yaml:"poll_interval"`
-	ApprovalMode  string `yaml:"approval_mode"`
-	LogFile       string `yaml:"log_file"`
+	DeviceID     string `yaml:"device_id"`
+	SessionToken string `yaml:"session_token"`
+	BaseURL      string `yaml:"base_url"`
+	PollInterval string `yaml:"poll_interval"`
+	ApprovalMode string `yaml:"approval_mode"`
+	LogFile      string `yaml:"log_file"`
 }
 
 const (
@@ -46,6 +46,31 @@ func HostConfigPath() string {
 	return filepath.Join(hostConfigDir(), "host.yml")
 }
 
+// HasLocalState reports whether host.yml or host.key exists.
+func HasLocalState() bool {
+	for _, p := range []string{HostConfigPath(), keyPath()} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			return true
+		}
+	}
+	return false
+}
+
+// ClearLocalState deletes host.yml and host.key without contacting the
+// server and returns the names of the files it removed.
+func ClearLocalState() ([]string, error) {
+	removed := []string{}
+	for _, p := range []string{HostConfigPath(), keyPath()} {
+		name := filepath.Base(p)
+		if err := os.Remove(p); err == nil {
+			removed = append(removed, name)
+		} else if !os.IsNotExist(err) {
+			return removed, fmt.Errorf("remove %s: %w", name, err)
+		}
+	}
+	return removed, nil
+}
+
 // LoadHostConfig reads host.yml; returns the defaults + os.IsNotExist if missing.
 func LoadHostConfig() (HostConfig, error) {
 	cfg := DefaultHostConfig()
@@ -53,10 +78,7 @@ func LoadHostConfig() (HostConfig, error) {
 	if err != nil {
 		return cfg, err
 	}
-	parsed, err := parseSimpleYAML(string(data))
-	if err != nil {
-		return cfg, fmt.Errorf("parse host.yml: %w", err)
-	}
+	parsed := parseSimpleYAML(string(data))
 	if v, ok := parsed["device_id"]; ok {
 		cfg.DeviceID = v
 	}
@@ -85,12 +107,12 @@ func (c *HostConfig) Save() error {
 		return fmt.Errorf("mkdir host config: %w", err)
 	}
 	body := serializeSimpleYAML(map[string]string{
-		"device_id":      c.DeviceID,
-		"session_token":  c.SessionToken,
-		"base_url":       c.BaseURL,
-		"poll_interval":  c.PollInterval,
-		"approval_mode":  c.ApprovalMode,
-		"log_file":       c.LogFile,
+		"device_id":     c.DeviceID,
+		"session_token": c.SessionToken,
+		"base_url":      c.BaseURL,
+		"poll_interval": c.PollInterval,
+		"approval_mode": c.ApprovalMode,
+		"log_file":      c.LogFile,
 	})
 	if err := os.WriteFile(HostConfigPath(), []byte(body), 0600); err != nil {
 		return fmt.Errorf("write host.yml: %w", err)
@@ -113,9 +135,9 @@ func (c *HostConfig) PollIntervalDuration() time.Duration {
 	return d
 }
 
-// parseSimpleYAML reads a flat ``key: value`` document. We avoid pulling in
+// parseSimpleYAML reads a flat `key: value` document. We avoid pulling in
 // gopkg.in/yaml.v3 to keep dependencies minimal — host.yml is a flat map.
-func parseSimpleYAML(s string) (map[string]string, error) {
+func parseSimpleYAML(s string) map[string]string {
 	out := map[string]string{}
 	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimRight(line, " \t\r")
@@ -131,7 +153,7 @@ func parseSimpleYAML(s string) (map[string]string, error) {
 		value = strings.Trim(value, "\"'")
 		out[key] = value
 	}
-	return out, nil
+	return out
 }
 
 func serializeSimpleYAML(m map[string]string) string {

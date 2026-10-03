@@ -62,6 +62,42 @@ func TestRunModelPrecedenceAndStamping(t *testing.T) {
 	}
 }
 
+func TestRunMatrix(t *testing.T) {
+	tg := &scriptTarget{fn: func(int, target.Request) (*target.Result, error) { return answerResult("ok"), nil }}
+	withTarget(t, tg)
+	suite := newSuite(spec.SuiteConfig{Agent: "a"}, containsCase("c", "ok"))
+
+	var started []string
+	runs, err := RunMatrix(context.Background(), Options{
+		Suite: suite, Cases: suite.Cases, ResolveKey: defaultResolver, BaseURL: "http://x", UpdateGolden: true,
+		OnEvent: func(e Event) {
+			if e.Type == EventModel {
+				started = append(started, fmt.Sprintf("%d:%s", e.Run, e.Msg))
+			}
+		},
+	}, []string{"m1", "m2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 || runs[0].Model != "m1" || runs[1].Model != "m2" {
+		t.Fatalf("runs = %+v", runs)
+	}
+	if strings.Join(started, ",") != "1:m1,2:m2" {
+		t.Errorf("model events = %v", started)
+	}
+	if len(tg.reqs) != 2 || tg.reqs[0].Model != "m1" || tg.reqs[1].Model != "m2" {
+		t.Errorf("requests = %+v", tg.reqs)
+	}
+
+	// A cancelled context runs no further model.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runs, err = RunMatrix(ctx, Options{Suite: suite, Cases: suite.Cases, ResolveKey: defaultResolver, BaseURL: "http://x"}, []string{"m1"})
+	if err != nil || len(runs) != 0 {
+		t.Errorf("cancelled: runs %d err %v", len(runs), err)
+	}
+}
+
 func TestRunPassesStreamRunTagAndInlineFiles(t *testing.T) {
 	tg := &scriptTarget{fn: func(int, target.Request) (*target.Result, error) { return answerResult("ok"), nil }}
 	withTarget(t, tg)

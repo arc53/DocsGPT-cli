@@ -134,6 +134,7 @@ func ApplyStaged(current, targetPath string) (string, error) {
 		ClearStaging()
 		return "", err
 	}
+	MarkUpdated(m.Version)
 	return m.Version, nil
 }
 

@@ -52,7 +52,11 @@ func Apply(rel *Release, targetPath, currentVersion string) error {
 	if err != nil {
 		return err
 	}
-	return swapBinary(binary, targetPath, currentVersion)
+	if err := swapBinary(binary, targetPath, currentVersion); err != nil {
+		return err
+	}
+	MarkUpdated(rel.TagName)
+	return nil
 }
 
 // CheckAndApply is the host daemon's update pass: check for a release,
@@ -63,11 +67,7 @@ func CheckAndApply(currentVersion string) (string, error) {
 	if !IsReleaseVersion(currentVersion) {
 		return "", nil
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	realPath, err := filepath.EvalSymlinks(exe)
+	realPath, err := ExecutablePath()
 	if err != nil {
 		return "", err
 	}
@@ -87,6 +87,20 @@ func CheckAndApply(currentVersion string) (string, error) {
 		return "", err
 	}
 	return rel.TagName, nil
+}
+
+// ExecutablePath is the symlink-resolved path of the running binary, the file
+// an update replaces.
+func ExecutablePath() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("could not determine the executable path: %w", err)
+	}
+	realPath, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return "", fmt.Errorf("could not resolve the executable path: %w", err)
+	}
+	return realPath, nil
 }
 
 // Rollback swaps the current binary with the backup kept by the last update

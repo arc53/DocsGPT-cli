@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -9,16 +8,18 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/manage"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
 
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
-// Exit codes shared by the account-level commands; they mirror `bench`:
+// Exit codes of every command; they mirror `bench`:
 // 0 ok, 1 the operation failed, 2 usage / configuration / validation error.
 const (
 	exitFailure = 1
@@ -55,6 +56,17 @@ func exitCodeFor(err error) int {
 	if errors.As(err, &ee) && ee.code != 0 {
 		return ee.code
 	}
+	var ue *manage.UsageError
+	if errors.As(err, &ue) {
+		return exitUsage
+	}
+	// Ended by TERM or HUP: 128 + the signal, as a shell reports it.
+	var sig ui.Signal
+	if errors.As(err, &sig) {
+		if n, ok := sig.Signal.(syscall.Signal); ok {
+			return 128 + int(n)
+		}
+	}
 	return exitFailure
 }
 
@@ -63,38 +75,6 @@ func usageArgs(v cobra.PositionalArgs) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		return usageErr(v(cmd, args))
 	}
-}
-
-// markManagement applies the conventions shared by the account-level command
-// trees: flag errors exit with 2, usage is not dumped on runtime failures,
-// and the startup banner is skipped (their stdout is data: tables, JSON, YAML).
-// Call it after the subcommands are attached: SilenceUsage is per command.
-func markManagement(c *cobra.Command) {
-	c.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageErr(err) })
-	silenceUsage(c)
-	if c.Annotations == nil {
-		c.Annotations = map[string]string{}
-	}
-	c.Annotations[noBannerAnnotation] = "true"
-}
-
-func silenceUsage(c *cobra.Command) {
-	c.SilenceUsage = true
-	for _, sub := range c.Commands() {
-		silenceUsage(sub)
-	}
-}
-
-const noBannerAnnotation = "docsgpt/no-banner"
-
-// hasNoBanner reports whether cmd or one of its parents opted out of the banner.
-func hasNoBanner(cmd *cobra.Command) bool {
-	for c := cmd; c != nil; c = c.Parent() {
-		if c.Annotations[noBannerAnnotation] == "true" {
-			return true
-		}
-	}
-	return false
 }
 
 // userAgent is the User-Agent of account-level requests.
@@ -130,32 +110,34 @@ func writeJSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
-// confirmDestructive asks for a y/N confirmation on a terminal. Without a
-// terminal (CI) it refuses and asks for --yes, so a pipeline never hangs on a
-// prompt and never deletes by accident.
-func confirmDestructive(in io.Reader, out io.Writer, interactive bool, question string) error {
-	if !interactive {
-		return usageErrf("%s — refusing without confirmation: pass --yes", question)
+// confirmDestructive asks before a destructive action. Without a terminal
+// (CI) it refuses and asks for --yes, so a pipeline never hangs on a prompt
+// and never deletes by accident.
+func confirmDestructive(question string) error {
+	if !ui.Interactive() {
+		return usageErrf("%s refusing without confirmation: pass --yes", question)
 	}
-	fmt.Fprintf(out, "%s [y/N]: ", question)
-	line, _ := bufio.NewReader(in).ReadString('\n')
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return nil
+	ok, err := ui.Confirm(question, false)
+	if err != nil {
+		return err
 	}
-	return &exitError{code: exitFailure, err: errors.New("aborted")}
+	if !ok {
+		return &exitError{code: exitFailure, err: errors.New("aborted")}
+	}
+	return nil
 }
 
 func stdinIsTerminal() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
 }
 
-// textOrDash renders empty table cells.
+// textOrDash renders a table cell or a value in a human line: "-" when
+// empty, control characters made visible (servers supply most of them).
 func textOrDash(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "-"
 	}
-	return s
+	return display.Safe(s)
 }
 
 // anyText renders loosely typed server fields (dates, token counts).

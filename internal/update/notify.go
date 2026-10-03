@@ -15,6 +15,11 @@ type checkState struct {
 	LastChecked   time.Time `json:"last_checked"`
 	LatestVersion string    `json:"latest_version"`
 	SkipVersion   string    `json:"skip_version,omitempty"`
+	// Notes are the latest release's notes, for the chat's /changelog.
+	Notes *Notes `json:"notes,omitempty"`
+	// WhatsNew is the version an update installed, whose notes the next
+	// chat shows once.
+	WhatsNew string `json:"whats_new,omitempty"`
 }
 
 func statePath() string {
@@ -48,6 +53,7 @@ func RecordCheck(rel *Release) {
 	st := loadState()
 	st.LastChecked = time.Now()
 	st.LatestVersion = rel.TagName
+	st.Notes = &Notes{Version: rel.TagName, Body: rel.Body, URL: rel.HTMLURL}
 	saveState(st)
 }
 

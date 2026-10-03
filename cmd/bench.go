@@ -54,33 +54,27 @@ var benchCmd = &cobra.Command{
 
 A suite is a directory (default ./bench) with an optional bench.yaml (shared
 defaults) and one sub-directory per case, each holding a case.yaml (plus any
-attachment files). Each case sends a question (or a sequence of turns) to an
-agent through one of four targets and checks the answer:
+attachment files). Each case sends a question (or a sequence of turns) through
+a target and checks the answer against its expect: block (answer text, JSON
+paths, sources, tools, limits, stream integrity, an expected server error,
+golden.json, an LLM-as-judge rubric):
 
   target: v1       POST /v1/chat/completions  (Bearer auth, reports usage; stream: true for SSE)
   target: stream   POST /stream               (api_key in body, SSE, records TTFT + frames)
   target: answer   POST /api/answer           (api_key in body, single JSON reply)
   target: webhook  POST <webhook_url>         (async, polled to completion)
 
-The stream and answer targets can also address an agent by id instead of by
-API key: set agent_id: (bench.yaml or case.yaml) or pass --agent-id, and the
-request carries agent_id plus your personal access token (scope chat:run) as
-the Bearer credential — see 'docsgpt-cli login' / DOCSGPT_TOKEN.
-
-Assertions live under a case's expect: block (answer text, JSON paths, sources,
-tools, limits incl. time-to-first-token, stream integrity, an expected server
-error for negative cases, golden.json, or an LLM-as-judge rubric).
-
-Examples:
-  docsgpt-cli bench                     # run ./bench
+stream and answer can also address an agent by id (agent_id: or --agent-id)
+with your personal access token (scope chat:run) instead of an API key.`,
+	Example: `  docsgpt-cli bench                                  # run ./bench
   docsgpt-cli bench ./suite -k retrieval
   docsgpt-cli bench --repeat 3 --min-pass 2
-  docsgpt-cli bench --model gpt-5.6-terra          # pin one model for every case
-  docsgpt-cli bench --matrix m1,m2,m3 --tags hard   # run once per model, compare
-  docsgpt-cli bench --vs staging-agent  # A/B two agents
-  docsgpt-cli bench --target stream --agent-id <id>   # run by agent id with DOCSGPT_TOKEN
-  docsgpt-cli bench init                # scaffold a starter suite
-  docsgpt-cli bench record              # refresh golden answers`,
+  docsgpt-cli bench --model gpt-5.6-terra            # one model for every case
+  docsgpt-cli bench --matrix m1,m2,m3 --tags hard    # once per model, compared
+  docsgpt-cli bench --vs staging-agent               # A/B two agents
+  docsgpt-cli bench --target stream --agent-id <id>  # by agent id, with DOCSGPT_TOKEN
+  docsgpt-cli bench init                             # scaffold a starter suite
+  docsgpt-cli bench record                           # refresh golden answers`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		runBenchSuite(args, false)
@@ -226,6 +220,10 @@ func runBenchSuite(args []string, record bool) {
 			if !benchJSON {
 				fmt.Fprintf(os.Stderr, "  %s %s\n", liveTag(e.Msg), e.Case)
 			}
+		case runner.EventModel:
+			if !benchJSON {
+				fmt.Fprintf(os.Stderr, "%s %s (%d/%d)\n", display.Accent("model:"), e.Msg, e.Run, len(matrixModels))
+			}
 		}
 	}
 
@@ -361,22 +359,9 @@ func runBenchSuite(args []string, record bool) {
 // or diffed against a baseline. Exit code: 1 when any model has failures or
 // errors, 0 otherwise.
 func runBenchMatrix(ctx context.Context, opts runner.Options, models []string) {
-	var runs []*runner.SuiteResult
-	for i, model := range models {
-		if ctx.Err() != nil {
-			break
-		}
-		if !benchJSON {
-			fmt.Fprintf(os.Stderr, "%s %s (%d/%d)\n", display.Accent("model:"), model, i+1, len(models))
-		}
-		mopts := opts
-		mopts.ModelOverride = model
-		mopts.UpdateGolden = false
-		r, err := runner.Run(ctx, mopts)
-		if err != nil {
-			benchFatal(err.Error())
-		}
-		runs = append(runs, r)
+	runs, err := runner.RunMatrix(ctx, opts, models)
+	if err != nil {
+		benchFatal(err.Error())
 	}
 	matrix := report.NewMatrix(models[:len(runs)], runs)
 

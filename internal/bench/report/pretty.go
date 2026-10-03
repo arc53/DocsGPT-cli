@@ -130,7 +130,7 @@ func printFailingAssertions(w io.Writer, c *runner.CaseResult) {
 			}
 			seen[key] = true
 			fmt.Fprintf(w, "        %s\n", display.Danger(a.Name))
-			for _, line := range strings.Split(a.Message, "\n") {
+			for _, line := range strings.Split(display.StripControls(a.Message), "\n") {
 				fmt.Fprintf(w, "          %s\n", display.Muted(line))
 			}
 		}
@@ -145,7 +145,7 @@ func printCaseErrors(w io.Writer, c *runner.CaseResult) {
 			continue
 		}
 		seen[rr.Error] = true
-		fmt.Fprintf(w, "        %s\n", display.Danger(rr.Error))
+		fmt.Fprintf(w, "        %s\n", display.Danger(display.Safe(rr.Error)))
 	}
 }
 
@@ -155,13 +155,13 @@ func printVerbose(w io.Writer, c *runner.CaseResult) {
 	for _, rr := range c.Runs {
 		for _, tr := range rr.Turns {
 			fmt.Fprintf(w, "      %s %s\n", display.Muted(fmt.Sprintf("run %d turn %d:", rr.Index, tr.Index)), truncate(strings.ReplaceAll(tr.Question, "\n", " "), 120))
-			for _, line := range strings.Split(truncate(tr.Answer, verboseAnswerLimit), "\n") {
+			for _, line := range strings.Split(truncate(display.StripControls(tr.Answer), verboseAnswerLimit), "\n") {
 				fmt.Fprintf(w, "        %s\n", line)
 			}
 		}
 		if rr.Answer != "" && len(rr.Turns) == 0 {
 			fmt.Fprintf(w, "      %s\n", display.Muted(fmt.Sprintf("run %d answer:", rr.Index)))
-			for _, line := range strings.Split(truncate(rr.Answer, verboseAnswerLimit), "\n") {
+			for _, line := range strings.Split(truncate(display.StripControls(rr.Answer), verboseAnswerLimit), "\n") {
 				fmt.Fprintf(w, "        %s\n", line)
 			}
 		}
@@ -170,11 +170,11 @@ func printVerbose(w io.Writer, c *runner.CaseResult) {
 			if er.Status > 0 {
 				label = fmt.Sprintf("server error (HTTP %d):", er.Status)
 			}
-			fmt.Fprintf(w, "      %s %s\n", display.Muted(fmt.Sprintf("run %d %s", rr.Index, label)), truncate(er.Message, verboseAnswerLimit))
+			fmt.Fprintf(w, "      %s %s\n", display.Muted(fmt.Sprintf("run %d %s", rr.Index, label)), truncate(display.Safe(er.Message), verboseAnswerLimit))
 		}
 		for _, a := range rr.Assertions {
 			if strings.HasSuffix(a.Name, "judge") && a.Message != "" {
-				fmt.Fprintf(w, "      %s %s\n", display.Muted(a.Name+":"), a.Message)
+				fmt.Fprintf(w, "      %s %s\n", display.Muted(a.Name+":"), display.StripControls(a.Message))
 			}
 		}
 	}

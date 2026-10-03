@@ -1,70 +1,239 @@
 package display
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
+
+// RenderHeader renders the one dim line that opens ask and chat:
+// "docsgpt [version] · key · server · cwd". The cwd loses leading
+// directories so the line never wraps.
+func RenderHeader(version, keyName, baseURL, cwd string) string {
+	head := T.Accent.Bold(true).Render("docsgpt")
+	if version != "" {
+		head += T.Dim.Render(" " + version)
+	}
+	sep := T.Dim.Render(" · ")
+	host := strings.TrimSuffix(baseURL, "/")
+	for _, scheme := range []string{"https://", "http://"} {
+		host = strings.TrimPrefix(host, scheme)
+	}
+	line := head
+	for _, part := range []string{keyName, host} {
+		if part != "" {
+			line += sep + T.Dim.Render(part)
+		}
+	}
+	width := termWidth()
+	if cwd != "" {
+		if room := width - lipgloss.Width(line+sep); room >= 8 {
+			line += sep + T.Dim.Render(shortenPath(abbreviateHome(cwd), room))
+		}
+	}
+	return ansi.Truncate(line, width, "…")
+}
+
+// chatHeader is what opens a chat, in width columns: a small mark beside
+// the name and version, then the key hints (newline names the key for a
+// new line), and the instruction files the context sends.
+func chatHeader(width int, version, newline string, files []string) string {
+	mark := []string{T.Accent.Render("█▀▄"), T.Accent.Render("█▄▀")}
+	name := T.Accent.Bold(true).Render("docsgpt")
+	if version != "" {
+		name += T.Dim.Render(" " + version)
+	}
+	keys := ""
+	pairs := []string{"/", "commands", "!", "run a command", newline, "new line", "ctrl+c twice", "quit"}
+	for i := 0; i < len(pairs); i += 2 {
+		next := T.Dim.Render(pairs[i]+" ") + T.Muted.Render(pairs[i+1])
+		if keys != "" {
+			next = keys + T.Dim.Render(" · ") + next
+		}
+		if lipgloss.Width(next) > width-5 {
+			break
+		}
+		keys = next
+	}
+	out := mark[0] + "  " + name + "\n" + mark[1] + "  " + keys
+	if len(files) > 0 {
+		out += "\n\n" + ansi.Truncate(T.Muted.Render("Context ")+T.Dim.Render(Safe(strings.Join(files, ", "))), width, "…")
+	}
+	return out
+}
+
+// ChatFooter is the left of the line under the chat input: the working
+// directory, its git branch and the chat's name, fitted beside right.
+func ChatFooter(cwd, name, right string) string {
+	branch := ""
+	if b := gitBranch(cwd); b != "" {
+		branch = " (" + Safe(b) + ")"
+	}
+	if name != "" {
+		branch += " · " + ansi.Truncate(Safe(name), 40, "…")
+	}
+	room := termWidth() - lipgloss.Width(right) - 2 - lipgloss.Width(branch)
+	return shortenPath(abbreviateHome(cwd), max(8, room)) + branch
+}
+
+// TokenUsage is the footer's count of tokens sent (↑) and received (↓):
+// the last exchange's, then the chat's when there were more ("↑2.1k ↓45
+// (Σ ↑12k ↓3.4k)"); "" before any.
+func TokenUsage(lastIn, lastOut, totalIn, totalOut int) string {
+	if totalIn+totalOut == 0 {
+		return ""
+	}
+	s := "↑" + Tokens(lastIn) + " ↓" + Tokens(lastOut)
+	if totalIn != lastIn || totalOut != lastOut {
+		s += " (Σ ↑" + Tokens(totalIn) + " ↓" + Tokens(totalOut) + ")"
+	}
+	return s
+}
+
+// Tokens renders a count compactly: 950, 1.2k, 12k, 1.5M.
+func Tokens(n int) string {
+	switch {
+	case n < 1000:
+		return fmt.Sprint(n)
+	case n < 10_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1000), ".0") + "k"
+	case n < 999_500:
+		return fmt.Sprintf("%dk", (n+500)/1000)
+	case n < 10_000_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1e6), ".0") + "M"
+	}
+	return fmt.Sprintf("%dM", (n+500_000)/1_000_000)
+}
+
+// WindowTitle is the terminal title of a chat: "docsgpt · <title> ·
+// <directory>", the chat's title (its name or first question) cut short.
+func WindowTitle(title, cwd string) string {
+	parts := []string{"docsgpt"}
+	if title = strings.Join(strings.Fields(StripControls(title)), " "); title != "" {
+		if r := []rune(title); len(r) > 40 {
+			title = strings.TrimSpace(string(r[:39])) + "…"
+		}
+		parts = append(parts, title)
+	}
+	if dir := filepath.Base(cwd); dir != "" && dir != "." && dir != string(filepath.Separator) {
+		parts = append(parts, dir)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// gitBranch returns the branch checked out in the repository holding dir
+// (a worktree's own), a short commit id on a detached HEAD, or "" outside a
+// repository. It reads HEAD instead of running git.
+func gitBranch(dir string) string {
+	for d := dir; ; d = filepath.Dir(d) {
+		git := filepath.Join(d, ".git")
+		if fi, err := os.Stat(git); err == nil {
+			if !fi.IsDir() { // a worktree or submodule: "gitdir: <path>"
+				data, _ := os.ReadFile(git)
+				path, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
+				if !ok {
+					return ""
+				}
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(d, path)
+				}
+				git = path
+			}
+			data, err := os.ReadFile(filepath.Join(git, "HEAD"))
+			if err != nil {
+				return ""
+			}
+			head := strings.TrimSpace(string(data))
+			if ref, ok := strings.CutPrefix(head, "ref: "); ok {
+				return strings.TrimPrefix(ref, "refs/heads/")
+			}
+			return head[:min(7, len(head))]
+		}
+		if filepath.Dir(d) == d {
+			return ""
+		}
+	}
+}
+
+// userMessage renders what the user sent in width columns: a block on a
+// subtle background, or after a "❯" without colours.
+func userMessage(width int, text string) string {
+	text = userText(text)
+	if Colorless() {
+		lines := strings.Split(ansi.Wrap(text, max(width-2, 10), ""), "\n")
+		for i, l := range lines {
+			if i == 0 {
+				lines[i] = T.ToolTitle.Render("❯") + " " + l
+			} else {
+				lines[i] = "  " + l
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+	return lipgloss.NewStyle().Background(colUserBg).Foreground(colText).Width(width).Padding(1, 1).Render(text)
+}
+
+// userText is the text of a user message as shown.
+func userText(text string) string {
+	return strings.ReplaceAll(strings.TrimRight(StripControls(text), "\n"), "\t", "    ")
+}
+
+// Ago renders how long ago t was: "just now", "5m ago", "3h ago", "2d ago",
+// or the date after a month.
+func Ago(t time.Time) string {
+	switch d := time.Since(t); {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+	return t.Local().Format("Jan 2, 2006")
+}
 
 // abbreviateHome replaces the home directory prefix with ~.
 func abbreviateHome(path string) string {
 	home, err := os.UserHomeDir()
-	if err != nil {
+	if err != nil || home == "" {
 		return path
 	}
-	if strings.HasPrefix(path, home) {
+	if path == home || strings.HasPrefix(path, home+string(filepath.Separator)) {
 		return "~" + path[len(home):]
 	}
 	return path
 }
 
-// RenderHeader renders a metadata header bar with key, server, and cwd.
-func RenderHeader(keyName, baseURL, cwd string) string {
-	w := termWidth()
-
-	sep := T.Muted.Render(" │ ")
-	parts := []string{
-		T.Accent.Bold(true).Render("docsgpt"),
-		T.Muted.Render("key: ") + T.Text.Render(keyName),
-		T.Muted.Render("server: ") + T.Text.Render(baseURL),
-	}
-
-	if cwd != "" {
-		short := abbreviateHome(cwd)
-		// Only show last 2 path components if long
-		if len(short) > 30 {
-			short = "~/" + filepath.Base(filepath.Dir(short)) + "/" + filepath.Base(short)
+// ShortPath shows path relative to the working directory when it lies
+// inside it, else with the home directory as ~.
+func ShortPath(path string) string {
+	if cwd, err := os.Getwd(); err == nil && filepath.IsAbs(path) {
+		if rel, err := filepath.Rel(cwd, path); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
 		}
-		parts = append(parts, T.Muted.Render("cwd: ")+T.Text.Render(short))
 	}
-
-	header := strings.Join(parts, sep)
-
-	style := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder(), false, false, true, false).
-		BorderForeground(T.Border.GetForeground()).
-		Width(w - 2)
-
-	return style.Render(header)
+	return abbreviateHome(path)
 }
 
-// RenderHints renders a hint bar for the given mode.
-func RenderHints(mode string) string {
-	var hints string
-	switch mode {
-	case "chat":
-		hints = "/quit  /clear  /copy  /think │ Ctrl+C interrupts an answer │ Ctrl+D exits"
-	case "ask":
-		hints = ""
-	default:
-		hints = ""
+// shortenPath drops leading directories of path until it fits in width
+// columns, marking the cut with "…"; the last element is kept whole.
+func shortenPath(path string, width int) string {
+	if lipgloss.Width(path) <= width {
+		return path
 	}
-
-	if hints == "" {
-		return ""
+	sep := string(filepath.Separator)
+	parts := strings.Split(path, sep)
+	for i := 1; i < len(parts); i++ {
+		if short := "…" + sep + strings.Join(parts[i:], sep); lipgloss.Width(short) <= width || i == len(parts)-1 {
+			return ansi.Truncate(short, width, "…")
+		}
 	}
-
-	return T.Muted.Render(hints)
+	return ansi.Truncate(path, width, "…")
 }

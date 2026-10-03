@@ -1,0 +1,322 @@
+# Chat
+
+```bash
+docsgpt-cli                      # open a chat
+docsgpt-cli chat "first message" # open one with a message
+docsgpt-cli -c                   # continue the latest chat in this directory
+docsgpt-cli -r                   # pick an earlier chat to resume
+```
+
+`docsgpt-cli` with no arguments opens a chat when stdin and stdout are a
+terminal. Answers stream in as markdown, followed by a short **Sources** list
+(linked when the source has a URL).
+
+The chat takes the whole window, like a full-screen program: a short header
+opens the conversation (version, keys, and the `AGENTS.md` / `CLAUDE.md` files
+the context sends), and the input stays at the bottom with a line under it: the
+directory, its git branch and the chat's name on the left; on the right the
+tokens of the last answer, sent and received (`↑2.5k ↓45`, followed by the
+chat's total, `(Σ ↑12k ↓3.4k)`, once there are more), the key and the server
+(and what is on, such as `think on`). You can type while an answer streams in;
+Enter then queues your message until the answer is done. Queued messages are
+listed above the input; Alt+↑ takes them back into it to edit, while the
+answer goes on. When you leave, the
+conversation is printed to the terminal, so it ends up in its scrollback as
+usual.
+
+## Scrolling
+
+The chat scrolls its own conversation, so the terminal's scrollbar has nothing
+to show while it runs.
+
+| Key | Action |
+|---|---|
+| Mouse wheel | Scroll |
+| PgUp / PgDn | A page up / down |
+| Shift+↑ / Shift+↓ | A line up / down |
+| Ctrl+↑ / Ctrl+↓ | Your previous / next message |
+| End, Ctrl+End | Back to the end (End when nothing is typed) |
+| Home, Ctrl+Home | To the start (Home when nothing is typed) |
+
+At the end, the view follows the answer as it streams. Scrolled back, it stays
+where you put it, and the line above the input counts what came in meanwhile
+(`↓ 12 new lines · end to jump`). Sending a message, or a question from the
+chat (an approval), brings you back to the end. Resizing the window wraps
+everything again at the new width.
+
+### Selecting text
+
+Drag over the conversation with the mouse to select text; when you let go it
+is copied, and the line above the input says so (`Copied 312 characters`).
+A double click selects a word (a path or a URL counts as one), a triple click
+the whole line as it was written: a paragraph, a list item, a line of code.
+Both copy at once. Dragging onto the top row or below the conversation
+scrolls it while you hold the button. The selection stays highlighted until
+the next click, Esc or a resize, and stays on its text while an answer
+streams in.
+
+What is copied is plain text: no colours, no indentation the chat adds (the
+two columns before code, a message's padding, a quote's bar), no spaces at
+the ends of lines. Lines the chat wrapped to fit the window are joined again,
+so a paragraph pastes as one line and a long line of code as one line. Across
+messages, the parts are a blank line apart. `/copy` copies the last answer,
+or one of its code blocks.
+
+The text goes to the system clipboard. Over SSH (`SSH_TTY` or
+`SSH_CONNECTION` set), or when there is no system clipboard (Linux without
+`xclip`, `xsel` or `wl-copy`), it goes to your terminal's clipboard instead,
+through the OSC 52 sequence, up to about 75 KB of text. Most terminals take it
+(in iTerm2, turn on *Applications in terminal may access clipboard* under
+Settings → General → Selection; Terminal.app has no support for it). In tmux, add `set -g set-clipboard on` to
+`~/.tmux.conf` so tmux passes it on to the terminal.
+
+The terminal's own selection still works with a modifier: Shift-drag in most
+terminals (kitty, WezTerm, Ghostty, Alacritty, Windows Terminal, GNOME
+Terminal, xterm, and tmux), Option-drag in iTerm2, Fn-drag in Terminal.app.
+
+`docsgpt-cli config set mouse off` (or `/settings`) leaves the mouse to the
+terminal: its selection works as usual and the keys above still scroll. The
+wheel then does whatever the terminal does on a full-screen program: many send
+↑ and ↓, which browse your earlier messages in the input.
+
+## Editor
+
+| Key | Action |
+|---|---|
+| Enter | Send |
+| Shift+Enter, Ctrl+J, Alt+Enter, or a line ending in `\` | New line |
+| ↑ / ↓ | Move between lines; on the first or last line, browse earlier messages |
+| Ctrl+G | Edit the message in `$VISUAL` / `$EDITOR` (vi by default) |
+| Ctrl+V | Attach the clipboard's image, or the files copied; else paste its text ([Attachments](#attachments)) |
+| Ctrl+A / Ctrl+E, Home / End | Start / end of the line |
+| Alt+← / Alt+→ (Ctrl+← / Ctrl+→) | Previous / next word |
+| Ctrl+W, Alt+Backspace | Delete the previous word |
+| Ctrl+U / Ctrl+K | Delete to the start / end of the line |
+| Ctrl+- | Undo: a word, a run of deletions, a paste or a recalled message at a time |
+| Alt+↑ | Take the queued messages back into the input (the answer goes on) |
+| Esc | Clear the selection; else stop the answer or the command that runs |
+| Esc Esc | On an empty input: edit an earlier message and send it again ([Editing a message](#editing-a-message)) |
+| Ctrl+C | Stop the answer, or clear the input; twice on an empty input quits |
+| Ctrl+D | Quit |
+| Ctrl+Z | Suspend (`fg` to come back) |
+| Ctrl+O | Expand or collapse the output of tool calls ([Tools](tools.md)) |
+| Ctrl+L | Redraw the window |
+
+Shift+Enter needs a terminal that can tell it from Enter: one with the kitty
+keyboard protocol or xterm's `modifyOtherKeys`, such as kitty, Ghostty,
+iTerm2, WezTerm, foot, Alacritty or xterm. The chat asks for both while it
+runs and turns them off when it ends. Terminal.app sends a plain Enter for
+Shift+Enter: use Ctrl+J there. In tmux, add `set -g extended-keys on` to
+`~/.tmux.conf` and restart tmux; until then the header shows `ctrl+j` instead
+of `shift+enter`.
+
+A long paste (over 10 lines or 1000 characters) shows as
+`[paste #1 +200 lines]` in the input. The marker is one piece: the cursor
+never stops inside it, and deleting any part of it deletes all of it.
+
+Your messages are kept in `~/.docsgpt/history` for ↑; lines that look like
+keys or tokens are left out.
+
+## Attachments
+
+A message can carry images and files: a screenshot of an error, a PDF, a
+spreadsheet. They show in the input as one-piece markers, like a long
+paste: `[image #1 · 240 KB]`, `[file #2 · spec.pdf · 1.2 MB]`.
+
+- **Ctrl+V** attaches the image on the clipboard (a screenshot taken with
+  Cmd+Ctrl+Shift+4, an image copied from a browser or an app), or the files
+  copied in Finder or Explorer. With neither, it pastes the clipboard's text.
+  Cmd+V in iTerm2 and Terminal.app is the terminal's own paste and only
+  pastes text, so use Ctrl+V for images. On Linux it needs `wl-paste`
+  (Wayland) or `xclip` (X11); on Windows it uses PowerShell. Over SSH the
+  clipboard read is the remote machine's.
+- **Drop files** on the terminal window: the paths the terminal pastes
+  (`/Users/me/My\ Shot.png`, quoted, or `file://` URLs) become attachments
+  when the paste is nothing but paths of existing files. In a `!command` or
+  a `/command` they stay paths.
+- **`@path`** in a message attaches that file when you send it: `what does
+  @docs/install.md miss?` (relative to the working directory; `@"My
+  Shot.png"` for a name with spaces). An `@word` that names no file stays
+  text. The transcript shows it as a marker.
+
+The marker deletes as one piece, Ctrl+- brings it back, and Alt+↑ keeps the
+files of queued messages. Images go as PNG, JPEG, WebP or GIF (the first
+frame, as a PNG); documents as the server reads them: PDF, Office and
+OpenDocument files, EPUB, HTML, Markdown, CSV, JSON, XML and any text file.
+A file may be up to 100 MB, a message carry 100 MB and 20 files in all;
+a file that cannot go is named in the status row, and a message that cannot
+go is not sent and comes back into the input. Whether the agent sees an
+image depends on its model reading images.
+
+The server keeps the files with the conversation, so later messages can ask
+about them without sending them again. ↑ recalls a message with its markers
+as text, not the files. The saved chat keeps each file's path, size and
+sha256, not its bytes; a resumed chat shows the markers, and `/edit` or
+`/retry` attach the files again while they are still there. An image from
+the clipboard is saved in the system's temporary directory
+(`docsgpt-clipboard/`).
+
+## Slash commands
+
+Type `/` to see them, filtered as you type. Tab completes, Enter runs.
+
+| Command | Action |
+|---|---|
+| `/new` (`/clear`) | Start a new conversation |
+| `/resume` | Pick an earlier chat in this directory (Ctrl+R renames it, Ctrl+D deletes it) |
+| `/name [title]` | Name the chat; without a title, shows the name to change or clear |
+| `/edit` | Edit an earlier message and send it again (also Esc Esc) |
+| `/retry` | Send the last message again: one that failed or was stopped, else the last question |
+| `/good`, `/bad` | Rate the last answer for the agent's owner ([Feedback](#feedback)) |
+| `/copy` | Copy the last answer, or one of its code blocks |
+| `/export [file]` | Save the conversation as markdown (default `docsgpt-<date>.md`; `~/` is your home directory; asks before overwriting a file, No by default) |
+| `/think` | Show or hide the model's reasoning |
+| `/approve` | Run tool calls without asking (the footer then shows `auto-approve`), or ask again; see [Tools](tools.md#always-approve) |
+| `/key` | Switch to another stored key, or add one |
+| `/settings` | Open the settings menu |
+| `/changelog` | Show what's new in the latest release (fetched when the last update check is over a day old) |
+| `/help` | Show commands and keys |
+| `/quit` (`/exit`) | Leave |
+
+A line starting with `/` that is not a command, such as a path
+(`/etc/hosts is empty, why?`), is sent as a message.
+
+## Shell commands
+
+`!command` runs a command on your machine, shows its output, and sends that
+output along with your next message. `!!command` runs it without sending
+anything. These run without approval and without a time limit, since you typed
+them.
+
+## Sessions
+
+Every chat is saved under `~/.docsgpt/sessions/<directory>-<hash>/`, one JSONL
+file per chat (readable only by you): `<directory>` is the last 48 characters
+of the working directory's path, made file-name safe, and `<hash>` tells apart
+paths that read the same. Sessions belong to the directory you started them
+in; the list shows only the chats recorded for it.
+
+- `docsgpt-cli -c` continues the latest chat of this directory.
+- `docsgpt-cli -r` or `/resume` lists them (type to filter) with age, length and
+  key; the conversation is shown again.
+- A resumed chat goes on in the same server conversation when the key and
+  server are the same. Otherwise it continues in a new conversation, with the
+  saved messages as history.
+- When you leave, the CLI reminds you of `docsgpt-cli -c`.
+- `/name Deploy notes` names the chat: the name shows in the footer, in the
+  terminal's title and in the `/resume` list instead of the first message.
+  `/name` alone shows it to change, or to clear by emptying it.
+- In the `/resume` list, Ctrl+R renames the highlighted chat and Ctrl+D deletes
+  it (after a confirmation; not the chat you are in).
+- The token counts of each answer are saved too, so a resumed chat's footer
+  shows its total again.
+
+### Editing a message
+
+Esc twice on an empty input (or `/edit`) lists your messages, newest first
+(type to filter). The one you pick goes back into the input, and the chat goes
+back to before it: the transcript is drawn again up to there, under
+`── edited from message 3 ──`. Change it and send it, and the chat goes on from
+there in a new session that starts with a copy of the earlier exchanges; the
+whole chat as it was stays in `/resume`. The agent gets the earlier messages
+again as the history of a new server conversation.
+
+`/retry` sends your last message again: the one that failed or that you
+stopped, else your last question, going back to before its answer the same
+way.
+
+### Feedback
+
+`/good` and `/bad` rate the last answer. The rating goes to the server with the
+key the answer came with, and the agent's owner sees it with the conversation
+in DocsGPT; the line `✓ Feedback sent` confirms it. The server keeps only the
+rating: text after the command is not sent. An answer that the server kept no
+conversation for (an older server) cannot be rated.
+
+## Window title and notifications
+
+While the chat runs, the terminal's title (its tab) reads
+`docsgpt · <name or first message> · <directory>`; the title from before comes
+back when you leave or suspend the chat (in terminals that keep a title stack,
+such as xterm, iTerm2, kitty, WezTerm, Ghostty and tmux).
+
+When an answer is ready, fails, or a tool call waits for your approval while
+the terminal is not focused, the chat sends a notification: a desktop
+notification in iTerm2, kitty, Ghostty, WezTerm, foot, rxvt and VTE terminals
+(GNOME Terminal and others), else the terminal's bell (Terminal.app bounces its
+Dock icon). It needs the terminal's focus reports; in tmux, add
+`set -g focus-events on` to `~/.tmux.conf` (tmux then turns the bell into its
+window alert). `docsgpt-cli config set notify off` (or `/settings`) turns
+notifications off.
+
+## Stopping
+
+Esc or Ctrl+C stops the answer, or the command the agent (or `!cmd`) is
+running, and leaves you in the chat; messages you queued meanwhile go back into
+the input. Esc or Ctrl+C at an approval stops the whole answer. A `TERM` or
+`HUP` signal (`kill`, `timeout`, a closed terminal) ends the chat, also while
+you type or pick from a menu (nothing half-typed is sent). Either way the
+terminal is restored before the CLI exits. Exit codes follow the shell's: `130`
+for Ctrl+C in a one-shot question, `143` for `TERM`, `129` for `HUP`.
+
+## Context
+
+The first message of a conversation carries a short `<context>` block, so the
+agent knows where you are:
+
+| What | Setting | Default |
+|---|---|---|
+| The working directory | `send_current_directory` | on |
+| Its first 50 entries | `send_directory_contents` | on |
+| `AGENTS.md` (else `CLAUDE.md`) of every directory from the repository root down to the working directory, 12 KB in all | `send_project_instructions` | on |
+| Your last shell commands (zsh, bash, fish) | `send_last_commands`, `number_of_last_commands` | off, 3 |
+
+The block is sent again only when it changes. `--no-context` sends none of it
+(the tools stay available). Change the settings with `/settings`,
+`docsgpt-cli config`, or see [Configuration](configuration.md).
+
+## Flags
+
+| Flag | Effect |
+|---|---|
+| `-c`, `--continue` | Continue the latest chat in this directory |
+| `-r`, `--resume` | Pick a chat to resume |
+| `--no-stream` | Print each answer once it is complete |
+| `--no-context` | Don't send the context block |
+| `--no-tools` | Don't let the agent run commands or read and write files |
+| `--auto-approve` | Run the agent's tool calls without asking |
+| `--tool-timeout <s>` | Seconds a command run by the agent may take (default 30; formerly `--timeout`) |
+| `--key <name>` | Chat with this stored key |
+| `--url <url>` | Use this server |
+
+The same flags (except `-c` and `-r`) work for one-shot questions, which also
+take `--no-stdin` ([Ask once](quickstart.md#4-ask-once)).
+
+## Display
+
+- The dino banner shows in interactive chats only: `once` by default,
+  `config set banner always|once|never`.
+- Colours follow the terminal background (`config set theme auto|dark|light`);
+  `NO_COLOR` turns them off.
+- Answers are cleaned of terminal control sequences before they are drawn, so
+  a model cannot recolour, retitle or clear your terminal or write to your
+  clipboard. The same goes for resumed chats and `/export` files.
+
+### Links
+
+Links in answers (`[text](url)`, `<url>` and bare URLs) are underlined, and
+in terminals that support it they are clickable hyperlinks (OSC 8) showing
+just their text. Elsewhere the URL follows the text, dim: `the docs
+(https://…)`. Only `http`, `https` and `mailto` links become clickable.
+
+Clickable links are on by default in iTerm2, kitty, Ghostty, WezTerm, Warp,
+Windows Terminal, Alacritty and VS Code, and in tmux when it passes them on
+(`set -as terminal-features ",*:hyperlinks"` in `~/.tmux.conf`); off in
+Terminal.app and terminals the chat does not recognise, where the URL would
+vanish. `docsgpt-cli config set hyperlinks on|off|auto`, or
+`DOCSGPT_HYPERLINKS=1|0|auto` for one run, decides instead.
+
+In the chat a click on a link opens it in your browser (not over SSH): with
+the mouse on, the chat takes the click, not the terminal. Selecting a link
+copies its text, as shown. The Sources list under an answer is linked too
+unless hyperlinks are off. Piped output of a question stays the raw markdown.

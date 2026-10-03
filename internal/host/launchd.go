@@ -27,7 +27,7 @@ const (
 // root (or explicit --system) installs a LaunchDaemon (runs at boot).
 //
 // For a LaunchDaemon with no explicit --user, it prefers $SUDO_USER and
-// falls back to root (with a warning). ``note`` is a possibly-empty,
+// falls back to root (with a warning). `note` is a possibly-empty,
 // possibly-multi-line message explaining an automatic choice.
 func ResolveLaunchdMode(isRoot, systemFlag bool, userFlag, sudoUser string) (mode ServiceMode, runUser, note string) {
 	switch {
@@ -102,8 +102,8 @@ func LaunchdLogPath(mode ServiceMode, runUser string) (string, error) {
 
 // RenderLaunchdPlist returns the plist XML for the given mode.
 //
-// ``exec`` is the absolute path to the docsgpt-cli binary; ``logPath`` is the
-// StandardOut/StandardError destination. For ServiceModeSystem, ``runUser``
+// `exec` is the absolute path to the docsgpt-cli binary; `logPath` is the
+// StandardOut/StandardError destination. For ServiceModeSystem, `runUser`
 // (when non-empty) is emitted as a UserName key so the daemon does not run as
 // root; it is ignored for ServiceModeUser (LaunchAgents run as the user).
 //
@@ -145,7 +145,7 @@ func RenderLaunchdPlist(mode ServiceMode, exec, runUser, logPath string) string 
 	return b.String()
 }
 
-// WriteLaunchdPlist writes the plist at ``path`` with 0644 permissions,
+// WriteLaunchdPlist writes the plist at `path` with 0644 permissions,
 // creating parent directories (0755 for daemons, 0700 for the per-user agent
 // dir under ~). It also ensures the log file's parent directory exists.
 func WriteLaunchdPlist(path, content string, mode ServiceMode) error {

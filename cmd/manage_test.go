@@ -14,12 +14,14 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/manage"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -28,6 +30,7 @@ const cmdTestToken = "dgpt_pat_AbCdEfSECRETSECRETSECRETSECRET"
 
 func TestMain(m *testing.M) {
 	display.InitTheme("auto")
+	questionArgs()
 	os.Exit(m.Run())
 }
 
@@ -40,6 +43,7 @@ func isolateConfig(t *testing.T) string {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv(config.EnvToken, "")
 	t.Setenv(config.EnvURL, "")
+	t.Setenv(config.EnvAPIKey, "")
 	oldToken, oldURL := globalToken, globalURL
 	globalToken, globalURL = "", ""
 	t.Cleanup(func() { globalToken, globalURL = oldToken, oldURL })
@@ -68,6 +72,8 @@ func TestExitCodeFor(t *testing.T) {
 		{"wrapped usage", fmt.Errorf("context: %w", usageErrf("bad")), 2},
 		{"explicit failure", &exitError{code: exitFailure, err: errors.New("blocked")}, 1},
 		{"api error", &manage.APIError{Status: 403, Code: manage.CodeInsufficientScope}, 1},
+		{"TERM", ui.Signal{Signal: syscall.SIGTERM}, 143},
+		{"HUP at a prompt", fmt.Errorf("pick: %w", ui.Signal{Signal: syscall.SIGHUP}), 129},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -84,18 +90,82 @@ func TestExitCodeFor(t *testing.T) {
 	}
 }
 
-func TestManagementCommandsSkipBanner(t *testing.T) {
-	for _, c := range []*cobra.Command{loginCmd, logoutCmd, whoamiCmd, agentsApplyCmd, sourcesUploadCmd, promptsListCmd, toolsListCmd} {
-		if !hasNoBanner(c) {
-			t.Errorf("%s should skip the banner", c.CommandPath())
-		}
-		if !c.SilenceUsage {
-			t.Errorf("%s should not dump usage on runtime errors", c.CommandPath())
+// runRoot executes the root command with args, as the binary would.
+func runRoot(t *testing.T, args ...string) error {
+	t.Helper()
+	rootCmd.SetArgs(args)
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	t.Cleanup(func() { rootCmd.SetArgs(nil); rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
+	return rootCmd.Execute()
+}
+
+func TestRootUsageErrors(t *testing.T) {
+	isolateConfig(t)
+	if !rootCmd.SilenceUsage {
+		t.Error("runtime errors should not dump usage")
+	}
+	for _, args := range [][]string{
+		{"agents", "list", "--bogus"},
+		{"--bogus", "question"},
+		{"agnets"},
+		{"agnets", "list"},
+		{"agents", "lst"},
+		{"config", "sett"},
+	} {
+		if err := runRoot(t, args...); exitCodeFor(err) != exitUsage {
+			t.Errorf("%q: err = %v, want a usage error", args, err)
 		}
 	}
-	for _, c := range []*cobra.Command{askCmd, chatCmd, benchCmd} {
-		if hasNoBanner(c) {
-			t.Errorf("%s should keep the banner", c.CommandPath())
+	// A typo hint names the command and how to ask anyway.
+	err := runRoot(t, "agnets")
+	if err == nil || !strings.Contains(err.Error(), `"agents"`) || !strings.Contains(err.Error(), `docsgpt-cli -- "agnets"`) {
+		t.Errorf("typo hint = %v", err)
+	}
+}
+
+// TestQuestionArgs: words after a command that takes none are a usage
+// error pointing at how to ask them instead, and nothing runs.
+func TestQuestionArgs(t *testing.T) {
+	isolateConfig(t)
+	for _, args := range [][]string{
+		{"update", "my", "nginx", "config"},
+		{"install", "my", "thing"},
+		{"host", "my", "files"},
+		{"bench", "press", "form", "tips"},
+		{"login", "to", "my", "server"},
+		{"config", "my", "nginx"},
+	} {
+		err := runRoot(t, args...)
+		if hint := `docsgpt-cli -- "` + strings.Join(args, " ") + `"`; exitCodeFor(err) != exitUsage || !strings.Contains(err.Error(), hint) {
+			t.Errorf("%q: err = %v, want a usage error with %s", args, err, hint)
+		}
+	}
+}
+
+func TestCommandTypo(t *testing.T) {
+	for _, tt := range []struct {
+		args []string
+		typo bool
+	}{
+		{[]string{"agnets"}, true},
+		{[]string{"Agents"}, true},
+		{[]string{"agent", "list"}, true},
+		{[]string{"how", "do", "I", "list", "files?"}, false},
+		{[]string{"how do I rotate the key?"}, false},
+		{[]string{"kubernetes"}, false},
+		{[]string{"list", "agents"}, false},
+	} {
+		if got := commandTypo(rootCmd, tt.args) != nil; got != tt.typo {
+			t.Errorf("commandTypo(%q) = %v, want %v", tt.args, got, tt.typo)
+		}
+	}
+}
+
+func TestSuggestionsClosestFirst(t *testing.T) {
+	for typed, want := range map[string]string{"sett": "set", "gte": "get", "shwo": "show"} {
+		if got := suggestions(configCmd, typed); len(got) == 0 || got[0] != want {
+			t.Errorf("suggestions(config, %q) = %q, want %q first", typed, got, want)
 		}
 	}
 }
@@ -191,8 +261,15 @@ func TestLoginWhoamiLogout(t *testing.T) {
 	}
 	globalToken = ""
 
+	// Without a terminal, logout needs --yes.
+	logoutToken = tokenSwitch{on: true}
+	t.Cleanup(func() { logoutToken, logoutYes = tokenSwitch{}, false })
+	if err := runLogout(nil, &out); exitCodeFor(err) != exitUsage {
+		t.Fatalf("logout without --yes: %v", err)
+	}
+	logoutYes = true
 	out.Reset()
-	if err := runLogout(&out); err != nil {
+	if err := runLogout(nil, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "still set") {
@@ -203,39 +280,182 @@ func TestLoginWhoamiLogout(t *testing.T) {
 		t.Errorf("after logout: %+v", cfg)
 	}
 	t.Setenv(config.EnvToken, "")
-	if err := runWhoami(ctx, false, &out); exitCodeFor(err) != exitUsage {
-		t.Errorf("whoami without a token should be a usage error, got %v", err)
+	if err := runWhoami(ctx, false, &out); exitCodeFor(err) != exitFailure || !strings.Contains(err.Error(), "not logged in") {
+		t.Errorf("whoami when logged out should exit 1, got %v", err)
+	}
+	if err := runWhoami(ctx, true, &out); exitCodeFor(err) != exitFailure {
+		t.Errorf("whoami --json without a token should exit 1, got %v", err)
 	}
 	if _, err := newManageClient(); exitCodeFor(err) != exitUsage {
 		t.Errorf("newManageClient without a token: %v", err)
 	}
 }
 
-func TestReadLoginTokenFromPipe(t *testing.T) {
+// TestLoginTokenKeepsKeysOnTheirServer: logging in to another server off a
+// terminal must not silently move the stored agent keys there.
+func TestLoginTokenKeepsKeysOnTheirServer(t *testing.T) {
+	isolateConfig(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonReply(w, 200, meBody)
+	}))
+	defer srv.Close()
+	cfg := config.DefaultConfig()
+	cfg.BaseURL = "https://docs.example.com"
+	cfg.Keys["support"] = "0123abcd-0000-1111-2222-333344445555"
+	cfg.DefaultKey = "support"
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err := runLogin(context.Background(), cmdTestToken, srv.URL, &out)
+	if exitCodeFor(err) != exitUsage || !strings.Contains(err.Error(), "support") {
+		t.Fatalf("login to another server: err = %v, want a usage error naming the keys", err)
+	}
+	if cfg, _ := config.Load(); cfg.BaseURL != "https://docs.example.com" || cfg.Token != "" {
+		t.Errorf("config changed: base %q, token stored %v", cfg.BaseURL, cfg.Token != "")
+	}
+
+	cfg.BaseURL = srv.URL + "/" // the same server: fine
+	cfg.Save()
+	if err := runLogin(context.Background(), cmdTestToken, srv.URL, &out); err != nil {
+		t.Fatalf("login to the keys' server: %v", err)
+	}
+}
+
+func TestLoginAgentKey(t *testing.T) {
+	isolateConfig(t)
+	const goodKey = "0123abcd-0000-1111-2222-333344445555"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer "+goodKey {
+			jsonReply(w, 401, `{"error":{"message":"Invalid API key","type":"auth_error"}}`)
+			return
+		}
+		jsonReply(w, 200, `{"object":"list","data":[{"id":"a-1","name":"Support Bot","object":"model"}]}`)
+	}))
+	defer srv.Close()
+	globalURL = srv.URL
+	ctx := context.Background()
+	var out bytes.Buffer
+
+	if err := loginKey(ctx, "wrong-key-wrong-key", "", &out); err == nil || !strings.Contains(err.Error(), "rejected") {
+		t.Fatalf("bad key: %v", err)
+	}
+	// Named after the agent, and the default.
+	if err := loginKey(ctx, goodKey, "", &out); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := config.Load()
+	if cfg.Keys["support-bot"] != goodKey || cfg.DefaultKey != "support-bot" || cfg.BaseURL != srv.URL {
+		t.Fatalf("stored config = %+v", cfg)
+	}
+	// The same key again keeps its name; another name for it is explicit.
+	if err := loginKey(ctx, goodKey, "", &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := loginKey(ctx, goodKey, "ci", &out); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = config.Load()
+	if len(cfg.Keys) != 2 || cfg.DefaultKey != "ci" {
+		t.Fatalf("keys = %v, default %q", cfg.Keys, cfg.DefaultKey)
+	}
+	if strings.Contains(out.String(), goodKey) {
+		t.Errorf("output leaks the key:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := runWhoami(ctx, false, &out); err != nil {
+		t.Fatalf("whoami: %v", err)
+	}
+	for _, want := range []string{"ci (default)", "0123…5555", "Support Bot", "Personal access token: none"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("whoami lacks %q:\n%s", want, out.String())
+		}
+	}
+
+	// Removing the default promotes the next key.
+	logoutYes = true
+	t.Cleanup(func() { logoutYes = false })
+	if err := runLogout([]string{"ci"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ = config.Load()
+	if len(cfg.Keys) != 1 || cfg.DefaultKey != "support-bot" {
+		t.Fatalf("after logout: keys = %v, default %q", cfg.Keys, cfg.DefaultKey)
+	}
+	if err := runLogout([]string{"nope"}, &out); exitCodeFor(err) != exitUsage {
+		t.Errorf("unknown key: %v", err)
+	}
+}
+
+// logout --token shadows the global --token <pat>: a token given to it, or
+// alone, names the stored token and is never looked up as a key name.
+func TestLogoutByToken(t *testing.T) {
+	isolateConfig(t)
+	cfg := config.DefaultConfig()
+	cfg.Keys["support"] = "k-1"
+	cfg.Token = cmdTestToken
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	logoutYes = true
+	t.Cleanup(func() { logoutToken, logoutYes = tokenSwitch{}, false })
+
+	var out bytes.Buffer
+	other := "dgpt_pat_OtherOtherOTHERSECRET"
+	err := runLogout([]string{other}, &out)
+	if exitCodeFor(err) != exitUsage || strings.Contains(err.Error(), "OTHERSECRET") || !strings.Contains(err.Error(), "not the stored access token") {
+		t.Fatalf("other token: %v", err)
+	}
+
+	var sw tokenSwitch
+	if err := sw.Set(cmdTestToken); err != nil || !sw.on || sw.value != cmdTestToken {
+		t.Fatalf("--token=<pat>: %+v %v", sw, err)
+	}
+	if err := sw.Set("maybe"); err == nil {
+		t.Error("--token=maybe should not parse")
+	}
+	logoutToken = tokenSwitch{on: true}
+	if err := runLogout([]string{cmdTestToken}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ = config.Load(); cfg.Token != "" || cfg.Keys["support"] != "k-1" {
+		t.Errorf("after logout --token <pat>: token %q, keys %v", cfg.Token, cfg.Keys)
+	}
+}
+
+func TestChatKeyWithoutKeyOffTerminal(t *testing.T) {
+	isolateConfig(t)
+	cfg := config.DefaultConfig()
+	_, _, err := chatKey(&cfg)
+	if err == nil || !strings.Contains(err.Error(), "docsgpt-cli login") || !strings.Contains(err.Error(), config.EnvAPIKey) || exitCodeFor(err) != exitFailure {
+		t.Fatalf("chatKey() = %v", err)
+	}
+	t.Setenv(config.EnvAPIKey, "k-env")
+	if name, key, err := chatKey(&cfg); err != nil || key != "k-env" || name != config.EnvAPIKey {
+		t.Errorf("chatKey() with %s = %q %q %v", config.EnvAPIKey, name, key, err)
+	}
+}
+
+func TestReadPipedSecret(t *testing.T) {
 	tests := []struct {
 		name    string
-		flag    string
 		piped   string
 		want    string
 		wantErr bool
 	}{
-		{"flag wins", " dgpt_pat_flag ", "dgpt_pat_pipe\n", "dgpt_pat_flag", false},
-		{"piped, first line only", "", "dgpt_pat_pipe\nextra\n", "dgpt_pat_pipe", false},
-		{"piped without newline", "", "dgpt_pat_pipe", "dgpt_pat_pipe", false},
-		{"empty pipe", "", "\n", "", true},
+		{"first line only", "dgpt_pat_pipe\nextra\n", "dgpt_pat_pipe", false},
+		{"without newline", " key-1 ", "key-1", false},
+		{"empty pipe", "\n", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r, w, err := os.Pipe()
-			if err != nil {
-				t.Fatal(err)
-			}
-			io.WriteString(w, tt.piped)
-			w.Close()
-			defer r.Close()
-			got, err := readLoginToken(tt.flag, r, io.Discard)
+			got, err := readPipedSecret(strings.NewReader(tt.piped))
 			if (err != nil) != tt.wantErr || got != tt.want {
-				t.Errorf("readLoginToken() = %q, %v; want %q, err %v", got, err, tt.want, tt.wantErr)
+				t.Errorf("readPipedSecret() = %q, %v; want %q, err %v", got, err, tt.want, tt.wantErr)
 			}
 			if tt.wantErr && exitCodeFor(err) != exitUsage {
 				t.Errorf("exit code = %d, want 2", exitCodeFor(err))
@@ -540,6 +760,10 @@ func TestSourcesUploadAndWait(t *testing.T) {
 			if got := exitCodeFor(err); got != tt.wantExit {
 				t.Fatalf("exit = %d (%v), want %d", got, err, tt.wantExit)
 			}
+			// A timed-out poll may still be in the handler.
+			srv.Close()
+			mu.Lock()
+			defer mu.Unlock()
 			if tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("err = %v, want %q", err, tt.wantErr)
 			}
@@ -588,7 +812,7 @@ func TestSourcesUploadJSONReportsFailure(t *testing.T) {
 	if exitCodeFor(err) != 1 {
 		t.Fatalf("err = %v", err)
 	}
-	var report uploadReport
+	var report manage.UploadReport
 	if jsonErr := json.Unmarshal(stdout.Bytes(), &report); jsonErr != nil {
 		t.Fatalf("stdout is not JSON: %v\n%s", jsonErr, stdout.String())
 	}
@@ -601,7 +825,7 @@ func TestListCommandsOutput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/get_agents":
-			jsonReply(w, 200, `[{"id":"a1","name":"Support","slug":"support","agent_type":"classic","status":"published","ownership":"user"}]`)
+			jsonReply(w, 200, `[{"id":"a1","name":"Sup\u001b[2Jport","slug":"support","agent_type":"classic","status":"published","ownership":"user"}]`)
 		case "/api/sources":
 			jsonReply(w, 200, `[{"id":"s1","name":"Docs","tokens":1234,"type":"file","date":"2026-01-01","ownership":"user"}]`)
 		case "/api/get_prompts":
@@ -619,7 +843,7 @@ func TestListCommandsOutput(t *testing.T) {
 		run  func(io.Writer, bool) error
 		want []string
 	}{
-		{"agents", func(w io.Writer, j bool) error { return runAgentsList(ctx, client, j, w) }, []string{"a1", "Support", "published", "support"}},
+		{"agents", func(w io.Writer, j bool) error { return runAgentsList(ctx, client, j, w) }, []string{"a1", "Sup␛[2Jport", "published", "support"}},
 		{"sources", func(w io.Writer, j bool) error { return runSourcesList(ctx, client, j, w) }, []string{"s1", "Docs", "1234"}},
 		{"prompts", func(w io.Writer, j bool) error { return runPromptsList(ctx, client, j, w) }, []string{"default", "public"}},
 	}
@@ -633,6 +857,9 @@ func TestListCommandsOutput(t *testing.T) {
 				if !strings.Contains(table.String(), want) {
 					t.Errorf("table lacks %q:\n%s", want, table.String())
 				}
+			}
+			if strings.Contains(table.String(), "\x1b") {
+				t.Errorf("table carries a raw escape:\n%q", table.String())
 			}
 			if err := tt.run(&doc, true); err != nil {
 				t.Fatal(err)
@@ -672,26 +899,10 @@ func TestAgentsExportToFile(t *testing.T) {
 	}
 }
 
+// Off a terminal (as under go test), a destructive action needs --yes.
 func TestConfirmDestructive(t *testing.T) {
-	tests := []struct {
-		name        string
-		input       string
-		interactive bool
-		wantExit    int
-	}{
-		{"yes", "y\n", true, 0},
-		{"full yes", "YES\n", true, 0},
-		{"default is no", "\n", true, 1},
-		{"no", "n\n", true, 1},
-		{"non-interactive refuses", "y\n", false, 2},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := confirmDestructive(strings.NewReader(tt.input), io.Discard, tt.interactive, "Delete?")
-			if got := exitCodeFor(err); got != tt.wantExit {
-				t.Errorf("exit = %d (%v), want %d", got, err, tt.wantExit)
-			}
-		})
+	if err := confirmDestructive("Delete?"); exitCodeFor(err) != exitUsage || !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("err = %v, want a usage error asking for --yes", err)
 	}
 }
 
@@ -1108,7 +1319,7 @@ func TestAgentsTriggerJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	var report triggerReport
+	var report manage.TriggerReport
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
 	}
@@ -1127,7 +1338,7 @@ func TestAgentsTriggerJSON(t *testing.T) {
 	if exitCodeFor(err) != 1 {
 		t.Fatalf("err = %v", err)
 	}
-	report = triggerReport{}
+	report = manage.TriggerReport{}
 	if jsonErr := json.Unmarshal(stdout.Bytes(), &report); jsonErr != nil || report.Status != "FAILURE" || !strings.Contains(report.Error, "boom") {
 		t.Errorf("report = %+v (%v)", report, jsonErr)
 	}
@@ -1171,10 +1382,7 @@ func TestAgentsTriggerWebhookURLFromEnv(t *testing.T) {
 	}
 }
 
-func TestAgentsTriggerIsAManagementCommand(t *testing.T) {
-	if !hasNoBanner(agentsTriggerCmd) || !agentsTriggerCmd.SilenceUsage {
-		t.Error("agents trigger should skip the banner and not dump usage on runtime errors")
-	}
+func TestAgentsTriggerArgs(t *testing.T) {
 	if err := agentsTriggerCmd.Args(agentsTriggerCmd, []string{"a", "b"}); exitCodeFor(err) != exitUsage {
 		t.Errorf("two agent ids: %v", err)
 	}

@@ -1,7 +1,7 @@
 # Suite defaults for `docsgpt-cli bench`. Every setting here can be
 # overridden per case (case.yaml) or from the command line.
 
-# Agent to benchmark: a key NAME from `docsgpt-cli keys`, or a literal API key.
+# Agent to benchmark: a key NAME stored with `docsgpt-cli login`, or a literal API key.
 # Any value here (or in case.yaml) can reference environment variables as
 # ${VAR} — resolved from your shell, this directory's .env, or ./.env, in that
 # order ($$ escapes a literal dollar). That keeps committed YAML secret-free:

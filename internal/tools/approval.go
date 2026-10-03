@@ -1,155 +1,368 @@
 package tools
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/ui"
+	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 )
 
-type ApprovalResult int
+// Session runs the model's tool calls for one chat session or ask run.
+// Approval is the only gate: every command and write is shown and asked
+// about, unless AutoApprove is set or the user chose "Always allow" for it
+// earlier in the session. Reads ask only outside the working directory or
+// for files that may hold secrets (readReason).
+type Session struct {
+	AutoApprove bool          // run every call unasked: --auto-approve, "Always approve", /approve
+	Timeout     time.Duration // per command or read
+	UI          UI            // stderr when nil
 
-const (
-	Approved ApprovalResult = iota
-	Denied
-	Edited
-)
-
-// RequestApproval displays a tool call approval card and asks the user to approve, deny, or edit.
-// Returns the result and potentially edited arguments.
-func RequestApproval(toolName string, rawArgs string) (ApprovalResult, string, error) {
-	detail, preview := extractToolDetail(toolName, rawArgs)
-	risk := display.ToolRisk(toolName)
-
-	card := display.RenderApprovalCard(toolName, detail, preview, risk)
-	fmt.Println()
-	fmt.Println(card)
-	fmt.Print("  > ")
-
-	input, err := readLine(bufio.NewReader(os.Stdin))
-	if err != nil {
-		return Denied, rawArgs, err
-	}
-	input = strings.TrimSpace(strings.ToLower(input))
-
-	switch input {
-	case "1", "a", "approve", "y", "yes", "":
-		return Approved, rawArgs, nil
-	case "2", "d", "deny", "n", "no":
-		return Denied, rawArgs, nil
-	case "3", "e", "edit":
-		return editArgs(toolName, rawArgs)
-	default:
-		fmt.Println(display.Muted("  Invalid choice, denying."))
-		return Denied, rawArgs, nil
-	}
+	allowWrites bool
+	allowReads  bool
+	allowed     map[string]bool // keys of always-allowed commands
 }
 
-// extractToolDetail returns a detail string and optional preview lines for the tool.
-func extractToolDetail(toolName string, rawArgs string) (string, []string) {
-	switch toolName {
+func (s *Session) ui() UI {
+	if s.UI == nil {
+		s.UI = &stderrUI{}
+	}
+	return s.UI
+}
+
+// Handle runs one tool call and returns the result for the model. A
+// Ctrl+C (or Esc) at the approval prompt calls cancel, which stops the run.
+func (s *Session) Handle(ctx context.Context, cancel context.CancelFunc, tc docsgpt.ToolCall) string {
+	if ctx.Err() != nil {
+		return "The user interrupted the run before this tool call ran."
+	}
+	var args struct {
+		Command          string `json:"command"`
+		WorkingDirectory string `json:"working_directory"`
+		Path             string `json:"path"`
+		Content          string `json:"content"`
+		Offset           int    `json:"offset"`
+		Limit            int    `json:"limit"`
+	}
+	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+		return "Error: invalid arguments: " + err.Error()
+	}
+	switch name := NormalizeName(tc.Function.Name); name {
 	case "run_command":
-		var args struct {
-			Command          string `json:"command"`
-			WorkingDirectory string `json:"working_directory"`
-		}
-		json.Unmarshal([]byte(rawArgs), &args)
-		detail := "$ " + args.Command
-		if args.WorkingDirectory != "" {
-			detail += "\nin: " + args.WorkingDirectory
-		}
-		return detail, nil
-
+		return s.runCommand(ctx, cancel, args.Command, args.WorkingDirectory)
 	case "read_file":
-		var args struct {
-			Path string `json:"path"`
-		}
-		json.Unmarshal([]byte(rawArgs), &args)
-		return "Read: " + args.Path, nil
-
+		return s.readFile(ctx, cancel, args.Path, args.Offset, args.Limit)
 	case "write_file":
-		var args struct {
-			Path    string `json:"path"`
-			Content string `json:"content"`
-		}
-		json.Unmarshal([]byte(rawArgs), &args)
-		lines := strings.Split(args.Content, "\n")
-		preview := lines
-		if len(preview) > 5 {
-			preview = preview[:5]
-			preview = append(preview, fmt.Sprintf("... (%d more lines)", len(lines)-5))
-		}
-		return "Write to: " + args.Path, preview
-
+		return s.writeFile(ctx, cancel, args.Path, args.Content)
 	default:
-		return "Arguments: " + rawArgs, nil
+		return "Error: unknown tool " + name
 	}
 }
 
-func editArgs(toolName string, rawArgs string) (ApprovalResult, string, error) {
-	reader := bufio.NewReader(os.Stdin)
-
-	if toolName == "run_command" {
-		var args struct {
-			Command          string `json:"command"`
-			WorkingDirectory string `json:"working_directory"`
-		}
-		json.Unmarshal([]byte(rawArgs), &args)
-
-		fmt.Printf("  Edit command (current: %s)\n", args.Command)
-		fmt.Print("  $ ")
-		newCmd, err := readLine(reader)
-		if err != nil {
-			return Denied, rawArgs, err
-		}
-		args.Command = strings.TrimSpace(newCmd)
-		edited, _ := json.Marshal(args)
-		return Edited, string(edited), nil
+func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, command, dir string) string {
+	var note string
+	if dir != "" {
+		note = "in " + dir
 	}
-
-	// For other tools, let user edit raw JSON
-	fmt.Printf("  Edit arguments JSON (current: %s)\n", rawArgs)
-	fmt.Print("  > ")
-	newArgs, err := readLine(reader)
-	if err != nil {
-		return Denied, rawArgs, err
-	}
-	newArgs = strings.TrimSpace(newArgs)
-	if newArgs == "" {
-		return Denied, rawArgs, nil
-	}
-	return Edited, newArgs, nil
-}
-
-// readLine reads one line of user input, terminated by LF or CR. Accepting a
-// bare CR keeps the prompt usable even if the terminal is left in raw mode
-// (where Enter arrives as '\r' and ReadString('\n') would block forever).
-// A trailing LF after a CR is consumed so CRLF counts as one line ending. An
-// EOF that follows some input still returns that input.
-func readLine(r *bufio.Reader) (string, error) {
-	var b strings.Builder
+	edited, titled := false, false
 	for {
-		c, err := r.ReadByte()
-		if err != nil {
-			if err == io.EOF && b.Len() > 0 {
-				return b.String(), nil
-			}
-			return b.String(), err
+		if !titled {
+			s.ui().Open("$ "+command, note)
+			titled = true
 		}
-		switch c {
-		case '\n':
-			return b.String(), nil
-		case '\r':
-			if next, err := r.Peek(1); err == nil && next[0] == '\n' {
-				r.ReadByte()
+		if s.AutoApprove || s.allowed[alwaysKey(command)] {
+			break
+		}
+		var always *ui.Item
+		if key := display.Safe(alwaysKey(command)); key != "" {
+			always = &ui.Item{Label: "Always allow " + key, Description: "run " + key + " commands without asking this session"}
+		}
+		choice, refusal := s.ask(cancel, "run once", always, true)
+		if refusal != "" {
+			return refusal
+		}
+		if choice == "edit" {
+			// The one-line field shows the command as the title does; what
+			// the user submits is what runs, with ␊ read back as a newline.
+			shown := display.Safe(command)
+			v, err := s.ui().Edit("Edit command", shown)
+			if v = strings.TrimSpace(v); err == nil && v != "" && v != shown {
+				command, edited, titled = strings.ReplaceAll(v, "␊", "\n"), true, false
 			}
-			return b.String(), nil
-		default:
-			b.WriteByte(c)
+			continue // ask again, about the edited command
+		}
+		if choice == "always" {
+			if s.allowed == nil {
+				s.allowed = map[string]bool{}
+			}
+			s.allowed[alwaysKey(command)] = true
+		}
+		break
+	}
+
+	var out tailBuffer
+	start := time.Now()
+	err := runCommand(ctx, command, dir, s.Timeout, io.MultiWriter(&out, s.ui().Output()))
+	took := display.Duration(time.Since(start))
+
+	result := out.String()
+	if strings.TrimSpace(result) == "" {
+		result = "(no output)"
+	}
+	if edited {
+		result = fmt.Sprintf("[The user edited the command to: %s]\n%s", command, result)
+	}
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		s.ui().Close(true, "exit 0 · "+took)
+		return result
+	case errors.Is(err, context.Canceled):
+		s.ui().Close(false, "cancelled")
+		return result + "\n[The user interrupted the command.]"
+	case errors.Is(err, errTimeout):
+		s.ui().Close(false, "timed out after "+display.Duration(s.Timeout))
+		return result + fmt.Sprintf("\n[The command timed out after %s.]", display.Duration(s.Timeout))
+	case errors.As(err, &exit):
+		s.ui().Close(false, fmt.Sprintf("exit %d · %s", exit.ExitCode(), took))
+		return result + fmt.Sprintf("\n[The command exited with code %d.]", exit.ExitCode())
+	}
+	s.ui().Close(false, err.Error())
+	return result + "\n[The command failed: " + err.Error() + "]"
+}
+
+func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path string, offset, limit int) string {
+	title := "read " + display.ShortPath(path)
+	if offset > 1 || limit > 0 {
+		title += fmt.Sprintf(":%d", max(offset, 1))
+		if limit > 0 {
+			title += fmt.Sprintf("-%d", max(offset, 1)+limit-1)
 		}
 	}
+	real, err := regularFile(path)
+	if err != nil {
+		s.ui().Open(title, "")
+		s.ui().Close(false, err.Error())
+		return "Error: " + err.Error()
+	}
+	var reason string
+	if !s.AutoApprove && !s.allowReads {
+		reason = readReason(real)
+	}
+	var note string
+	if reason != "" {
+		note = "(" + reason + ")"
+		// Show where a symlink leads (one above the working directory,
+		// like /tmp on macOS, is not worth it).
+		given := path
+		if cwd, err := os.Getwd(); err == nil && !filepath.IsAbs(path) {
+			if c, err := filepath.EvalSymlinks(cwd); err == nil {
+				cwd = c
+			}
+			given = filepath.Join(cwd, path)
+		}
+		if filepath.Clean(given) != real {
+			note = "→ " + display.ShortPath(real) + " " + note
+		}
+	}
+	s.ui().Open(title, note)
+	if reason != "" {
+		choice, refusal := s.ask(cancel, "read this file once",
+			&ui.Item{Label: "Always allow reads", Description: "read any file without asking this session"}, false)
+		if refusal != "" {
+			return refusal
+		}
+		s.allowReads = choice == "always"
+	}
+
+	readCtx := ctx
+	if s.Timeout > 0 {
+		var stop context.CancelFunc
+		readCtx, stop = context.WithTimeout(ctx, s.Timeout)
+		defer stop()
+	}
+	text, shown, total, err := readFile(readCtx, real, offset, limit)
+	switch {
+	case ctx.Err() != nil:
+		s.ui().Close(false, "cancelled")
+		return "The user interrupted the read."
+	case errors.Is(err, context.DeadlineExceeded):
+		s.ui().Close(false, "timed out after "+display.Duration(s.Timeout))
+		return "Error: reading the file timed out."
+	case err != nil:
+		s.ui().Close(false, err.Error())
+		return "Error: " + err.Error()
+	}
+	status := lines(shown)
+	if shown < total {
+		status += fmt.Sprintf(" of %d", total)
+	}
+	s.ui().Close(true, status)
+	return text
+}
+
+// readReason says why reading the file at real (as resolved by
+// regularFile) needs the user's approval, or "" when it does not: the
+// file lies inside the working directory, which is not the home directory
+// or above it, and nothing on the way there looks like it holds secrets.
+func readReason(real string) string {
+	cwd, err := os.Getwd()
+	if err == nil {
+		cwd, err = filepath.EvalSymlinks(cwd)
+	}
+	if err != nil {
+		return "outside the working directory"
+	}
+	rel, err := filepath.Rel(cwd, real)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "outside the working directory"
+	}
+	// Compared as files: on macOS and Windows "cd /users/me" is the home
+	// directory under another spelling, which the path keeps.
+	if home, err := os.UserHomeDir(); err == nil {
+		if wd, err := os.Stat(cwd); err == nil {
+			for d := home; ; d = filepath.Dir(d) {
+				if fi, err := os.Stat(d); err == nil && os.SameFile(fi, wd) {
+					return "the working directory holds your home directory"
+				}
+				if filepath.Dir(d) == d {
+					break
+				}
+			}
+		}
+	}
+	for _, name := range strings.Split(rel, string(filepath.Separator)) {
+		if secretName(name) {
+			return "may hold secrets"
+		}
+	}
+	return ""
+}
+
+// secretNames are files and directories that commonly hold credentials.
+var secretNames = map[string]bool{
+	".ssh": true, ".gnupg": true, ".aws": true, ".azure": true, ".kube": true, ".docker": true,
+	".docsgpt": true, ".password-store": true, "gcloud": true, ".netrc": true, "_netrc": true,
+	".npmrc": true, ".yarnrc.yml": true, ".pypirc": true, ".pgpass": true, ".my.cnf": true, ".mylogin.cnf": true,
+	".htpasswd": true, ".vault-token": true, ".envrc": true, ".dockercfg": true, ".s3cfg": true, ".boto": true,
+	".terraformrc": true, "terraform.rc": true, ".authinfo": true, "auth.json": true,
+	"secrets": true, ".secrets": true, ".git-credentials": true, "credentials": true, "credentials.json": true,
+	"credentials.toml": true, "credentials.db": true, "application_default_credentials.json": true,
+}
+
+// secretName reports whether a file or directory name suggests secrets:
+// .env files, keys and certificates, shell histories.
+func secretName(name string) bool {
+	name = strings.ToLower(name)
+	switch ext := filepath.Ext(name); {
+	case secretNames[name], name == ".env", strings.HasPrefix(name, ".env."), ext == ".env",
+		strings.HasPrefix(name, "secrets."), strings.HasPrefix(name, "client_secret"),
+		strings.HasPrefix(name, "id_") && ext == "", strings.HasSuffix(name, "_history"):
+		return true
+	default:
+		return slices.Contains([]string{".pem", ".key", ".p12", ".pfx", ".p8", ".jks", ".keystore", ".kdbx",
+			".keychain", ".keychain-db", ".ppk", ".gpg", ".asc", ".ovpn", ".tfstate", ".tfvars"}, ext)
+	}
+}
+
+// maxPreviewBytes is the largest existing file a write shows a diff of.
+const maxPreviewBytes = 1 << 20
+
+func (s *Session) writeFile(ctx context.Context, cancel context.CancelFunc, path, content string) string {
+	title := "write " + display.ShortPath(path)
+	fi, err := os.Stat(path)
+	if err == nil && !fi.Mode().IsRegular() {
+		s.ui().Open(title, "")
+		s.ui().Close(false, path+" is not a regular file")
+		return "Error: " + path + " is not a regular file"
+	}
+	var before []byte
+	if err == nil && fi.Size() <= maxPreviewBytes {
+		before, _ = os.ReadFile(path)
+	}
+	preview, added, removed := display.DiffPreview(string(before), content, 10)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		s.ui().Open(title, "(new, "+lines(added)+")")
+	case err == nil && fi.Size() > maxPreviewBytes:
+		preview = nil
+		s.ui().Open(title, fmt.Sprintf("(replaces %d bytes with %s)", fi.Size(), lines(added)))
+	default:
+		s.ui().Open(title, fmt.Sprintf("(+%d −%d)", added, removed))
+	}
+	s.ui().Lines(preview)
+
+	if !s.AutoApprove && !s.allowWrites {
+		choice, refusal := s.ask(cancel, "write this file once",
+			&ui.Item{Label: "Always allow writes", Description: "write any file without asking this session"}, false)
+		if refusal != "" {
+			return refusal
+		}
+		s.allowWrites = choice == "always"
+	}
+	if ctx.Err() != nil {
+		s.ui().Close(false, "cancelled")
+		return "The user interrupted the run before this tool call ran."
+	}
+	if err := writeFile(path, content); err != nil {
+		s.ui().Close(false, err.Error())
+		return "Error: " + err.Error()
+	}
+	s.ui().Close(true, "wrote "+lines(len(splitLines(content))))
+	return fmt.Sprintf("Wrote %d bytes to %s.", len(content), path)
+}
+
+// ask shows the approval choices under the tool's title: Approve (once
+// describes it), the narrower "Always allow" when there is one, Always
+// approve, Deny and, with edit, Edit. It returns "approve", "always" or
+// "edit", or the result for the model when the call must not run: denied,
+// or cancelled (which also cancels the run). Always approve turns on
+// AutoApprove and returns "approve".
+func (s *Session) ask(cancel context.CancelFunc, once string, always *ui.Item, edit bool) (choice, refusal string) {
+	items := []ui.Item{{Label: "Approve", Value: "approve", Keys: []string{"a", "y"}, Description: once}}
+	if always != nil {
+		always.Value, always.Keys = "always", []string{"l"}
+		items = append(items, *always)
+	}
+	items = append(items,
+		ui.Item{Label: "Always approve", Value: "all", Keys: []string{"p"}, Description: "run every tool call without asking this session"},
+		ui.Item{Label: "Deny", Value: "deny", Keys: []string{"d", "n"}, Description: "don't run it, tell the model you declined"})
+	if edit {
+		items = append(items, ui.Item{Label: "Edit", Value: "edit", Keys: []string{"e"}, Description: "change the command, then decide again"})
+	}
+	choice, err := s.ui().Choose(items)
+	switch {
+	case errors.Is(err, ui.ErrCancelled):
+		cancel()
+		s.ui().Close(false, "cancelled")
+		return "", "The user interrupted the run before this tool call ran."
+	case err != nil:
+		s.ui().Close(false, "not run: "+err.Error())
+		return "", "The tool call could not be approved: " + err.Error()
+	case choice == "deny":
+		s.ui().Close(false, "denied")
+		return "", "The user denied this tool call."
+	case choice == "all":
+		s.AutoApprove = true
+		return "approve", ""
+	}
+	return choice, ""
+}
+
+// lines counts lines for a status: "1 line", "3 lines".
+func lines(n int) string {
+	if n == 1 {
+		return "1 line"
+	}
+	return fmt.Sprintf("%d lines", n)
 }

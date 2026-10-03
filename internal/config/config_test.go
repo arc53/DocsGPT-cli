@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -93,6 +94,39 @@ func TestResolveURLPrecedence(t *testing.T) {
 				t.Errorf("ResolveURL() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveKeyPrecedence(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Keys = map[string]string{"main": "k-main", "other": "k-other"}
+
+	t.Setenv(EnvAPIKey, "")
+	if _, _, err := cfg.ResolveKey(""); !errors.Is(err, ErrNoKey) {
+		t.Errorf("no default: err = %v, want ErrNoKey", err)
+	}
+	cfg.DefaultKey = "main"
+	if name, key, _ := cfg.ResolveKey(""); name != "main" || key != "k-main" {
+		t.Errorf("default = %q %q", name, key)
+	}
+	t.Setenv(EnvAPIKey, " k-env\n")
+	if name, key, _ := cfg.ResolveKey(""); name != EnvAPIKey || key != "k-env" {
+		t.Errorf("env over default = %q %q", name, key)
+	}
+	if name, key, _ := cfg.ResolveKey("other"); name != "other" || key != "k-other" {
+		t.Errorf("--key over env = %q %q", name, key)
+	}
+	if _, _, err := cfg.ResolveKey("missing"); err == nil || errors.Is(err, ErrNoKey) {
+		t.Errorf("unknown --key: err = %v", err)
+	}
+}
+
+func TestRedactKey(t *testing.T) {
+	if got := RedactKey("abcd1234-0000-1111-2222-000000009876"); got != "abcd…9876" {
+		t.Errorf("RedactKey = %q", got)
+	}
+	if got := RedactKey("short-key"); got != "…" {
+		t.Errorf("RedactKey(short) = %q", got)
 	}
 }
 
