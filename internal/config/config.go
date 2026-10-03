@@ -54,6 +54,7 @@ type Settings struct {
 	Mouse                   string `json:"mouse,omitempty"`                // "on" (the default), "off": the chat scrolls with the wheel and selects text to copy
 	AutoUpdate              string `json:"auto_update,omitempty"`          // "on", "notify", "off"
 	DisableUpdateCheck      bool   `json:"disable_update_check,omitempty"` // legacy, superseded by auto_update
+	Retry                   string `json:"retry,omitempty"`                // "on" (the default), "off": send a chat request that failed before its answer again
 }
 
 // AutoUpdateMode resolves the effective auto-update mode: "on" (stage and

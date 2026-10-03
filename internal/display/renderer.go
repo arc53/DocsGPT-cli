@@ -70,6 +70,9 @@ func NewStreamRenderer() *StreamRenderer {
 // or Flush.
 func (r *StreamRenderer) Wait() { r.spin.Start("Thinking…") }
 
+// Status swaps the spinner's message while it waits (a retry countdown).
+func (r *StreamRenderer) Status(msg string) { r.spin.Start(msg) }
+
 // Delta processes one streamed delta. Reasoning is shown only on a terminal
 // with ShowReasoning set, as a dim block of its own: the answer streamed so
 // far is committed before it, and the answer resumes after a blank line.

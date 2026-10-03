@@ -387,7 +387,7 @@ func (s *chatSession) send(text, shown string) {
 	ans := answer()
 	var texts []string
 	label := "Thinking…"
-	res, err := s.client.RunWithTools(ctx, messages, docsgpt.RunOptions{
+	res, err := retrying(ctx, s.client, s.cfg.Settings, s.scr.Status, "").RunWithTools(ctx, messages, docsgpt.RunOptions{
 		Tools: s.toolDefs, Stream: !globalNoStream, ConversationID: s.conversationID,
 		OnDelta: func(delta docsgpt.Delta, _ string) {
 			if ans.Delta(delta) {
@@ -420,7 +420,7 @@ func (s *chatSession) send(text, shown string) {
 		// The server may have refused the conversation (deleted, say):
 		// the next turn starts a new one from the messages.
 		s.conversationID = ""
-		s.fail(err.Error())
+		s.fail(explainChatError(err, s.baseURL, s.keyName).Error())
 		return
 	}
 	s.scr.Add(display.Sources(res.Sources))
