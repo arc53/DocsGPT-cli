@@ -56,11 +56,20 @@ func newMarkdown(width int) *markdown {
 }
 
 // layout prepares the tree for rendering without wrapping: soft line breaks
-// become spaces (glamour keeps them as line ends then).
+// become spaces (glamour keeps them as line ends then), the paragraphs of a
+// list item go on lines of their own (glamour runs them together) and the
+// items of a loose list are a blank line apart, as when they stream in.
 type layout struct{}
 
 func (layout) Transform(doc *ast.Document, reader text.Reader, _ parser.Context) {
 	src := reader.Source() // the renderer reads the text from it too
+	breakAfter := func(n ast.Node) {
+		if k := n.Kind(); k == ast.KindParagraph || k == ast.KindTextBlock {
+			br := ast.NewTextSegment(text.NewSegment(0, 0))
+			br.SetHardLineBreak(true)
+			n.AppendChild(n, br)
+		}
+	}
 	ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -71,6 +80,21 @@ func (layout) Transform(doc *ast.Document, reader text.Reader, _ parser.Context)
 				src[s.Stop] = ' '
 				n.Segment = s.WithStop(s.Stop + 1)
 				n.SetSoftLineBreak(false)
+			}
+		case *ast.ListItem:
+			for c := n.FirstChild(); c != nil && c.NextSibling() != nil; c = c.NextSibling() {
+				if k := c.NextSibling().Kind(); k == ast.KindParagraph || k == ast.KindTextBlock {
+					breakAfter(c)
+				}
+			}
+			if list, ok := n.Parent().(*ast.List); ok && !list.IsTight && n.NextSibling() != nil {
+				last := n.LastChild() // the item's last text, in nested lists too
+				for last != nil && (last.Kind() == ast.KindList || last.Kind() == ast.KindListItem) {
+					last = last.LastChild()
+				}
+				if last != nil {
+					breakAfter(last)
+				}
 			}
 		}
 		return ast.WalkContinue, nil
@@ -221,27 +245,51 @@ var lineLead = regexp.MustCompile(`^((?: |│ |\| )*)(• |\d+\. |\[[✓x ]\] )?
 func rewrap(out string, width int) string {
 	lines := strings.Split(out, "\n")
 	var res []string
-	item, hang := -1, "" // the list item's indent (-1: none), the prefix its lines go under
-	for _, line := range lines {
+	var items []int // the indents of the list items open, innermost last
+	hang := ""      // the prefix the innermost item's lines go under
+	for i, line := range lines {
 		plain := xansi.Strip(line)
-		if strings.TrimSpace(plain) == "" {
-			item = -1
+		if strings.Trim(plain, " │|") == "" { // blank, in a quote or not
+			// glamour starts a quote that starts with a list with an empty row
+			if plain != "" && (len(res) == 0 || res[len(res)-1] == "") {
+				continue
+			}
+			// and leaves a blank line where lists nested two deep end
+			if i+1 < len(lines) {
+				if m := lineLead.FindStringSubmatch(xansi.Strip(lines[i+1])); m[2] != "" {
+					deeper := 0
+					for _, n := range items {
+						if n > xansi.StringWidth(m[1]) {
+							deeper++
+						}
+					}
+					if deeper >= 2 {
+						continue
+					}
+				}
+			}
+			items = nil
 			res = append(res, line)
 			continue
 		}
 		m := lineLead.FindStringSubmatch(plain)
 		n := xansi.StringWidth(m[0])
+		indent := xansi.StringWidth(m[1])
 		first := xansi.Truncate(line, n, "")
 		next := first
 		switch {
 		case m[2] != "":
+			for len(items) > 0 && items[len(items)-1] >= indent {
+				items = items[:len(items)-1]
+			}
+			items = append(items, indent)
 			bars := 0 // the columns up to the last quote bar and its space
 			if at := strings.LastIndexAny(m[1], "│|"); at >= 0 {
 				bars = xansi.StringWidth(m[1][:at]) + 2
 			}
-			item, hang = xansi.StringWidth(m[1]), xansi.Truncate(line, bars, "")+strings.Repeat(" ", n-bars)
+			hang = xansi.Truncate(line, bars, "") + strings.Repeat(" ", n-bars)
 			next = hang
-		case item >= 0 && xansi.StringWidth(m[1]) <= item:
+		case len(items) > 0 && indent <= items[len(items)-1]:
 			first, next = hang, hang
 		}
 		for k, row := range wrapWords(xansi.TruncateLeft(line, n, ""), width-xansi.StringWidth(next)) {
