@@ -163,22 +163,33 @@ func TestScreenSubmitAndQueue(t *testing.T) {
 	}
 }
 
-// TestScreenPanel: a prompt's panel takes the keys once it has been up a
-// moment; keys typed just before it opened still go to the editor.
+// TestScreenPanel: a prompt that opens while the user types during an
+// answer takes the keys only after a moment, so they do not answer it; one
+// the user asked for takes them at once.
 func TestScreenPanel(t *testing.T) {
 	m := testScreen(60, 16)
-	p := &panel{sel: newSelectModel(approvalSelect()), reply: make(chan result, 1), at: time.Now()}
-	m.panel = p
+	m.cancel = func() {}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	p := &panel{sel: newSelectModel(approvalSelect()), reply: make(chan result, 1)}
+	m.Update(doMsg(func(m *screenModel) tea.Cmd { return m.open(p) }))
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	if m.ed.text() != "a" || len(p.reply) != 0 {
+	if m.ed.text() != "xa" || len(p.reply) != 0 {
 		t.Fatal("a key typed as the panel opened answered it")
 	}
 	if !strings.Contains(strings.Join(rows(m), "\n"), "Approve") {
 		t.Fatal("panel not drawn")
 	}
-	p.at = time.Now().Add(-time.Second)
+	p.until = time.Time{}
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
 	if r := <-p.reply; r.value != "deny" || m.panel != nil {
 		t.Fatalf("answer %v", r)
+	}
+
+	m.cancel, m.typed = nil, time.Time{}
+	p = &panel{sel: newSelectModel(approvalSelect()), reply: make(chan result, 1)}
+	m.Update(doMsg(func(m *screenModel) tea.Cmd { return m.open(p) }))
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if r := <-p.reply; r.value != "approve" {
+		t.Fatalf("a menu the user opened: %v", r)
 	}
 }

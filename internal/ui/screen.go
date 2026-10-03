@@ -51,8 +51,8 @@ type Screen struct {
 }
 
 const (
-	frameInterval = 33 * time.Millisecond // redraws for Changed, ~30fps
-	panelGrace    = 300 * time.Millisecond
+	frameInterval = 33 * time.Millisecond  // redraws for Changed, ~30fps
+	panelGrace    = 300 * time.Millisecond // see panel.until
 	syncStart     = "\x1b[?2026h"
 	syncEnd       = "\x1b[?2026l"
 )
@@ -268,11 +268,7 @@ func (s *Screen) ask(p *panel) (string, error) {
 		return "", ErrNotInteractive
 	}
 	p.reply = make(chan result, 1)
-	s.do(func(m *screenModel) tea.Cmd {
-		p.at = time.Now()
-		m.panel, m.follow = p, true
-		return nil
-	})
+	s.do(func(m *screenModel) tea.Cmd { return m.open(p) })
 	select {
 	case r := <-p.reply:
 		return r.value, r.err
@@ -281,11 +277,23 @@ func (s *Screen) ask(p *panel) (string, error) {
 	}
 }
 
+// open shows p in the panel.
+func (m *screenModel) open(p *panel) tea.Cmd {
+	if m.cancel != nil && time.Since(m.typed) < time.Second {
+		p.until = time.Now().Add(panelGrace)
+	}
+	m.panel, m.follow = p, true
+	return nil
+}
+
 type panel struct {
 	sel   *selectModel
 	in    *inputModel
 	reply chan result
-	at    time.Time // when it opened: keys typed just before are not answers
+	// until: a prompt that opens while the user types (an approval
+	// during an answer) takes keys only from then on; the ones before go
+	// on into the editor rather than answer it.
+	until time.Time
 }
 
 type result struct {
@@ -310,6 +318,7 @@ type screenModel struct {
 	total    int  // transcript lines, as last drawn
 	viewRows int  // transcript rows, as last drawn
 	wheel    time.Time
+	typed    time.Time // the last key the editor got
 
 	label    string // the spinner's, "" when idle
 	spin     int
@@ -422,9 +431,10 @@ func (m *screenModel) key(k tea.KeyMsg) tea.Cmd {
 	if m.scrollKey(s) {
 		return nil
 	}
-	if p := m.panel; p != nil && time.Since(p.at) >= panelGrace {
+	if p := m.panel; p != nil && time.Now().After(p.until) {
 		return m.panelKey(k)
 	}
+	m.typed = time.Now()
 	if (s == "ctrl+c" || s == "esc" && m.ed.popup == nil) && m.cancel != nil {
 		m.interrupt()
 		return nil
