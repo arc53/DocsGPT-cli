@@ -13,7 +13,7 @@ import (
 
 // rendered is md as the chat and ask show it at width, without styles.
 func rendered(md string, width int) string {
-	return xansi.Strip(renderMarkdown(newMarkdown(width), width, md))
+	return xansi.Strip(renderMarkdown(newMarkdown(width), width, md, nil))
 }
 
 // eachStyle runs f with colours on and off.
@@ -203,16 +203,35 @@ var quirksMD = copyMD + "\n" + strings.Join([]string{
 	"| a | b |\n|---|---|\n| 1 | 2 |",
 }, "\n\n") + "\n"
 
+// listsMD holds loose ordered lists, numbered lazily, explicitly, wrongly
+// and from N, with the blocks that end a list between them: a paragraph, a
+// fence, the other delimiter.
+var listsMD = strings.Join([]string{
+	"1. lazy a\n\n1. lazy b\n\n1. lazy c",
+	"1. explicit a\n\n2. explicit b\n\n3. explicit c",
+	"5. from five\n\n5. then six\n\n   with a second paragraph\n\n9. then seven",
+	"1. odd a\n\n3. odd b",
+	"1) paren a\n\n1) paren b",
+	"1. dot\n\n1) paren after a dot",
+	"1. before a fence\n\n```\ncode\n```\n\n1. after a fence",
+	"8. a long run\n\n1. b\n\n1. c\n\n1. ten, a wider marker\n   that wraps around the narrow terminal width\n\n1. eleven",
+}, "\n\nThen a paragraph, which ends the list.\n\n") + "\n"
+
 // TestMarkdownStreamsAsWhole: an answer streamed in chunks of any size,
 // rendered block by block, ends the same as rendered whole (a resumed chat),
 // in the chat and in ask.
 func TestMarkdownStreamsAsWhole(t *testing.T) {
-	md := quirksMD
+	for _, md := range []string{quirksMD, listsMD} {
+		streamsAsWhole(t, md)
+	}
+}
+
+func streamsAsWhole(t *testing.T, md string) {
 	eachStyle(t, func(colors bool) {
 		for _, w := range []int{40, 60, 100} {
 			want := xansi.Strip(strings.Join(Markdown(md).Lines(w), "\n"))
 			// ask leaves a line too long for the screen to the terminal
-			wantAsk := emulate(t, renderMarkdown(newMarkdown(w), w, md), w, 1000)
+			wantAsk := emulate(t, renderMarkdown(newMarkdown(w), w, md, nil), w, 1000)
 			runes := []rune(md) // deltas are whole characters
 			for _, size := range []int{1, 3, 7, 64} {
 				a := NewAnswer(false)

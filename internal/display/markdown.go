@@ -61,7 +61,30 @@ func newMarkdown(width int) *markdown {
 // items of a loose list are a blank line apart, as when they stream in.
 type layout struct{}
 
-func (layout) Transform(doc *ast.Document, reader text.Reader, _ parser.Context) {
+// olist is how a block of streamed markdown ends, for the next one: with an
+// ordered list (its delimiter and last number), which an item starting the
+// next block goes on, or not (marker 0).
+type olist struct {
+	marker byte
+	last   int
+}
+
+// listKey passes renderMarkdown's *olist to layout.
+var listKey = parser.NewContextKey()
+
+func (layout) Transform(doc *ast.Document, reader text.Reader, pc parser.Context) {
+	// Numbered from where the previous block left off: goldmark numbers a
+	// list from its first item, which may say "1." for every item.
+	if l, _ := pc.Get(listKey).(*olist); l != nil {
+		if first, ok := doc.FirstChild().(*ast.List); ok && first.IsOrdered() && first.Marker == l.marker {
+			first.Start = l.last + 1
+		}
+		*l = olist{}
+		if last, ok := doc.LastChild().(*ast.List); ok && last.IsOrdered() {
+			*l = olist{last.Marker, last.Start + last.ChildCount() - 1}
+		}
+	}
+
 	src := reader.Source() // the renderer reads the text from it too
 	breakAfter := func(n ast.Node) {
 		if k := n.Kind(); k == ast.KindParagraph || k == ast.KindTextBlock {
@@ -152,10 +175,15 @@ func ptr[T any](v T) *T { return &v }
 // around or doubled, text wrapped at spaces under its indent, quote bars or
 // list marker. Unindented code fences are drawn by codeBlock, between dim
 // fence lines; unindented tables are laid out by glamour at the width.
-func renderMarkdown(m *markdown, width int, md string) string {
+// list, when md is a block of a streamed answer, tells how the block before
+// it ended, and is set to how md ends.
+func renderMarkdown(m *markdown, width int, md string, list *olist) string {
 	md = strings.ReplaceAll(md, "\r\n", "\n")
 	var parts []string
 	add := func(out string) {
+		if list != nil {
+			*list = olist{} // a fence or a table ends a list; prose sets it again
+		}
 		if out != "" {
 			parts = append(parts, out)
 		}
@@ -169,11 +197,17 @@ func renderMarkdown(m *markdown, width int, md string) string {
 			return
 		}
 		var b strings.Builder
-		if err := m.prose.Convert([]byte(text), &b); err != nil {
+		pc := parser.NewContext()
+		if list != nil {
+			pc.Set(listKey, list)
+		}
+		if err := m.prose.Convert([]byte(text), &b, parser.WithContext(pc)); err != nil {
 			add(tidy(text))
 			return
 		}
-		add(rewrap(tidy(b.String()), width))
+		if out := rewrap(tidy(b.String()), width); out != "" {
+			parts = append(parts, out)
+		}
 	}
 
 	lines := strings.SplitAfter(md, "\n")
@@ -190,7 +224,7 @@ func renderMarkdown(m *markdown, width int, md string) string {
 			}
 			flush(strings.Join(lines[start:i], ""))
 			code := strings.TrimSuffix(strings.Join(lines[i+1:min(end, len(lines))], ""), "\n")
-			parts = append(parts, codeBlock(strings.TrimSpace(line[len(fence):]), code, end < len(lines)))
+			add(codeBlock(strings.TrimSpace(line[len(fence):]), code, end < len(lines)))
 			start, i = end+1, end
 			continue
 		}

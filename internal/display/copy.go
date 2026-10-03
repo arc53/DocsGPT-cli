@@ -100,5 +100,5 @@ func unwrapped(md string) string {
 		w = max(w, len(p))
 	}
 	w = min(w+64, 1<<14)
-	return ansi.Strip(renderMarkdown(newMarkdown(w), w, md))
+	return ansi.Strip(renderMarkdown(newMarkdown(w), w, md, nil))
 }

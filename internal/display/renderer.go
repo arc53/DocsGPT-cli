@@ -46,6 +46,7 @@ type StreamRenderer struct {
 	reasoning controlFilter
 	content   strings.Builder // the whole answer
 	pending   string          // streamed text not committed yet
+	list      olist           // how the committed text ends
 	started   bool            // something is on screen: blocks get a blank line before them
 	liveRows  int             // terminal rows the live block occupies
 	tooTall   bool            // the live block outgrew the screen: wait for it to finish
@@ -172,7 +173,7 @@ func (r *StreamRenderer) draw(final bool) {
 		cut = commitPoint(r.pending)
 	}
 	if cut > 0 {
-		if block := r.block(r.pending[:cut]); block != "" {
+		if block := r.block(r.pending[:cut], &r.list); block != "" {
 			b.WriteString(block)
 			r.started = true
 		}
@@ -181,7 +182,8 @@ func (r *StreamRenderer) draw(final bool) {
 	}
 
 	if !r.tooTall {
-		block := r.block(r.pending)
+		list := r.list // drawn again with the next delta
+		block := r.block(r.pending, &list)
 		rows := r.rows(block)
 		r.tooTall = rows >= r.height // the cursor needs a row below it
 		if rows > 0 && !r.tooTall {
@@ -195,12 +197,13 @@ func (r *StreamRenderer) draw(final bool) {
 }
 
 // block renders md as it is printed: separated from what came before by a
-// blank line, ending with a newline. Empty when md renders to nothing.
-func (r *StreamRenderer) block(md string) string {
+// blank line, ending with a newline. Empty when md renders to nothing. list
+// is how the blocks before it end (see renderMarkdown).
+func (r *StreamRenderer) block(md string, list *olist) string {
 	if strings.TrimSpace(md) == "" {
 		return ""
 	}
-	s := renderMarkdown(r.md, r.width, md)
+	s := renderMarkdown(r.md, r.width, md, list)
 	if s == "" {
 		return ""
 	}

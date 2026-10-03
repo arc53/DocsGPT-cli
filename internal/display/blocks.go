@@ -119,7 +119,7 @@ func wrap(s string, width int) []string {
 func Markdown(md string) ui.Block {
 	md = StripControls(md)
 	c := newCached(func(width int) []string {
-		if out := renderMarkdown(markdownAt(width), width, md); out != "" {
+		if out := renderMarkdown(markdownAt(width), width, md, nil); out != "" {
 			return strings.Split(out, "\n")
 		}
 		return nil
@@ -204,6 +204,7 @@ type Answer struct {
 	width     int
 	cut       int      // bytes of content rendered into committed
 	committed []string // the finished blocks
+	list      olist    // how they end
 	lines     []string
 	drawn     int        // the version lines are of
 	plain     []ui.Plain // how lines copy, when found for them
@@ -267,7 +268,7 @@ func (a *Answer) Lines(width int) []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if width != a.width {
-		a.width, a.cut, a.committed, a.drawn = width, 0, nil, -1
+		a.width, a.cut, a.committed, a.drawn, a.list = width, 0, nil, -1, olist{}
 	}
 	if a.drawn == a.version {
 		return a.lines
@@ -279,7 +280,7 @@ func (a *Answer) Lines(width int) []string {
 		end = a.cut + commitPoint(content[a.cut:])
 	}
 	if end > a.cut {
-		if out := renderMarkdown(md, width, content[a.cut:end]); out != "" {
+		if out := renderMarkdown(md, width, content[a.cut:end], &a.list); out != "" {
 			if len(a.committed) > 0 {
 				a.committed = append(a.committed, "")
 			}
@@ -304,7 +305,8 @@ func (a *Answer) Lines(width int) []string {
 		lines = append(lines, part...)
 	}
 	add(a.committed)
-	if tail := renderMarkdown(md, width, content[a.cut:]); tail != "" {
+	list := a.list // the tail is rendered again with the next delta
+	if tail := renderMarkdown(md, width, content[a.cut:], &list); tail != "" {
 		add(fit(strings.Split(tail, "\n"), width))
 	}
 	a.lines, a.drawn, a.plain = lines, a.version, nil
