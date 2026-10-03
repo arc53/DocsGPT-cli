@@ -20,6 +20,11 @@ func TestTranslateKeys(t *testing.T) {
 		{"\x1b[98;3u", "\x1bb"},                // Alt+B
 		{"\x1b[98;4u", "\x1bB"},                // Alt+Shift+B
 		{"\x1b[127;3u", "\x1b\x7f"},            // Alt+Backspace
+		{"\x1b[100;3u", "\x1bd"},               // Alt+D
+		{"\x1b[121;3u", "\x1by"},               // Alt+Y
+		{"\x1b[121;5u", "\x19"},                // Ctrl+Y
+		{"\x1b[27;3;100~", "\x1bd"},            // Alt+D (modifyOtherKeys)
+		{"\x1b[3;3~", "\x1b[3;3~"},             // Alt+Delete untouched
 		{"\x1b[9;2u", "\x1b[Z"},                // Shift+Tab
 		{"\x1b[32;5u", "\x00"},                 // Ctrl+Space
 		{"\x1b[45;5u", "\x1f"},                 // Ctrl+-

@@ -211,6 +211,18 @@ func Duration(d time.Duration) string {
 	return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
+// Elapsed formats a running command's time in whole seconds: "3s",
+// "1m 5s".
+func Elapsed(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d/time.Second))
+	}
+	return Duration(d.Truncate(time.Second))
+}
+
+// now is the clock of the running times shown (a test's).
+var now = time.Now
+
 // tailRows is how many output lines a running command shows.
 const tailRows = 5
 
@@ -229,16 +241,33 @@ type TailView struct {
 	total  int      // complete lines seen
 	rows   int      // rows the live region occupies
 	timer  *time.Timer
+	tick   *time.Timer // redraws the running time each second
+	start  time.Time
 	closed bool
 }
 
 // NewTailView returns a TailView drawing on stderr.
 func NewTailView() *TailView {
-	v := &TailView{out: os.Stderr, tty: term.IsTerminal(os.Stderr.Fd()), width: stderrWidth(), box: box}
+	v := &TailView{out: os.Stderr, tty: term.IsTerminal(os.Stderr.Fd()), width: stderrWidth(), box: box, start: now()}
 	if v.box != nil {
 		v.draw() // the bottom padding, before any output
 	}
+	if v.tty {
+		v.tick = time.AfterFunc(time.Second, v.ticked)
+	}
 	return v
+}
+
+// ticked redraws the live region with the running time, each second.
+func (v *TailView) ticked() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.closed {
+		return
+	}
+	v.draw()
+	// The next whole second, as the time is shown in them.
+	v.tick.Reset(time.Second - now().Sub(v.start)%time.Second)
 }
 
 func (v *TailView) Write(p []byte) (int, error) {
@@ -278,6 +307,9 @@ func (v *TailView) Close() {
 	if v.timer != nil {
 		v.timer.Stop()
 		v.timer = nil
+	}
+	if v.tick != nil {
+		v.tick.Stop()
 	}
 	v.closed = true
 	if v.part != "" {
@@ -321,8 +353,12 @@ func (v *TailView) draw() []string {
 	for _, l := range lines {
 		out = append(out, T.ToolOutput.Render(ansi.Truncate(cleanLine(l), room, "…")))
 	}
-	rows := len(out)
-	for _, l := range out {
+	live := out // and the running time, which Close leaves out
+	if d := now().Sub(v.start); v.tty && !v.closed && !v.start.IsZero() && d >= time.Second {
+		live = append(out[:len(out):len(out)], "  "+T.Dim.Render("running · "+Elapsed(d)))
+	}
+	rows := len(live)
+	for _, l := range live {
 		if v.box != nil {
 			b.WriteString(v.box.row(v.box.bg, l) + "\n")
 		} else {

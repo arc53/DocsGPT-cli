@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -81,8 +82,11 @@ func (m *screenModel) pointer(msg tea.MouseMsg) tea.Cmd {
 	case msg.Action == tea.MouseActionRelease:
 		s.held, s.dir = false, 0
 		if s.unit == 1 && !s.dragged {
-			m.sel = nil // a click, which opens a link
-			return m.openLink(s.anchor)
+			m.sel = nil // a click, which opens a link or toggles a tool block
+			if cmd := m.openLink(s.anchor); cmd != nil {
+				return cmd
+			}
+			return m.clicked(s.anchor)
 		}
 		s.x, s.y = msg.X, msg.Y
 		m.extend()
@@ -130,6 +134,7 @@ func (m *screenModel) press(x, y int) tea.Cmd {
 		n = m.click.n%3 + 1
 	}
 	m.click.at, m.click.word, m.click.n = time.Now(), word, n
+	m.click.toggle++ // a block clicked before waits no more
 	s := &selection{anchor: p, from: p, to: p, unit: n, held: true, x: x, y: y}
 	switch n {
 	case 2:
@@ -358,6 +363,60 @@ func (m *screenModel) openLink(p point) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg { return openedMsg{u, openURL(u)} }
+}
+
+// toggleMsg toggles block when click id was the last.
+type toggleMsg struct {
+	id    int
+	block Block
+}
+
+// clicked handles a click (no drag) at p that opened no link: on an
+// Expander that folds, it expands or collapses that block alone, once no
+// second click came (it would select a word there). A click on a link the
+// chat cannot open (over SSH) does nothing.
+func (m *screenModel) clicked(p point) tea.Cmd {
+	if p.col == endCol { // past the transcript's end
+		return nil
+	}
+	k, line, _ := m.locate(p.line)
+	if k < 0 || m.offset(k)+line != p.line { // the blank line between blocks
+		return nil
+	}
+	if e, ok := m.blocks[k].(Expander); !ok || !e.Folds() {
+		return nil
+	}
+	if lines, _ := m.rows(p.line, p.line, false); len(lines) == 0 || linkAt(lines[0], p.col) != "" {
+		return nil
+	}
+	id, b := m.click.toggle, m.blocks[k]
+	return tea.Tick(multiClick, func(time.Time) tea.Msg { return toggleMsg{id, b} })
+}
+
+// toggle expands or collapses block b alone. Its first line stays on the
+// screen row it was on, or comes to the top when it started above the
+// view.
+func (m *screenModel) toggle(b Block) tea.Cmd {
+	k := slices.Index(m.blocks, b)
+	e, ok := b.(Expander)
+	if k < 0 || !ok {
+		return nil
+	}
+	top := m.top
+	if m.follow {
+		top = max(0, m.total-m.viewRows)
+	}
+	at := m.offset(k)
+	row := max(0, at-top)
+	on := !e.Expanded()
+	e.Expand(on)
+	m.top, m.follow = max(0, at-row), false // View follows again at the end
+	m.leftAt = -1                           // the lines are counted anew: none is new
+	m.sel = nil
+	if on {
+		return m.notify("Tool output expanded", true)
+	}
+	return m.notify("Tool output collapsed", true)
 }
 
 type openedMsg struct {

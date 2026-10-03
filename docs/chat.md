@@ -91,7 +91,10 @@ wheel then does whatever the terminal does on a full-screen program: many send
 | Ctrl+A / Ctrl+E, Home / End | Start / end of the line |
 | Alt+← / Alt+→ (Ctrl+← / Ctrl+→) | Previous / next word |
 | Ctrl+W, Alt+Backspace | Delete the previous word |
-| Ctrl+U / Ctrl+K | Delete to the start / end of the line |
+| Alt+D, Alt+Delete | Delete the next word |
+| Ctrl+U / Ctrl+K | Delete to the start / end of the line (at its start / end: the line break) |
+| Ctrl+Y | Put back the text last deleted by the keys above (deletions in a row come back together) |
+| Alt+Y | Right after Ctrl+Y: put back the deletion before that one instead, going round |
 | Ctrl+- | Undo: a word, a run of deletions, a paste or a recalled message at a time |
 | Alt+↑ | Take the queued messages back into the input (the answer goes on) |
 | Esc | Clear the selection; else stop the answer or the command that runs |
@@ -99,7 +102,7 @@ wheel then does whatever the terminal does on a full-screen program: many send
 | Ctrl+C | Stop the answer, or clear the input; twice on an empty input quits |
 | Ctrl+D | Quit |
 | Ctrl+Z | Suspend (`fg` to come back) |
-| Ctrl+O | Expand or collapse the output of tool calls ([Tools](tools.md)) |
+| Ctrl+O | Expand or collapse the output of tool calls ([Tools](tools.md)); a click on one toggles it alone |
 | Ctrl+L | Redraw the window |
 
 Shift+Enter needs a terminal that can tell it from Enter: one with the kitty
@@ -271,6 +274,15 @@ agent knows where you are:
 | `AGENTS.md` (else `CLAUDE.md`) of every directory from the repository root down to the working directory, 12 KB in all | `send_project_instructions` | on |
 | Your last shell commands (zsh, bash, fish) | `send_last_commands`, `number_of_last_commands` | off, 3 |
 
+When the agent has the [tools](tools.md), the block also names the system
+and the shell commands run with (`System: macOS (darwin/arm64); run_command
+runs commands with sh -c, without a terminal`), and carries two short guides:
+how to work with the tools (explore first, `read_file` before `cat`, change
+files with `edit_file`, non-interactive commands, timeouts for long runs) and
+how to code in a project (follow its instructions and style, keep changes to
+the request, check instead of guessing, run the build or tests, don't commit or
+delete unless asked, name the files changed).
+
 The block is sent again only when it changes. `--no-context` sends none of it
 (the tools stay available). Change the settings with `/settings`,
 `docsgpt-cli config`, or see [Configuration](configuration.md).
@@ -298,6 +310,10 @@ take `--no-stdin` ([Ask once](quickstart.md#4-ask-once)).
   `config set banner always|once|never`.
 - Colours follow the terminal background (`config set theme auto|dark|light`);
   `NO_COLOR` turns them off.
+- Tables in answers are drawn in a box, the header bold and the rows ruled
+  off. A table wider than the window wraps the text inside its cells; in a
+  window too narrow for that it shows as the model wrote it. A `<br>` in a
+  cell starts a new line there. Copying a table copies it as drawn.
 - Answers are cleaned of terminal control sequences before they are drawn, so
   a model cannot recolour, retitle or clear your terminal or write to your
   clipboard. The same goes for resumed chats and `/export` files.

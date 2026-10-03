@@ -128,6 +128,7 @@ type fold struct {
 }
 
 func (f *fold) Expand(on bool) { f.expanded = on }
+func (f *fold) Expanded() bool { return f.expanded }
 func (f *fold) Folds() bool    { return f.n > 3 }
 func (f *fold) Lines(int) []string {
 	out := []string{"$ " + f.name}

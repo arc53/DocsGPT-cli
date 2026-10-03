@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 
@@ -128,5 +129,79 @@ func TestFit(t *testing.T) {
 	want := []string{"a", "b", "    xxxxxx", "    xxxxxx"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("fit: %q", got)
+	}
+}
+
+// TestToolBlockRunning: a started command shows its running time from its
+// first second, in whole seconds, until it closes.
+func TestToolBlockRunning(t *testing.T) {
+	UsePlainTheme()
+	defer InitTheme("dark")
+	at := time.Unix(1000, 0)
+	now = func() time.Time { return at }
+	defer func() { now = time.Now }()
+
+	b := NewToolBlock("$ sleep 70", "")
+	if got := xansi.Strip(strings.Join(b.Lines(40), "\n")); got != "$ sleep 70" {
+		t.Errorf("before it runs: %q", got)
+	}
+	b.Start()
+	at = at.Add(900 * time.Millisecond)
+	if got := xansi.Strip(strings.Join(b.Lines(40), "\n")); got != "$ sleep 70" {
+		t.Errorf("under a second: %q", got)
+	}
+	at = at.Add(2200 * time.Millisecond)
+	if got := xansi.Strip(strings.Join(b.Lines(40), "\n")); got != "$ sleep 70\n    running · 3s" {
+		t.Errorf("3s: %q", got)
+	}
+	b.Write([]byte("tick\n"))
+	at = at.Add(62 * time.Second)
+	if got := xansi.Strip(strings.Join(b.Lines(40), "\n")); got != "$ sleep 70\n  tick\n    running · 1m 5s" {
+		t.Errorf("65s: %q", got)
+	}
+	b.Close(true, "exit 0 · 1m 10s")
+	if got := xansi.Strip(strings.Join(b.Lines(40), "\n")); got != "$ sleep 70\n  tick\n  ✓ exit 0 · 1m 10s" {
+		t.Errorf("closed: %q", got)
+	}
+}
+
+// TestTailViewRunning: on a terminal the live region ends with the running
+// time, from the first second; Close leaves it out.
+func TestTailViewRunning(t *testing.T) {
+	UsePlainTheme()
+	defer InitTheme("dark")
+	at := time.Unix(1000, 0)
+	now = func() time.Time { return at }
+	defer func() { now = time.Now }()
+
+	var out strings.Builder
+	v := &TailView{out: &out, tty: true, width: 40, start: at}
+	v.Write([]byte("one\n"))
+	v.mu.Lock()
+	v.draw()
+	v.mu.Unlock()
+	if got := xansi.Strip(out.String()); strings.Contains(got, "running") {
+		t.Errorf("under a second: %q", got)
+	}
+	at = at.Add(4 * time.Second)
+	out.Reset()
+	v.mu.Lock()
+	v.draw()
+	v.mu.Unlock()
+	if got := xansi.Strip(out.String()); !strings.HasSuffix(got, "  one\n    running · 4s\n") || v.rows != 2 {
+		t.Errorf("4s: %q, %d rows", got, v.rows)
+	}
+	out.Reset()
+	v.Close()
+	if got := xansi.Strip(out.String()); strings.Contains(got, "running") || !strings.HasSuffix(got, "  one\n") {
+		t.Errorf("closed: %q", got)
+	}
+}
+
+func TestElapsed(t *testing.T) {
+	for d, want := range map[time.Duration]string{0: "0s", 3900 * time.Millisecond: "3s", 65 * time.Second: "1m 5s", 2*time.Hour + 61*time.Second: "2h 1m"} {
+		if got := Elapsed(d); got != want {
+			t.Errorf("Elapsed(%v) = %q, want %q", d, got, want)
+		}
 	}
 }
