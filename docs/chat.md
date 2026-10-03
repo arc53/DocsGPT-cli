@@ -16,7 +16,9 @@ opens the conversation (version, keys, and the `AGENTS.md` / `CLAUDE.md` files
 the context sends), and the input stays at the bottom with a line under it: the
 directory and its git branch on the left, the key and the server (and what is
 on, such as `think on`) on the right. You can type while an answer streams in;
-Enter then queues your message until the answer is done. When you leave, the
+Enter then queues your message until the answer is done. Queued messages are
+listed above the input; Alt+↑ takes them back into it to edit, while the
+answer goes on. When you leave, the
 conversation is printed to the terminal, so it ends up in its scrollback as
 usual.
 
@@ -88,6 +90,7 @@ wheel then does whatever the terminal does on a full-screen program: many send
 | Ctrl+W, Alt+Backspace | Delete the previous word |
 | Ctrl+U / Ctrl+K | Delete to the start / end of the line |
 | Ctrl+- | Undo: a word, a run of deletions, a paste or a recalled message at a time |
+| Alt+↑ | Take the queued messages back into the input (the answer goes on) |
 | Esc | Clear the selection; else stop the answer or the command that runs |
 | Ctrl+C | Stop the answer, or clear the input; twice on an empty input quits |
 | Ctrl+D | Quit |

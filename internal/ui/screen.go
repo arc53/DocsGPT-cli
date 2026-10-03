@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -243,7 +244,7 @@ func (s *Screen) Next() (text, shown string, ok bool) {
 	reply := make(chan [2]string, 1)
 	s.do(func(m *screenModel) tea.Cmd {
 		if len(m.queue) > 0 {
-			reply <- m.queue[0]
+			reply <- [2]string{m.queue[0].text, m.queue[0].shown}
 			m.queue = m.queue[1:]
 		} else {
 			m.waiter = reply
@@ -315,6 +316,13 @@ type (
 	resumedMsg struct{}
 )
 
+// queued is a message sent while the chat was busy, with the pastes its
+// markers stand for.
+type queued struct {
+	text, shown string
+	pastes      map[int]string
+}
+
 type screenModel struct {
 	width, height int
 	blocks        []Block
@@ -334,7 +342,8 @@ type screenModel struct {
 	spinning bool
 	cancel   func()
 	waiter   chan [2]string // the caller of Next, waiting
-	queue    [][2]string    // messages sent while it was busy
+	queue    []queued       // messages sent while it was busy
+	listed   bool           // the queue is listed above the editor, as last drawn
 
 	mouse bool
 	sel   *selection // the text selected with the mouse
@@ -476,6 +485,10 @@ func (m *screenModel) key(k tea.KeyMsg) tea.Cmd {
 	if p := m.panel; p != nil && time.Now().After(p.until) {
 		return m.panelKey(k)
 	}
+	if s == "alt+up" && len(m.queue) > 0 {
+		m.requeue() // to edit, the answer going on
+		return nil
+	}
 	m.typed = time.Now()
 	if (s == "ctrl+c" || s == "esc" && m.ed.popup == nil) && m.cancel != nil {
 		m.interrupt()
@@ -484,13 +497,14 @@ func (m *screenModel) key(k tea.KeyMsg) tea.Cmd {
 	cmd, act := m.ed.update(k)
 	switch act {
 	case editSubmit:
+		pastes := m.ed.pastes
 		text, shown := m.ed.take()
 		m.follow = true
 		if m.waiter != nil {
 			m.waiter <- [2]string{text, shown}
 			m.waiter = nil
 		} else {
-			m.queue = append(m.queue, [2]string{text, shown})
+			m.queue = append(m.queue, queued{text, shown, pastes})
 		}
 	case editQuit:
 		if m.cancel != nil {
@@ -510,18 +524,37 @@ func (m *screenModel) interrupt() {
 	}
 	m.cancel()
 	m.cancel = nil
+	m.requeue()
+}
+
+// requeue puts the queued messages back into the editor, before what it
+// holds, a blank line apart; their pastes stay collapsed, renumbered.
+func (m *screenModel) requeue() {
 	if len(m.queue) == 0 {
 		return
 	}
 	var texts []string
+	pastes := map[int]string{}
+	add := func(shown string, from map[int]string) {
+		texts = append(texts, PasteMarker.ReplaceAllStringFunc(shown, func(marker string) string {
+			sub := PasteMarker.FindStringSubmatch(marker)
+			id, _ := strconv.Atoi(sub[1])
+			p, ok := from[id]
+			if !ok {
+				return marker
+			}
+			n := len(pastes) + 1
+			pastes[n] = p
+			return "[paste #" + strconv.Itoa(n) + marker[len("[paste #"+sub[1]):]
+		}))
+	}
 	for _, q := range m.queue {
-		texts = append(texts, q[0])
+		add(q.shown, q.pastes)
 	}
 	if !m.ed.empty() {
-		texts = append(texts, m.ed.expanded())
+		add(m.ed.text(), m.ed.pastes)
 	}
-	m.ed.setText(strings.Join(texts, "\n\n"))
-	m.ed.pastes = map[int]string{}
+	m.ed.replace(strings.Join(texts, "\n\n"), pastes)
 	m.queue = nil
 }
 
@@ -711,7 +744,12 @@ func (m *screenModel) View() string {
 		panel = panel[clamp(len(panel)-room, 0, len(panel)):]
 	}
 	m.ed.setSize(w, h)
-	rest := h - 1 - len(panel)
+	queue := m.queueLines(w)
+	if h-1-len(panel)-len(queue) < 8 {
+		queue = nil // the editor and some transcript first; the status row counts them
+	}
+	m.listed = queue != nil
+	rest := h - 1 - len(panel) - len(queue)
 	editor := m.ed.view(w, max(4, rest-1), m.panel == nil)
 	if m.panel != nil && rest < len(editor) {
 		editor = editor[len(editor)-1:]
@@ -757,6 +795,7 @@ func (m *screenModel) View() string {
 		lines = append(lines, "")
 	}
 	lines = append(lines, m.statusLine(w))
+	lines = append(lines, queue...)
 	lines = append(lines, panel...)
 	lines = append(lines, editor...)
 	return strings.Join(lines[max(0, len(lines)-h):], "\n")
@@ -790,9 +829,27 @@ func window(spans [][]string, top, rows int) []string {
 	return out
 }
 
-// statusLine is the row above the panel and the editor: the spinner while
-// something runs, the queued messages, and how much is below a
-// scrolled-back view.
+// queueLines lists the messages waiting to be sent, a row each (the first
+// three), and how to edit them.
+func (m *screenModel) queueLines(width int) []string {
+	if len(m.queue) == 0 {
+		return nil
+	}
+	dim := fg(Colors.Dim)
+	var out []string
+	for _, q := range m.queue[:min(3, len(m.queue))] {
+		out = append(out, dim.Render(ansi.Truncate("Queued: "+strings.Join(strings.Fields(q.shown), " "), width, "…")))
+	}
+	hint := "↳ alt+↑ to edit"
+	if n := len(m.queue) - 3; n > 0 {
+		hint = fmt.Sprintf("↳ %d more · alt+↑ to edit", n)
+	}
+	return append(out, dim.Render(ansi.Truncate(hint, width, "…")))
+}
+
+// statusLine is the row above the queue, the panel and the editor: the
+// spinner while something runs, and how much is below a scrolled-back
+// view.
 func (m *screenModel) statusLine(width int) string {
 	dim := fg(Colors.Dim)
 	var left []string
@@ -803,8 +860,8 @@ func (m *screenModel) statusLine(width int) string {
 		}
 		left = append(left, s)
 	}
-	if n := len(m.queue); n > 0 {
-		left = append(left, dim.Render(fmt.Sprintf("%d queued", n)))
+	if n := len(m.queue); n > 0 && !m.listed {
+		left = append(left, dim.Render(fmt.Sprintf("%d queued · alt+↑ to edit", n)))
 	}
 	if m.flash != "" {
 		style := dim

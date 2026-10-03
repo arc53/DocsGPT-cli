@@ -711,6 +711,7 @@ func (s *chatSession) help(string) {
 		{"↑ ↓", "move between lines, browse earlier messages"},
 		{"ctrl+g", "edit the message in $EDITOR"},
 		{"ctrl+-", "undo"},
+		{"alt+↑", "edit the queued messages (the answer goes on)"},
 		{"wheel, pgup pgdn", "scroll (shift+↑ ↓ by a line)"},
 		{"drag", "select text and copy it (double click: a word, triple: a line)"},
 		{"ctrl+↑ ctrl+↓", "previous / next message of yours"},

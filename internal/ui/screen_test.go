@@ -154,12 +154,63 @@ func TestScreenSubmitAndQueue(t *testing.T) {
 	m.cancel = func() { cancelled = true }
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("next")})
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if len(m.queue) != 1 || !strings.Contains(rows(m)[7], "1 queued") {
-		t.Fatalf("not queued: %v", m.queue)
+	if r := rows(m); len(m.queue) != 1 || r[6] != "Queued: next" || r[7] != "↳ alt+↑ to edit" {
+		t.Fatalf("not queued: %v\n%s", m.queue, strings.Join(r, "\n"))
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if !cancelled || len(m.queue) != 0 || m.ed.text() != "next" {
 		t.Fatalf("esc: cancelled %v, queue %v, editor %q", cancelled, m.queue, m.ed.text())
+	}
+}
+
+// TestScreenQueueEdit: the queued messages are listed above the editor,
+// and Alt+↑ takes them back into it, pastes collapsed, without stopping
+// the answer; undo puts the editor back as it was.
+func TestScreenQueueEdit(t *testing.T) {
+	m := testScreen(40, 16)
+	cancelled := false
+	m.cancel = func() { cancelled = true }
+	big := strings.Repeat("line\n", 20)
+	send := func(keys ...tea.KeyMsg) {
+		for _, k := range keys {
+			m.Update(k)
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	paste := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(big), Paste: true}
+	send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("one")}, tea.KeyMsg{Type: tea.KeyCtrlJ}, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("more")})
+	send(paste)
+	send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("three, a long one that goes past the edge")})
+	send(paste, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" four")})
+	r := rows(m)
+	if r[8] != "Queued: one more" || r[9] != "Queued: [paste #1 +21 lines]" ||
+		r[10] != "Queued: three, a long one that goes pas…" || r[11] != "↳ 1 more · alt+↑ to edit" {
+		t.Fatalf("queue rows:\n%s", strings.Join(r, "\n"))
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("draft")})
+	m.Update(tea.KeyMsg{Type: tea.KeyUp, Alt: true})
+	want := "one\nmore\n\n[paste #1 +21 lines]\n\nthree, a long one that goes past the edge\n\n[paste #2 +21 lines] four\n\ndraft"
+	if cancelled || len(m.queue) != 0 || m.ed.text() != want {
+		t.Fatalf("alt+up: cancelled %v, queue %d, editor %q", cancelled, len(m.queue), m.ed.text())
+	}
+	if m.ed.expanded() != "one\nmore\n\n"+big+"\n\nthree, a long one that goes past the edge\n\n"+big+" four\n\ndraft" {
+		t.Fatalf("pastes lost: %q", m.ed.expanded())
+	}
+	if strings.Contains(strings.Join(rows(m), "\n"), "Queued") {
+		t.Fatal("still listed")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlUnderscore})
+	if m.ed.text() != "draft" {
+		t.Fatalf("undo: %q", m.ed.text())
+	}
+
+	// In a short window the editor goes first; the status row counts them.
+	m = testScreen(40, 10)
+	m.cancel = func() {}
+	send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if r := rows(m); strings.Contains(strings.Join(r, "\n"), "Queued") || !strings.Contains(r[5], "1 queued · alt+↑ to edit") {
+		t.Fatalf("short window:\n%s", strings.Join(r, "\n"))
 	}
 }
 

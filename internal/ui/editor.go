@@ -223,7 +223,7 @@ func (m *editorModel) undoLast() {
 }
 
 // replace sets the text and its pastes as one edit undo can take back
-// (the $EDITOR result).
+// (the $EDITOR result, queued messages put back).
 func (m *editorModel) replace(text string, pastes map[int]string) {
 	if before := m.save(); text != m.text() || !maps.Equal(pastes, m.pastes) {
 		m.record(before, "replace", false)

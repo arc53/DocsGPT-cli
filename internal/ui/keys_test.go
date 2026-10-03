@@ -33,6 +33,8 @@ func TestTranslateKeys(t *testing.T) {
 		{"a\x1b[13;2ub", "a\nb"},               // among text
 		{"\x1b[1;5A\x1b[A", "\x1b[1;5A\x1b[A"}, // arrows untouched
 		{"\x1b[3~", "\x1b[3~"},                 // Delete untouched
+		{"\x1b[1;3A", "\x1b[1;3A"},             // Alt+↑ too
+		{"\x1b\x1b[A", "\x1b\x1b[A"},           // Alt+↑, Esc-prefixed
 		{"\x1b[24;1R", "\x1b[24;1R"},           // a cursor report passes
 		{"\x1b[<64;10;5M", "\x1b[<64;10;5M"},   // a wheel report too
 		{"\x1b[200~\x1b[13;2u\x1b[201~\x1b[13;2u", "\x1b[200~\x1b[13;2u\x1b[201~\n"}, // pasted text stays

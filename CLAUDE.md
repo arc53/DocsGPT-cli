@@ -240,8 +240,10 @@ cancel), Footer, Select/Input (blocking, in the panel), Mouse, Quit. Not on a TT
 or with TERM=dumb it refuses.
 - Layout, bottom up: footer, editor (dim rules; at most 30% of the height), the
   panel (a Select or Input, above the editor, which keeps its text but loses its
-  cursor), one status row (spinner `Thinking…`/`Answering…`/`Running…` · `esc to
-  stop`, `N queued`; right: `↓ N new lines · end to jump` when scrolled back),
+  cursor), the queued messages (`Queued: …` a row each, the first 3, then `↳ alt+↑
+  to edit`; in a short window only `N queued` in the status row), one status row
+  (spinner `Thinking…`/`Answering…`/`Running…` · `esc to stop`; right: `↓ N new
+  lines · end to jump` when scrolled back),
   and the transcript filling the rest: the blocks (`ui.Block`, see display's
   blocks.go) a blank line apart, top-aligned, only the visible rows sliced into
   the frame. Every write is one synchronized update (`termOutput`, CSI ?2026).
@@ -279,7 +281,8 @@ or with TERM=dumb it refuses.
   `set-clipboard on`.
 - Input: the editor always takes keys (typing while an answer streams); Enter while
   the chat is busy queues the message (sent after; Esc/Ctrl+C put the queue back
-  into the editor). Esc or Ctrl+C with something cancellable running cancels it;
+  into the editor; Alt+↑ does too without stopping: `requeue`, a blank line apart,
+  before the draft, pastes kept collapsed and renumbered, one undo step). Esc or Ctrl+C with something cancellable running cancels it;
   idle, Ctrl+C clears, twice within 1s quits, Ctrl+D on empty quits (also while
   busy). A panel takes the keys only 300ms after it opened, so keys typed just
   before an approval appeared go to the editor. Ctrl+Z suspends (tea.Exec of a
