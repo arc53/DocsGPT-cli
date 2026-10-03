@@ -17,7 +17,7 @@ cmd/docsgpt-cli/     → Entry point (package main), calls cmd.Execute(). Lives 
                        first by import-path order, checked by main_test.go
 sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, package
                        docsgpt: the public chat client (Client, Send, SendStream,
-                       RunWithTools + RunOptions/RunResult, Models, StreamHandler,
+                       Run + RunOptions/RunResult (RunWithTools: the old positional form, deprecated), Models, StreamHandler,
                        Source, APIError with Message/Code/RetryAfter, RetryPolicy:
                        Client.Retry, 3 retries 2s/4s/8s of a chat request that failed
                        before its response — 408/429/502-504, refused/reset/timeout,
@@ -392,7 +392,7 @@ or with TERM=dumb it refuses.
   error; `/path/like …` is a message. `!cmd` runs through `tools.RunShell` (no
   approval, no time limit, cancellable) into a tool block and its output is
   prepended to the next message; `!!cmd` is not sent.
-- Sending: a `display.User` block, then `RunWithTools` with the messages +
+- Sending: a `display.User` block, then `Run` with the messages +
   `conversation_id`; the server then takes the history from the stored
   conversation, an older one from the messages. Each answer segment is a
   `display.Answer` block (a new one after every tool call); tool calls go through

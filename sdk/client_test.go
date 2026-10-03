@@ -136,7 +136,7 @@ func TestSendStreamToleratesNilHandler(t *testing.T) {
 	}
 }
 
-func TestRunWithToolsFeedsResultsBack(t *testing.T) {
+func TestRunFeedsResultsBack(t *testing.T) {
 	var turns int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ChatRequest
@@ -159,7 +159,7 @@ func TestRunWithToolsFeedsResultsBack(t *testing.T) {
 	defer srv.Close()
 
 	var seen []string
-	res, err := NewClient(srv.URL, "k").RunWithTools(
+	res, err := NewClient(srv.URL, "k").Run(
 		context.Background(),
 		[]Message{{Role: "user", Content: "go"}},
 		RunOptions{
@@ -282,7 +282,7 @@ func TestSendStreamRejectsBadToolCallIndex(t *testing.T) {
 	}
 }
 
-func TestRunWithToolsCarriesConversationAndMetadata(t *testing.T) {
+func TestRunCarriesConversationAndMetadata(t *testing.T) {
 	var reqs []ChatRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req ChatRequest
@@ -303,7 +303,7 @@ func TestRunWithToolsCarriesConversationAndMetadata(t *testing.T) {
 	defer srv.Close()
 
 	var content string
-	res, err := NewClient(srv.URL, "k").RunWithTools(context.Background(),
+	res, err := NewClient(srv.URL, "k").Run(context.Background(),
 		[]Message{{Role: "user", Content: "go"}},
 		RunOptions{
 			Stream:         true,
@@ -329,5 +329,29 @@ func TestRunWithToolsCarriesConversationAndMetadata(t *testing.T) {
 	}
 	if content != "done" || res.Messages[len(res.Messages)-1].Content != "done" {
 		t.Errorf("content = %q, final message %+v", content, res.Messages[len(res.Messages)-1])
+	}
+}
+
+// The deprecated positional form still runs the loop and returns the history.
+func TestRunWithToolsCompat(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			fmt.Fprint(w, `{"choices":[{"message":{"tool_calls":[{"id":"t1","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"done"},"finish_reason":"stop"}]}`)
+	}))
+	defer srv.Close()
+
+	msgs, err := NewClient(srv.URL, "k").RunWithTools(context.Background(),
+		[]Message{{Role: "user", Content: "go"}}, nil, false, nil,
+		func(tc ToolCall) string { return "42" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(msgs); n != 4 || msgs[n-1].Content != "done" || msgs[2].Content != "42" {
+		t.Fatalf("history = %+v", msgs)
 	}
 }

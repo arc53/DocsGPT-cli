@@ -44,7 +44,7 @@ func TestRetriesTransientFailuresThenSucceeds(t *testing.T) {
 				var events []RetryEvent
 				c := NewClient(srv.URL, "k")
 				c.Retry = fastRetry(&events)
-				res, err := c.RunWithTools(context.Background(), []Message{{Role: "user", Content: "q"}}, RunOptions{Stream: stream})
+				res, err := c.Run(context.Background(), []Message{{Role: "user", Content: "q"}}, RunOptions{Stream: stream})
 				if err != nil {
 					t.Fatal(err)
 				}

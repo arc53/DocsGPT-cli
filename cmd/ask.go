@@ -233,7 +233,7 @@ func runAsk(args []string, out *askResult) error {
 		// Echoed typing would shift the cursor under the redraws.
 		defer ui.HoldInput()()
 	}
-	res, err := client.RunWithTools(ctx, messages, docsgpt.RunOptions{
+	res, err := client.Run(ctx, messages, docsgpt.RunOptions{
 		Tools: toolDefs, Stream: !globalNoStream, OnDelta: onDelta, OnToolCall: onToolCall,
 	})
 	if renderer != nil {

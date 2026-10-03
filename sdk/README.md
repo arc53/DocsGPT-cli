@@ -23,11 +23,11 @@ resp, err := client.Send(ctx, docsgpt.ChatRequest{
 
 ## Streaming and tools
 
-`RunWithTools` streams the answer, runs tool calls through your handler and
+`Run` streams the answer, runs tool calls through your handler and
 sends the results back until the model is done:
 
 ```go
-res, err := client.RunWithTools(ctx, messages, docsgpt.RunOptions{
+res, err := client.Run(ctx, messages, docsgpt.RunOptions{
 	Stream: true,
 	Tools:  tools,
 	OnDelta: func(d docsgpt.Delta, _ string) { fmt.Print(d.Content) },
@@ -43,7 +43,7 @@ res, err := client.RunWithTools(ctx, messages, docsgpt.RunOptions{
 | API | What |
 |---|---|
 | `Send`, `SendStream` | One request, whole or streamed (`StreamHandler` per delta) |
-| `RunWithTools` | The tool-call loop, streamed or not |
+| `Run` | The tool-call loop, streamed or not; `RunWithTools` is its older positional form (deprecated) |
 | `Message.Parts`, `AttachmentPart` | Images and files in a message ([below](#images-and-files)) |
 | `Models` | The key's agent (`GET /v1/models`); a cheap way to check a key |
 | `APIError` | A non-2xx reply: status code, body, `Message()` (the server's message, one line), `Code()`, `RetryAfter` |

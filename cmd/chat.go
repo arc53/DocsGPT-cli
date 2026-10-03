@@ -430,7 +430,7 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 	ans := answer()
 	var texts []string
 	label := "Thinking…"
-	res, err := retrying(ctx, s.client, s.cfg.Settings, s.scr.Status, "").RunWithTools(ctx, messages, docsgpt.RunOptions{
+	res, err := retrying(ctx, s.client, s.cfg.Settings, s.scr.Status, "").Run(ctx, messages, docsgpt.RunOptions{
 		Tools: s.toolDefs, Stream: !globalNoStream, ConversationID: s.conversationID,
 		OnDelta: func(delta docsgpt.Delta, _ string) {
 			if ans.Delta(delta) {

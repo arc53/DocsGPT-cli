@@ -196,7 +196,7 @@ func (c *Client) SendStream(ctx context.Context, req ChatRequest, onDelta Stream
 // It receives the tool call and should return the result string.
 type ToolCallHandler func(tc ToolCall) string
 
-// RunOptions configures RunWithTools.
+// RunOptions configures Run.
 type RunOptions struct {
 	Tools []Tool
 	// Stream selects SSE streaming; OnDelta then sees every chunk, and
@@ -209,7 +209,7 @@ type RunOptions struct {
 	OnToolCall     ToolCallHandler
 }
 
-// RunResult is the outcome of RunWithTools.
+// RunResult is the outcome of Run.
 type RunResult struct {
 	// Messages is the input history with the assistant and tool turns
 	// appended.
@@ -226,11 +226,11 @@ type RunResult struct {
 	Usage *Usage
 }
 
-// RunWithTools sends a chat request and handles tool call loops.
+// Run sends a chat request and handles tool call loops.
 // When the model returns tool_calls, OnToolCall is invoked for each one,
 // and results are sent back in a continuation request. This repeats
 // until the model returns finish_reason "stop" (or non-tool_calls).
-func (c *Client) RunWithTools(ctx context.Context, messages []Message, opts RunOptions) (*RunResult, error) {
+func (c *Client) Run(ctx context.Context, messages []Message, opts RunOptions) (*RunResult, error) {
 	res := &RunResult{
 		Messages:       append([]Message(nil), messages...),
 		ConversationID: opts.ConversationID,
@@ -296,6 +296,26 @@ func (c *Client) RunWithTools(ctx context.Context, messages []Message, opts RunO
 			})
 		}
 	}
+}
+
+// RunWithTools is Run with positional arguments, returning only the
+// messages.
+//
+// Deprecated: use Run, which also returns the conversation id, sources,
+// model and usage.
+func (c *Client) RunWithTools(
+	ctx context.Context,
+	messages []Message,
+	tools []Tool,
+	stream bool,
+	onDelta StreamHandler,
+	onToolCall ToolCallHandler,
+) ([]Message, error) {
+	res, err := c.Run(ctx, messages, RunOptions{Tools: tools, Stream: stream, OnDelta: onDelta, OnToolCall: onToolCall})
+	if res == nil {
+		return nil, err
+	}
+	return res.Messages, err
 }
 
 // Models lists the models the API key can use (GET /v1/models). DocsGPT
