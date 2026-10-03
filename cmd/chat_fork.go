@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/arc53/DocsGPT-cli/internal/attach"
 	"github.com/arc53/DocsGPT-cli/internal/display"
 	"github.com/arc53/DocsGPT-cli/internal/session"
 	"github.com/arc53/DocsGPT-cli/internal/ui"
@@ -36,14 +37,14 @@ func (s *chatSession) editEarlier(string) {
 	}
 	i, _ := strconv.Atoi(v)
 	s.fork(i, fmt.Sprintf("── edited from message %d ──", i+1))
-	s.scr.SetInput(turns[i].Question)
+	s.scr.SetInput(turns[i].Question, attached(turns[i].Files)...)
 }
 
 // retry sends the last message again: one that failed or was stopped, else
 // the last question, the chat going back to before it.
 func (s *chatSession) retry(string) {
-	if q := s.unanswered; q[0] != "" {
-		s.send(q[0], q[1])
+	if q := s.unanswered; q.Text != "" {
+		s.send(q.Text, q.Shown, q.Files...)
 		return
 	}
 	turns := s.sess.Turns()
@@ -54,7 +55,19 @@ func (s *chatSession) retry(string) {
 	i := len(turns) - 1
 	q := turns[i].Question
 	s.fork(i, fmt.Sprintf("── message %d again ──", i+1))
-	s.send(q, q)
+	s.send(q, q, attached(turns[i].Files)...)
+}
+
+// attached returns the files of an earlier message that were attached
+// with a marker (its @paths attach theirs again) and are still there.
+func attached(files []attach.File) []attach.File {
+	var out []attach.File
+	for _, f := range files {
+		if _, err := os.Stat(f.Path); f.Ref == "" && err == nil {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // fork takes the chat back to before exchange i: it goes on in a new
@@ -95,7 +108,7 @@ func (s *chatSession) adopt(sess *session.Session) []session.Turn {
 // showTurns adds the exchanges to the transcript.
 func (s *chatSession) showTurns(turns []session.Turn) {
 	for _, t := range turns {
-		s.scr.Add(display.User(t.Question))
+		s.scr.Add(display.User(attach.Show(t.Question, t.Files)))
 		s.scr.Add(display.Markdown(t.Answer))
 		s.scr.Add(display.Sources(t.Sources))
 	}

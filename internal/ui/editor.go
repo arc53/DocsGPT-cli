@@ -13,6 +13,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/arc53/DocsGPT-cli/internal/attach"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -26,6 +28,9 @@ type Command struct {
 
 // PasteMarker matches the marker a collapsed paste leaves in the editor.
 var PasteMarker = regexp.MustCompile(`\[paste #(\d+) (?:\+\d+ lines|\d+ chars)\]`)
+
+// FileMarker matches the marker of an attached file (attach.File.Marker).
+var FileMarker = regexp.MustCompile(`\[(?:image|file) #(\d+)(?: · [^\[\]\n]*)?\]`)
 
 // quitWindow is how soon a second Ctrl+C on an empty editor quits.
 const quitWindow = time.Second
@@ -46,8 +51,12 @@ type editorModel struct {
 	row, col int // cursor: line, rune
 	goal     int // visual column ↑/↓ keep, -1 when unset
 	pastes   map[int]string
-	hist     int    // history entry shown; len(entries) for the draft
-	draft    string // the text before browsing the history
+	files    map[int]attach.File // attached, by marker number
+	clip     attach.Clipboard    // what Ctrl+V reads
+	notice   string              // an error for the status row, taken by the Screen
+	hist     int                 // history entry shown; len(entries) for the draft
+	draft    string              // the text before browsing the history
+	drafted  map[int]attach.File // and its files
 	popup    *selectModel
 	shut     string // text the popup was dismissed on (Esc)
 	top      int    // first visual row shown
@@ -63,6 +72,7 @@ type state struct {
 	lines    [][]rune
 	row, col int
 	pastes   map[int]string
+	files    map[int]attach.File
 }
 
 // editorAction is what a key asks of the Screen.
@@ -80,6 +90,12 @@ type (
 		path string
 		err  error
 	}
+	// clipMsg is what Ctrl+V read from the clipboard.
+	clipMsg struct {
+		files []attach.File
+		text  string
+		err   error
+	}
 )
 
 func newEditorModel(commands []Command, history *History) *editorModel {
@@ -88,7 +104,7 @@ func newEditorModel(commands []Command, history *History) *editorModel {
 	}
 	return &editorModel{
 		commands: commands, history: history, lines: [][]rune{{}}, goal: -1, pastes: map[int]string{},
-		hist: len(history.entries), width: 80, height: 24,
+		files: map[int]attach.File{}, clip: attach.System, hist: len(history.entries), width: 80, height: 24,
 	}
 }
 
@@ -137,9 +153,11 @@ func (m *editorModel) update(msg tea.Msg) (tea.Cmd, editorAction) {
 		}
 	case editedMsg:
 		if data, err := os.ReadFile(msg.path); err == nil && msg.err == nil {
-			m.replace(strings.TrimRight(string(data), "\n"), nil)
+			m.replace(strings.TrimRight(string(data), "\n"), nil, m.files)
 		}
 		os.Remove(msg.path)
+	case clipMsg:
+		m.pasteClip(msg)
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+_" { // Ctrl+-
 			m.quitAt = time.Time{}
@@ -208,7 +226,7 @@ func (m *editorModel) save() state {
 	for i, l := range m.lines {
 		lines[i] = slices.Clone(l)
 	}
-	return state{lines, m.row, m.col, maps.Clone(m.pastes)}
+	return state{lines, m.row, m.col, maps.Clone(m.pastes), maps.Clone(m.files)}
 }
 
 // undoLast goes back to the state before the last edit.
@@ -218,38 +236,59 @@ func (m *editorModel) undoLast() {
 	}
 	s := m.undo[len(m.undo)-1]
 	m.undo = m.undo[:len(m.undo)-1]
-	m.lines, m.row, m.col, m.pastes = s.lines, s.row, s.col, s.pastes
+	m.lines, m.row, m.col, m.pastes, m.files = s.lines, s.row, s.col, s.pastes, s.files
 	m.last, m.goal, m.shut = "", -1, ""
 	m.changed()
 }
 
-// replace sets the text and its pastes as one edit undo can take back
-// (the $EDITOR result, queued messages put back).
-func (m *editorModel) replace(text string, pastes map[int]string) {
-	if before := m.save(); text != m.text() || !maps.Equal(pastes, m.pastes) {
+// replace sets the text, its pastes and its files as one edit undo can
+// take back (the $EDITOR result, queued messages put back).
+func (m *editorModel) replace(text string, pastes map[int]string, files map[int]attach.File) {
+	if before := m.save(); text != m.text() || !maps.Equal(pastes, m.pastes) || !maps.Equal(files, m.files) {
 		m.record(before, "replace", false)
 	}
 	m.setText(text)
-	m.pastes = maps.Clone(pastes)
+	m.pastes, m.files = maps.Clone(pastes), maps.Clone(files)
 	if m.pastes == nil {
 		m.pastes = map[int]string{}
+	}
+	if m.files == nil {
+		m.files = map[int]attach.File{}
 	}
 	m.last = ""
 	m.changed()
 }
 
-// changed follows an edit: history browsing ends, pastes whose marker is
-// gone are dropped and the popup refreshes.
+// changed follows an edit: history browsing ends, pastes and files whose
+// marker is gone are dropped and the popup refreshes.
 func (m *editorModel) changed() {
 	m.hist = len(m.history.entries)
+	text := m.text()
 	kept := map[int]string{}
-	for _, sub := range PasteMarker.FindAllStringSubmatch(m.text(), -1) {
+	for _, sub := range PasteMarker.FindAllStringSubmatch(text, -1) {
 		if id, _ := strconv.Atoi(sub[1]); m.pastes[id] != "" {
 			kept[id] = m.pastes[id]
 		}
 	}
 	m.pastes = kept
+	files := map[int]attach.File{}
+	for _, f := range m.attached() {
+		files[f.ID] = f
+	}
+	m.files = files
 	m.refreshPopup()
+}
+
+// attached returns the files whose marker is in the text, in order.
+func (m *editorModel) attached() []attach.File {
+	var out []attach.File
+	for _, sub := range FileMarker.FindAllStringSubmatch(m.text(), -1) {
+		id, _ := strconv.Atoi(sub[1])
+		if f, ok := m.files[id]; ok && sub[0] == f.Marker() && !slices.ContainsFunc(out, func(g attach.File) bool { return g.ID == id }) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func (m *editorModel) key(k tea.KeyMsg) (tea.Cmd, editorAction) {
@@ -288,7 +327,7 @@ func (m *editorModel) key(k tea.KeyMsg) (tea.Cmd, editorAction) {
 	switch s {
 	case "ctrl+c":
 		if !m.empty() {
-			m.lines, m.row, m.col, m.pastes = [][]rune{{}}, 0, 0, map[int]string{}
+			m.lines, m.row, m.col, m.pastes, m.files = [][]rune{{}}, 0, 0, map[int]string{}, map[int]attach.File{}
 			m.quitAt = time.Time{}
 			return nil, editNothing
 		}
@@ -373,6 +412,8 @@ func (m *editorModel) key(k tea.KeyMsg) (tea.Cmd, editorAction) {
 		m.cut(wordStart(line, m.col), m.col)
 	case "ctrl+g":
 		return m.externalEditor(), editNothing
+	case "ctrl+v":
+		return m.readClipboard(), editNothing
 	default:
 		if (k.Type == tea.KeyRunes || k.Type == tea.KeySpace) && !k.Alt {
 			m.insert(strings.Map(func(r rune) rune {
@@ -387,14 +428,15 @@ func (m *editorModel) key(k tea.KeyMsg) (tea.Cmd, editorAction) {
 }
 
 // take empties the editor for the next message and returns the one it
-// held: the text with pastes expanded, and as shown (pastes as markers).
-func (m *editorModel) take() (text, shown string) {
-	text, shown = m.expanded(), m.text()
+// held: the text with pastes expanded, as shown (pastes as markers), and
+// the files attached. History keeps the text, file markers and all.
+func (m *editorModel) take() (text, shown string, files []attach.File) {
+	text, shown, files = m.expanded(), m.text(), m.attached()
 	m.history.Add(text)
-	m.lines, m.row, m.col, m.pastes = [][]rune{{}}, 0, 0, map[int]string{}
+	m.lines, m.row, m.col, m.pastes, m.files = [][]rune{{}}, 0, 0, map[int]string{}, map[int]attach.File{}
 	m.hist, m.draft, m.popup, m.shut, m.top, m.goal = len(m.history.entries), "", nil, "", 0, -1
 	m.undo, m.last = nil, ""
-	return text, shown
+	return text, shown, files
 }
 
 // insert puts s, which may hold newlines, at the cursor.
@@ -432,8 +474,28 @@ func printable(s string) string {
 }
 
 // paste inserts pasted text; more than 10 lines or 1000 characters become
-// a marker, expanded again when the message is sent (as pi does).
+// a marker, expanded again when the message is sent (as pi does). Paths of
+// files dropped on the terminal attach them, but in a command or a shell
+// command.
 func (m *editorModel) paste(s string) {
+	if first := strings.TrimSpace(m.text()); !strings.HasPrefix(first, "!") && !strings.HasPrefix(first, "/") {
+		if paths := attach.Paths(s); paths != nil {
+			var files []attach.File
+			for _, p := range paths {
+				f, err := attach.Open(p)
+				if err != nil {
+					m.notice = "Not attached: " + err.Error()
+					files = nil
+					break
+				}
+				files = append(files, f)
+			}
+			if files != nil {
+				m.attach(files)
+				return
+			}
+		}
+	}
 	s = printable(s)
 	n := strings.Count(s, "\n") + 1
 	if n <= 10 && utf8.RuneCountInString(s) <= 1000 {
@@ -450,6 +512,62 @@ func (m *editorModel) paste(s string) {
 	} else {
 		m.insert("[paste #" + strconv.Itoa(id) + " " + strconv.Itoa(utf8.RuneCountInString(s)) + " chars]")
 	}
+}
+
+// attach inserts the markers of files at the cursor, numbered after the
+// files attached already, a space apart from the text around them.
+func (m *editorModel) attach(files []attach.File) {
+	id := 0
+	for n := range m.files {
+		id = max(id, n)
+	}
+	var markers []string
+	for _, f := range files {
+		id++
+		f.ID = id
+		m.files[id] = f
+		markers = append(markers, f.Marker())
+	}
+	s := strings.Join(markers, " ")
+	line := m.lines[m.row]
+	if m.col > 0 && !unicode.IsSpace(line[m.col-1]) {
+		s = " " + s
+	}
+	if m.col == len(line) || !unicode.IsSpace(line[m.col]) {
+		s += " "
+	}
+	m.insert(s)
+}
+
+// readClipboard reads the clipboard for Ctrl+V, away from the screen's
+// goroutine.
+func (m *editorModel) readClipboard() tea.Cmd {
+	clip := m.clip
+	return func() tea.Msg {
+		files, text, err := attach.Paste(clip)
+		return clipMsg{files, text, err}
+	}
+}
+
+// pasteClip pastes what Ctrl+V read: the files or the image as
+// attachments, else the text, as one edit.
+func (m *editorModel) pasteClip(c clipMsg) {
+	switch {
+	case c.err != nil:
+		m.notice = "Could not paste: " + c.err.Error()
+		return
+	case c.files == nil && c.text == "":
+		m.notice = "The clipboard holds no image, file or text"
+		return
+	}
+	before := m.save()
+	if c.files != nil {
+		m.attach(c.files)
+	} else {
+		m.paste(c.text)
+	}
+	m.record(before, "paste", false)
+	m.changed()
 }
 
 func (m *editorModel) deleteForward() {
@@ -492,19 +610,30 @@ func (m *editorModel) snap(row, col int) {
 	}
 }
 
-// markers lists the rune ranges of the current line's paste markers.
+// markers lists the rune ranges of the current line's markers.
 func (m *editorModel) markers() [][2]int {
-	return markerRanges(string(m.lines[m.row]), m.pastes)
+	return m.markerRanges(string(m.lines[m.row]))
 }
 
-func markerRanges(line string, pastes map[int]string) [][2]int {
+// markerRanges lists the rune ranges of a line's markers: of pastes and of
+// files attached, which are one unit each.
+func (m *editorModel) markerRanges(line string) [][2]int {
 	var out [][2]int
+	add := func(loc []int) {
+		s := utf8.RuneCountInString(line[:loc[0]])
+		out = append(out, [2]int{s, s + utf8.RuneCountInString(line[loc[0]:loc[1]])})
+	}
 	for _, loc := range PasteMarker.FindAllStringSubmatchIndex(line, -1) {
-		if id, _ := strconv.Atoi(line[loc[2]:loc[3]]); pastes[id] != "" {
-			s := utf8.RuneCountInString(line[:loc[0]])
-			out = append(out, [2]int{s, s + utf8.RuneCountInString(line[loc[0]:loc[1]])})
+		if id, _ := strconv.Atoi(line[loc[2]:loc[3]]); m.pastes[id] != "" {
+			add(loc)
 		}
 	}
+	for _, loc := range FileMarker.FindAllStringSubmatchIndex(line, -1) {
+		if id, _ := strconv.Atoi(line[loc[2]:loc[3]]); m.files[id].Marker() == line[loc[0]:loc[1]] {
+			add(loc)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
 	return out
 }
 
@@ -541,11 +670,11 @@ func (m *editorModel) up() {
 	browsing := m.hist < len(entries)
 	if (m.empty() || browsing || m.col == 0) && m.hist > 0 {
 		if !browsing {
-			m.draft = m.expanded()
+			m.draft, m.drafted = m.expanded(), m.files
 		}
 		m.hist--
 		m.setText(entries[m.hist])
-		m.pastes = map[int]string{}
+		m.pastes, m.files = map[int]string{}, map[int]attach.File{}
 		m.refreshPopup()
 		return
 	}
@@ -564,6 +693,7 @@ func (m *editorModel) down() {
 		m.hist++
 		if m.hist == len(entries) {
 			m.setText(m.draft)
+			m.files = maps.Clone(m.drafted)
 		} else {
 			m.setText(entries[m.hist])
 		}
@@ -584,7 +714,7 @@ func (m *editorModel) layout() []vrow {
 	w := max(1, m.width-1)
 	var rows []vrow
 	for i, l := range m.lines {
-		for _, r := range wrapLine(l, w, markerRanges(string(l), m.pastes)) {
+		for _, r := range wrapLine(l, w, m.markerRanges(string(l))) {
 			rows = append(rows, vrow{i, r[0], r[1]})
 		}
 	}
@@ -795,7 +925,7 @@ func rule(width int, arrow string, hidden int) string {
 func (m *editorModel) renderRow(r vrow, cursor bool) string {
 	line := m.lines[r.line]
 	inMarker := make([]bool, len(line))
-	for _, mr := range markerRanges(string(line), m.pastes) {
+	for _, mr := range m.markerRanges(string(line)) {
 		for i := mr[0]; i < mr[1]; i++ {
 			inMarker[i] = true
 		}

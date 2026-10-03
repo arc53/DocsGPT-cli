@@ -59,20 +59,20 @@ func TestHandleDecidesOnWhatWasShown(t *testing.T) {
 
 	marker := filepath.Join(t.TempDir(), "ran")
 	pasted := "!touch " + marker + "\n" + strings.Repeat("more\n", 12)
-	s.handle(pasted, "[paste #1 +13 lines]")
+	s.handle(ui.Message{Text: pasted, Shown: "[paste #1 +13 lines]"})
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("a pasted !command ran")
 	}
-	s.handle("/new and then some\n"+strings.Repeat("x\n", 12), "[paste #1 +13 lines]")
+	s.handle(ui.Message{Text: "/new and then some\n" + strings.Repeat("x\n", 12), Shown: "[paste #1 +13 lines]"})
 	if len(bodies) != 2 || !strings.Contains(bodies[0], "touch") || !strings.Contains(bodies[1], "/new and then some") {
 		t.Fatalf("pastes were not sent as messages: %q", bodies)
 	}
 
-	s.handle("!touch "+marker, "!touch "+marker)
+	s.handle(ui.Message{Text: "!touch " + marker, Shown: "!touch " + marker})
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatal("a typed !command did not run")
 	}
-	if s.handle("/nosuchcommand", "/nosuchcommand"); len(bodies) != 2 {
+	if s.handle(ui.Message{Text: "/nosuchcommand", Shown: "/nosuchcommand"}); len(bodies) != 2 {
 		t.Fatal("a typed /command was sent")
 	}
 }

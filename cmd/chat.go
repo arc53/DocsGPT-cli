@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/arc53/DocsGPT-cli/internal/attach"
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	ctxenrich "github.com/arc53/DocsGPT-cli/internal/context"
 	"github.com/arc53/DocsGPT-cli/internal/display"
@@ -35,10 +36,12 @@ var chatCmd = &cobra.Command{
 The chat takes the whole window; the wheel, PgUp/PgDn and Shift+↑/↓ scroll
 it, and text selected with the mouse is copied. Type / for the commands,
 !cmd to run a shell command and send its output with your next message
-(!!cmd to keep it to yourself). Enter sends, Shift+Enter, Ctrl+J or
-Alt+Enter (or a trailing \) starts a new line, ↑/↓ browse earlier prompts
-and Ctrl+G edits the message in $EDITOR. Esc or Ctrl+C stops an answer;
-Ctrl+C clears the input, twice on an empty input (or Ctrl+D) quits.`,
+(!!cmd to keep it to yourself), @path to attach a file (Ctrl+V attaches
+the clipboard's image, and files dropped on the window are attached).
+Enter sends, Shift+Enter, Ctrl+J or Alt+Enter (or a trailing \) starts a
+new line, ↑/↓ browse earlier prompts and Ctrl+G edits the message in
+$EDITOR. Esc or Ctrl+C stops an answer; Ctrl+C clears the input, twice on
+an empty input (or Ctrl+D) quits.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runChat(strings.Join(args, " "))
 	},
@@ -64,8 +67,8 @@ type chatSession struct {
 	sess        *session.Session
 	lastAnswer  string
 	// unanswered is the last message sent when no answer came (an error,
-	// a stop), for /retry: its text and as shown.
-	unanswered [2]string
+	// a stop), for /retry.
+	unanswered ui.Message
 	// lastUsage and totalUsage are the tokens of the last exchange and of
 	// the session, for the footer.
 	lastUsage, totalUsage docsgpt.Usage
@@ -227,11 +230,11 @@ func (s *chatSession) loop(first string) {
 	}
 	for !s.quit {
 		s.footer()
-		text, shown, ok := s.scr.Next()
+		msg, ok := s.scr.Next()
 		if !ok {
 			return
 		}
-		s.handle(text, shown)
+		s.handle(msg)
 	}
 }
 
@@ -344,14 +347,14 @@ func (t *screenTools) Edit(title, value string) (string, error) {
 // handle acts on one submitted input: a command, a shell command or a
 // message for the agent. What the user saw decides, so a collapsed paste
 // starting with ! or / is a message.
-func (s *chatSession) handle(text, shown string) {
-	line, seen := strings.TrimSpace(text), strings.TrimSpace(shown)
+func (s *chatSession) handle(msg ui.Message) {
+	line, seen := strings.TrimSpace(msg.Text), strings.TrimSpace(msg.Shown)
 	switch {
 	case strings.HasPrefix(seen, "!"):
 		s.shell(line)
 	case strings.HasPrefix(seen, "/") && s.command(line):
 	default:
-		s.send(text, shown)
+		s.send(msg.Text, msg.Shown, msg.Files...)
 	}
 }
 
@@ -392,9 +395,16 @@ func (s *chatSession) shell(line string) {
 }
 
 // send asks the agent, showing the message, the answer and its sources.
-func (s *chatSession) send(text, shown string) {
+// The files attached, and the ones its @paths name, go with it.
+func (s *chatSession) send(text, shown string, files ...attach.File) {
 	s.said = true
-	s.scr.Add(display.User(shown))
+	att, err := attachFiles(shown, files)
+	if err != nil {
+		s.fail("Not sent: " + err.Error())
+		s.scr.PutBack(ui.Message{Text: text, Shown: text, Files: files})
+		return
+	}
+	s.scr.Add(display.User(attach.Show(shown, att.files)))
 
 	content := text
 	if len(s.shellOutput) > 0 {
@@ -406,7 +416,7 @@ func (s *chatSession) send(text, shown string) {
 			content = ctxenrich.Prepend(block, content)
 		}
 	}
-	messages := append(slices.Clip(s.history), docsgpt.Message{Role: "user", Content: content})
+	messages := append(slices.Clip(s.history), docsgpt.Message{Role: "user", Content: content, Parts: att.parts})
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
@@ -446,7 +456,7 @@ func (s *chatSession) send(text, shown string) {
 	s.scr.Changed()
 	texts = append(texts, ans.Content())
 	if err != nil {
-		s.unanswered = [2]string{text, shown}
+		s.unanswered = ui.Message{Text: text, Shown: shown, Files: files}
 		// The server may have refused the conversation (deleted, say), or
 		// kept a stopped exchange the history here leaves out: the next
 		// turn starts a new one from the messages.
@@ -462,14 +472,18 @@ func (s *chatSession) send(text, shown string) {
 		s.notify("The answer failed")
 		return
 	}
-	s.unanswered = [2]string{}
+	s.unanswered = ui.Message{}
 	s.scr.Add(display.Sources(res.Sources))
 
+	// The server keeps the files with the conversation: the history and
+	// the session hold the message's text, and the session the files'
+	// paths and hashes, never their bytes.
+	res.Messages[len(messages)-1].Parts = nil
 	var added []session.Entry
 	for i := range res.Messages[len(messages)-1:] {
 		added = append(added, session.Entry{Message: &res.Messages[len(messages)-1+i]})
 	}
-	added[0].Text = text
+	added[0].Text, added[0].Attachments = text, att.files
 	added[len(added)-1].Sources = res.Sources
 	if u := res.Usage; u != nil {
 		added[len(added)-1].Usage = u
@@ -490,7 +504,7 @@ func (s *chatSession) send(text, shown string) {
 // reset starts a new conversation, saved in a new session.
 func (s *chatSession) reset() {
 	s.history, s.conversationID, s.sentContext = nil, "", ""
-	s.shellOutput, s.lastAnswer, s.unanswered = nil, "", [2]string{}
+	s.shellOutput, s.lastAnswer, s.unanswered = nil, "", ui.Message{}
 	s.lastUsage, s.totalUsage = docsgpt.Usage{}, docsgpt.Usage{}
 	cwd, _ := os.Getwd()
 	s.sess = session.New(cwd, s.baseURL, s.keyName)
@@ -754,6 +768,8 @@ func (s *chatSession) help(string) {
 	b.WriteString("\nKeys\n")
 	for _, k := range [][2]string{
 		{"!cmd", "run a command, its output goes with your next message (!!cmd: not sent)"},
+		{"@path", "attach a file (or drop files on the window)"},
+		{"ctrl+v", "attach the clipboard's image or files (else paste its text)"},
 		{"enter", "send"},
 		{"shift+enter, ctrl+j", "new line (alt+enter too, or end the line with \\)"},
 		{"↑ ↓", "move between lines, browse earlier messages"},

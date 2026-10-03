@@ -49,7 +49,7 @@ func TestEditorMultiline(t *testing.T) {
 	if press(m, key(tea.KeyEnter)) != editSubmit {
 		t.Fatal("enter did not submit")
 	}
-	if text, shown := m.take(); text != "one!x\ntwo\nthree" || shown != text || !m.empty() {
+	if text, shown, _ := m.take(); text != "one!x\ntwo\nthree" || shown != text || !m.empty() {
 		t.Fatalf("took %q, %q, left %q", text, shown, m.text())
 	}
 }

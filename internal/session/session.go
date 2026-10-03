@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arc53/DocsGPT-cli/internal/attach"
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 )
@@ -40,8 +41,11 @@ type Entry struct {
 
 	Message *docsgpt.Message `json:"message,omitempty"`
 	Text    string           `json:"text,omitempty"` // what the user typed; Message adds the context
-	Sources []docsgpt.Source `json:"sources,omitempty"`
-	Usage   *docsgpt.Usage   `json:"usage,omitempty"` // an exchange's last message: the tokens it took
+	// Attachments are the files a user message carried: their paths and
+	// hashes, not their bytes, which the server keeps.
+	Attachments []attach.File    `json:"attachments,omitempty"`
+	Sources     []docsgpt.Source `json:"sources,omitempty"`
+	Usage       *docsgpt.Usage   `json:"usage,omitempty"` // an exchange's last message: the tokens it took
 
 	// Where a message went: the header's or the latest state line's.
 	server, key, conv string
@@ -253,7 +257,8 @@ func List(cwd string) ([]*Session, error) {
 // Turn is one exchange: what the user typed and the answer.
 type Turn struct {
 	Question string
-	Answer   string // the assistant's texts of the exchange, joined
+	Files    []attach.File // attached to the question
+	Answer   string        // the assistant's texts of the exchange, joined
 	Sources  []docsgpt.Source
 	Usage    *docsgpt.Usage // nil when the server reported none
 
@@ -276,7 +281,7 @@ func (s *Session) Turns() []Turn {
 			if index++; len(turns) == 0 || e.conv != conv {
 				conv, index = e.conv, 0
 			}
-			turns = append(turns, Turn{Question: e.Text, Server: e.server, Key: e.key, ConversationID: e.conv, Index: index})
+			turns = append(turns, Turn{Question: e.Text, Files: e.Attachments, Server: e.server, Key: e.key, ConversationID: e.conv, Index: index})
 			if e.Text == "" {
 				turns[len(turns)-1].Question = m.Content
 			}

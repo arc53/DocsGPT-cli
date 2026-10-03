@@ -17,6 +17,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
+
+	"github.com/arc53/DocsGPT-cli/internal/attach"
 )
 
 // Block is one item of a Screen's transcript (a message, an answer, a tool
@@ -255,17 +257,23 @@ func (s *Screen) Kill() {
 	}
 }
 
-// Next waits for the next message the user sends: the text with pastes
-// expanded, and as shown. ok is false once the screen is gone. Messages
-// sent while the caller is busy wait in a queue.
-func (s *Screen) Next() (text, shown string, ok bool) {
+// Message is a message the user sent.
+type Message struct {
+	Text  string        // pastes expanded
+	Shown string        // pastes as markers
+	Files []attach.File // the files attached, in the order of their markers
+}
+
+// Next waits for the next message the user sends. ok is false once the
+// screen is gone. Messages sent while the caller is busy wait in a queue.
+func (s *Screen) Next() (msg Message, ok bool) {
 	if s.headless {
-		return "", "", false
+		return Message{}, false
 	}
-	reply := make(chan [2]string, 1)
+	reply := make(chan Message, 1)
 	s.do(func(m *screenModel) tea.Cmd {
 		if len(m.queue) > 0 {
-			reply <- [2]string{m.queue[0].text, m.queue[0].shown}
+			reply <- m.queue[0].Message
 			m.queue = m.queue[1:]
 		} else {
 			m.waiter = reply
@@ -273,10 +281,10 @@ func (s *Screen) Next() (text, shown string, ok bool) {
 		return nil
 	})
 	select {
-	case sub := <-reply:
-		return sub[0], sub[1], true
+	case msg := <-reply:
+		return msg, true
 	case <-s.done:
-		return "", "", false
+		return Message{}, false
 	}
 }
 
@@ -346,8 +354,8 @@ type (
 // queued is a message sent while the chat was busy, with the pastes its
 // markers stand for.
 type queued struct {
-	text, shown string
-	pastes      map[int]string
+	Message
+	pastes map[int]string
 }
 
 type screenModel struct {
@@ -369,9 +377,9 @@ type screenModel struct {
 	spin     int
 	spinning bool
 	cancel   func()
-	waiter   chan [2]string // the caller of Next, waiting
-	queue    []queued       // messages sent while it was busy
-	listed   bool           // the queue is listed above the editor, as last drawn
+	waiter   chan Message // the caller of Next, waiting
+	queue    []queued     // messages sent while it was busy
+	listed   bool         // the queue is listed above the editor, as last drawn
 
 	mouse bool
 	sel   *selection // the text selected with the mouse
@@ -470,6 +478,9 @@ func (m *screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.blurred.Store(blur)
 	case hintMsg:
 		m.ed.update(msg)
+	case clipMsg:
+		cmd, _ := m.ed.update(msg)
+		return m, tea.Batch(cmd, m.editorNotice())
 	case tickMsg, validatedMsg:
 		if p := m.panel; p != nil && p.in != nil {
 			_, cmd := p.in.Update(msg)
@@ -553,16 +564,18 @@ func (m *screenModel) key(k tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	cmd, act := m.ed.update(k)
+	cmd = tea.Batch(cmd, m.editorNotice())
 	switch act {
 	case editSubmit:
 		pastes := m.ed.pastes
-		text, shown := m.ed.take()
+		var msg Message
+		msg.Text, msg.Shown, msg.Files = m.ed.take()
 		m.follow = true
 		if m.waiter != nil {
-			m.waiter <- [2]string{text, shown}
+			m.waiter <- msg
 			m.waiter = nil
 		} else {
-			m.queue = append(m.queue, queued{text, shown, pastes})
+			m.queue = append(m.queue, queued{msg, pastes})
 		}
 	case editQuit:
 		if m.cancel != nil {
@@ -572,6 +585,17 @@ func (m *screenModel) key(k tea.KeyMsg) tea.Cmd {
 		return tea.Quit
 	}
 	return cmd
+}
+
+// editorNotice shows the editor's notice (a file it could not attach), if
+// any, in the status row.
+func (m *screenModel) editorNotice() tea.Cmd {
+	n := m.ed.notice
+	if n == "" {
+		return nil
+	}
+	m.ed.notice = ""
+	return m.notify(n, false)
 }
 
 // expand expands or collapses the Expanders, keeping a scrolled-back view
@@ -614,15 +638,16 @@ func (m *screenModel) interrupt() {
 }
 
 // requeue puts the queued messages back into the editor, before what it
-// holds, a blank line apart; their pastes stay collapsed, renumbered.
+// holds, a blank line apart; their pastes stay collapsed and their files
+// attached, renumbered.
 func (m *screenModel) requeue() {
 	if len(m.queue) == 0 {
 		return
 	}
 	var texts []string
-	pastes := map[int]string{}
-	add := func(shown string, from map[int]string) {
-		texts = append(texts, PasteMarker.ReplaceAllStringFunc(shown, func(marker string) string {
+	pastes, files := map[int]string{}, map[int]attach.File{}
+	add := func(shown string, from map[int]string, attached []attach.File) {
+		shown = PasteMarker.ReplaceAllStringFunc(shown, func(marker string) string {
 			sub := PasteMarker.FindStringSubmatch(marker)
 			id, _ := strconv.Atoi(sub[1])
 			p, ok := from[id]
@@ -632,15 +657,22 @@ func (m *screenModel) requeue() {
 			n := len(pastes) + 1
 			pastes[n] = p
 			return "[paste #" + strconv.Itoa(n) + marker[len("[paste #"+sub[1]):]
-		}))
+		})
+		for _, f := range attached {
+			old := f.Marker()
+			f.ID = len(files) + 1
+			files[f.ID] = f
+			shown = strings.Replace(shown, old, "\x00"+f.Marker(), 1) // not renumbered again
+		}
+		texts = append(texts, strings.ReplaceAll(shown, "\x00", ""))
 	}
 	for _, q := range m.queue {
-		add(q.shown, q.pastes)
+		add(q.Shown, q.pastes, q.Files)
 	}
 	if !m.ed.empty() {
-		add(m.ed.text(), m.ed.pastes)
+		add(m.ed.text(), m.ed.pastes, m.ed.attached())
 	}
-	m.ed.replace(strings.Join(texts, "\n\n"), pastes)
+	m.ed.replace(strings.Join(texts, "\n\n"), pastes, files)
 	m.queue = nil
 }
 
@@ -924,7 +956,7 @@ func (m *screenModel) queueLines(width int) []string {
 	dim := fg(Colors.Dim)
 	var out []string
 	for _, q := range m.queue[:min(3, len(m.queue))] {
-		out = append(out, dim.Render(ansi.Truncate("Queued: "+strings.Join(strings.Fields(q.shown), " "), width, "…")))
+		out = append(out, dim.Render(ansi.Truncate("Queued: "+strings.Join(strings.Fields(q.Shown), " "), width, "…")))
 	}
 	hint := "↳ alt+↑ to edit"
 	if n := len(m.queue) - 3; n > 0 {

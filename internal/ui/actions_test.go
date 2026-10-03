@@ -57,15 +57,15 @@ func TestEscEsc(t *testing.T) {
 		t.Fatal("one Esc sent the command")
 	}
 	m.Update(esc)
-	if len(m.queue) != 1 || m.queue[0].text != "/edit" {
+	if len(m.queue) != 1 || m.queue[0].Text != "/edit" {
 		t.Fatalf("queue after Esc Esc: %v", m.queue)
 	}
 
 	m.queue = nil
-	reply := make(chan [2]string, 1)
+	reply := make(chan Message, 1)
 	m.waiter = reply
 	m.Update(tea.KeyMsg{Type: tea.KeyEscape, Alt: true})
-	if got := <-reply; got[0] != "/edit" {
+	if got := <-reply; got.Text != "/edit" {
 		t.Fatalf("alt+esc sent %v", got)
 	}
 

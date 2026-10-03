@@ -213,12 +213,12 @@ func TestScreenJump(t *testing.T) {
 // was queued back in the editor.
 func TestScreenSubmitAndQueue(t *testing.T) {
 	m := testScreen(40, 12)
-	waiter := make(chan [2]string, 1)
+	waiter := make(chan Message, 1)
 	m.waiter = waiter
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if got := <-waiter; got[0] != "hi" || !m.ed.empty() {
-		t.Fatalf("submitted %q, editor %q", got, m.ed.text())
+	if got := <-waiter; got.Text != "hi" || !m.ed.empty() {
+		t.Fatalf("submitted %q, editor %q", got.Text, m.ed.text())
 	}
 	cancelled := false
 	m.cancel = func() { cancelled = true }
