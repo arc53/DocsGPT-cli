@@ -115,7 +115,7 @@ func gitBranch(dir string) string {
 // userMessage renders what the user sent in width columns: a block on a
 // subtle background, or after a "❯" without colours.
 func userMessage(width int, text string) string {
-	text = strings.ReplaceAll(strings.TrimRight(StripControls(text), "\n"), "\t", "    ")
+	text = userText(text)
 	if Colorless() {
 		lines := strings.Split(ansi.Wrap(text, max(width-2, 10), ""), "\n")
 		for i, l := range lines {
@@ -128,6 +128,11 @@ func userMessage(width int, text string) string {
 		return strings.Join(lines, "\n")
 	}
 	return lipgloss.NewStyle().Background(colUserBg).Foreground(colText).Width(width).Padding(1, 1).Render(text)
+}
+
+// userText is the text of a user message as shown.
+func userText(text string) string {
+	return strings.ReplaceAll(strings.TrimRight(StripControls(text), "\n"), "\t", "    ")
 }
 
 // Ago renders how long ago t was: "just now", "5m ago", "3h ago", "2d ago",

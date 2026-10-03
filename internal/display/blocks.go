@@ -23,15 +23,27 @@ type cached struct {
 	width  int
 	lines  []string
 	render func(width int) []string
+	plain  func(rows []string) []ui.Plain // how the rows copy; nil: as shown
+	copied []ui.Plain                     // plain's, at width
 }
 
 func newCached(render func(width int) []string) *cached { return &cached{width: -1, render: render} }
+
+func (c *cached) Plain(width int) []ui.Plain {
+	rows := c.Lines(width)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.plain != nil && c.copied == nil {
+		c.copied = c.plain(rows)
+	}
+	return c.copied
+}
 
 func (c *cached) Lines(width int) []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.width != width {
-		c.lines, c.width = fit(c.render(width), width), width
+		c.lines, c.width, c.copied = fit(c.render(width), width), width, nil
 	}
 	return c.lines
 }
@@ -72,7 +84,7 @@ func Failure(msg string) ui.Block { return styled(T.Error, "✗ ", StripControls
 
 // Done is a "✓" and a dim notice.
 func Done(msg string) ui.Block {
-	return newCached(func(width int) []string {
+	c := newCached(func(width int) []string {
 		lines := wrap(msg, width-2)
 		for i, l := range lines {
 			if i == 0 {
@@ -83,17 +95,21 @@ func Done(msg string) ui.Block {
 		}
 		return lines
 	})
+	c.plain = func(rows []string) []ui.Plain { return joins(rows, "✓ "+msg) }
+	return c
 }
 
 // styled wraps prefix and s at the width and styles each line.
 func styled(style lipgloss.Style, prefix, s string) ui.Block {
-	return newCached(func(width int) []string {
+	c := newCached(func(width int) []string {
 		lines := wrap(prefix+s, width)
 		for i, l := range lines {
 			lines[i] = style.Render(l)
 		}
 		return lines
 	})
+	c.plain = func(rows []string) []ui.Plain { return joins(rows, prefix+s) }
+	return c
 }
 
 func wrap(s string, width int) []string {
@@ -103,12 +119,14 @@ func wrap(s string, width int) []string {
 // Markdown is a block of rendered markdown (an answer shown again).
 func Markdown(md string) ui.Block {
 	md = StripControls(md)
-	return newCached(func(width int) []string {
+	c := newCached(func(width int) []string {
 		if out := renderMarkdown(markdownAt(width), width, md); out != "" {
 			return strings.Split(out, "\n")
 		}
 		return nil
 	})
+	c.plain = func(rows []string) []ui.Plain { return markdownPlain(rows, unwrapped(md)) }
+	return c
 }
 
 // Sources is the "Sources" block of an answer, empty without any.
@@ -137,7 +155,20 @@ func (userBlock) Prompt() {}
 // User is the block of a message the user sent: on a subtle background,
 // or after a "❯" without colours.
 func User(text string) ui.Block {
-	return userBlock{newCached(func(width int) []string { return strings.Split(userMessage(width, text), "\n") })}
+	c := newCached(func(width int) []string { return strings.Split(userMessage(width, text), "\n") })
+	c.plain = func(rows []string) []ui.Plain {
+		if Colorless() { // after "❯ "
+			plain := joins(rows, "❯ "+userText(text))
+			for i := range plain {
+				if !plain[i].Wrap {
+					plain[i].Indent = 2
+				}
+			}
+			return plain
+		}
+		return indent(joins(rows, userText(text)), rows, 1) // the background's padding
+	}
+	return userBlock{c}
 }
 
 // markdownAt returns a markdown renderer for width, kept per width: a new
@@ -175,7 +206,8 @@ type Answer struct {
 	cut       int      // bytes of content rendered into committed
 	committed []string // the finished blocks
 	lines     []string
-	drawn     int // the version lines are of
+	drawn     int        // the version lines are of
+	plain     []ui.Plain // how lines copy, when found for them
 }
 
 // NewAnswer returns an empty answer; showReasoning shows the reasoning.
@@ -209,6 +241,27 @@ func (a *Answer) Content() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.content.String()
+}
+
+// Plain tells how the answer's lines copy: the reasoning and the markdown,
+// unwrapped.
+func (a *Answer) Plain(width int) []ui.Plain {
+	a.Lines(width)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.plain != nil {
+		return a.plain
+	}
+	rows, thought := a.lines, ""
+	if a.showReasoning {
+		thought = strings.TrimSpace(a.thought.String())
+	}
+	n := 0
+	if thought != "" {
+		n = min(len(rows), len(wrap(thought, width)))
+	}
+	a.plain = append(joins(rows[:n], thought), markdownPlain(rows[n:], unwrapped(a.content.String()))...)
+	return a.plain
 }
 
 func (a *Answer) Lines(width int) []string {
@@ -255,7 +308,7 @@ func (a *Answer) Lines(width int) []string {
 	if tail := renderMarkdown(md, width, content[a.cut:]); tail != "" {
 		add(fit(strings.Split(tail, "\n"), width))
 	}
-	a.lines, a.drawn = lines, a.version
+	a.lines, a.drawn, a.plain = lines, a.version, nil
 	return lines
 }
 
@@ -277,6 +330,7 @@ type ToolBlock struct {
 	c       struct {
 		width, version int
 		lines          []string
+		logical        string // the text of lines, unwrapped
 	}
 }
 
@@ -341,16 +395,18 @@ func (b *ToolBlock) Lines(width int) []string {
 		room = width - 2
 	}
 
-	var title []string
+	var title, logical []string
 	for i, l := range strings.Split(strings.TrimRight(b.title, "\n"), "\n") {
 		if i > 0 {
 			l = "  " + l
 		}
+		logical = append(logical, Safe(l))
 		for _, r := range strings.Split(ansi.Wrap(Safe(l), max(room, 10), ""), "\n") {
 			title = append(title, T.ToolTitle.Render(r))
 		}
 	}
 	if b.note != "" {
+		logical[len(logical)-1] += " " + Safe(b.note)
 		note := T.Dim.Render(Safe(b.note))
 		if last := len(title) - 1; lipgloss.Width(title[last]+" "+note) <= room {
 			title[last] += " " + note
@@ -381,6 +437,9 @@ func (b *ToolBlock) Lines(width int) []string {
 		}
 		body = append(body, glyph+" "+T.Dim.Render(Safe(b.status)))
 	}
+	for _, l := range body {
+		logical = append(logical, ansi.Strip(l))
+	}
 
 	var lines []string
 	if box == nil {
@@ -403,6 +462,20 @@ func (b *ToolBlock) Lines(width int) []string {
 		}
 		lines = append(lines, box.row(bg, ""))
 	}
-	b.c.width, b.c.version, b.c.lines = width, b.version, lines
+	b.c.width, b.c.version, b.c.lines, b.c.logical = width, b.version, lines, strings.Join(logical, "\n")
 	return lines
+}
+
+// Plain tells how the block's lines copy: without the background's padding
+// or the indent of the lines under the title, the title unwrapped.
+func (b *ToolBlock) Plain(width int) []ui.Plain {
+	rows := b.Lines(width)
+	b.mu.Lock()
+	logical := b.c.logical
+	b.mu.Unlock()
+	n := 2
+	if p := termenv.ColorProfile(); T.ToolBg && p <= termenv.ANSI256 {
+		n = 1
+	}
+	return indent(joins(rows, logical), rows, n)
 }
