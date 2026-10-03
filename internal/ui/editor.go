@@ -578,21 +578,56 @@ type vrow struct{ line, start, end int }
 func runeWidth(r rune) int { return ansi.StringWidth(string(r)) }
 
 // layout wraps the lines at the width less one column, kept for the
-// cursor at the end of a full row.
+// cursor at the end of a row.
 func (m *editorModel) layout() []vrow {
 	w := max(1, m.width-1)
 	var rows []vrow
 	for i, l := range m.lines {
-		start, cols := 0, 0
-		for j, r := range l {
-			if rw := runeWidth(r); cols+rw > w && j > start {
-				rows = append(rows, vrow{i, start, j})
-				start, cols = j, rw
-			} else {
-				cols += rw
+		for _, r := range wrapLine(l, w, markerRanges(string(l), m.pastes)) {
+			rows = append(rows, vrow{i, r[0], r[1]})
+		}
+	}
+	return rows
+}
+
+// wrapLine breaks a line into rows of at most w columns, as rune ranges:
+// after the last space that fits, a word longer than a row where it
+// reaches the edge. A paste marker (marks) is one unit. A space may hang
+// into the cursor's column; when one ends the line, an empty row follows
+// for the cursor after it.
+func wrapLine(l []rune, w int, marks [][2]int) [][2]int {
+	var rows [][2]int
+	start, cols := 0, 0
+	brk, brkCols := -1, 0 // after the last space: where the next row would start
+	for i := 0; i < len(l); {
+		j := i + 1
+		for _, mk := range marks {
+			if mk[0] == i && ansi.StringWidth(string(l[mk[0]:mk[1]])) <= w {
+				j = mk[1]
 			}
 		}
-		rows = append(rows, vrow{i, start, len(l)})
+		uw := ansi.StringWidth(string(l[i:j]))
+		space := j == i+1 && unicode.IsSpace(l[i])
+		if cols+uw > w && !(space && cols+uw <= w+1) && i > start {
+			if brk > start {
+				rows = append(rows, [2]int{start, brk})
+				start, cols = brk, cols-brkCols
+			} else {
+				rows = append(rows, [2]int{start, i})
+				start, cols = i, 0
+			}
+			brk = -1
+			continue
+		}
+		cols += uw
+		if space {
+			brk, brkCols = j, cols
+		}
+		i = j
+	}
+	rows = append(rows, [2]int{start, len(l)})
+	if cols > w {
+		rows = append(rows, [2]int{len(l), len(l)})
 	}
 	return rows
 }

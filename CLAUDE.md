@@ -301,7 +301,9 @@ or with TERM=dumb it refuses.
 - Editor: dim rules above and below the text, a dim footer (left `~/dir (branch)`,
   right `key · host`, then `+N command outputs`, `think on`, then `auto-approve` in the warning color; it is dim as a whole,
   so a differently styled item goes last; the left is cut from its start).
-  Enter sends; Shift+Enter / Ctrl+J / Alt+Enter / a trailing `\` insert a newline; ↑/↓ move by visual row, history at the edges
+  Enter sends; Shift+Enter / Ctrl+J / Alt+Enter / a trailing `\` insert a newline; rows wrap
+  after a space (`wrapLine`: a longer word where it reaches the edge, a paste marker
+  never split, a space may hang into the cursor column); ↑/↓ move by visual row, history at the edges
   (`~/.docsgpt/history`, JSON string per line, 0600, 500 entries, entries ≤16KB and
   not matching `secretLike`; trimming writes a temp file and renames it); bracketed pastes >10 lines or >1000 chars become
   `[paste #N +L lines]` markers (one unit: the cursor never rests inside one, any

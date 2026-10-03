@@ -373,3 +373,97 @@ func TestEditorUndo(t *testing.T) {
 		t.Fatalf("%d steps kept", len(m.undo))
 	}
 }
+
+// rowsOf lays out the text at width w and returns its rows as text.
+func rowsOf(m *editorModel, w int) []string {
+	m.setSize(w, 40)
+	var out []string
+	for _, r := range m.layout() {
+		out = append(out, string(m.lines[r.line][r.start:r.end]))
+	}
+	return out
+}
+
+// TestEditorWrapsAtSpaces: rows break after a space, a word longer than a
+// row where it reaches the edge, a paste marker never.
+func TestEditorWrapsAtSpaces(t *testing.T) {
+	m := testEditor()
+	m.setText("make the timeout configurable please")
+	got := rowsOf(m, 16) // 15 columns of text
+	if want := []string{"make the ", "timeout ", "configurable ", "please"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("rows %q, want %q", got, want)
+	}
+
+	m.setText("a supercalifragilisticexpialidocious word")
+	if got := rowsOf(m, 11); strings.Join(got, "|") != "a |supercalif|ragilistic|expialidoc|ious word" {
+		t.Fatalf("long word: %q", got)
+	}
+
+	// A space at the edge hangs in the cursor's column; at the end of the
+	// line the cursor gets a row below.
+	m.setText("123456789 ")
+	if got := rowsOf(m, 10); strings.Join(got, "|") != "123456789 |" || m.cursorRow(m.layout()) != 1 {
+		t.Fatalf("hanging space: %q, cursor row %d", got, m.cursorRow(m.layout()))
+	}
+	press(m, runes("x"))
+	if got := rowsOf(m, 10); strings.Join(got, "|") != "123456789 |x" {
+		t.Fatalf("after the space: %q", got)
+	}
+	for _, l := range m.view(10, 20, true) {
+		if w := ansi.StringWidth(l); w > 10 {
+			t.Fatalf("row %q is %d wide", l, w)
+		}
+	}
+
+	// Wide characters fill two columns each.
+	m.setText("日本語のテキスト です")
+	if got := rowsOf(m, 10); strings.Join(got, "|") != "日本語の|テキスト |です" {
+		t.Fatalf("wide: %q", got)
+	}
+
+	// A marker is not broken, nor at its spaces.
+	m = testEditor()
+	press(m, runes("see this "), tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("l\n", 20)), Paste: true}, runes(" ok"))
+	if got := rowsOf(m, 26); strings.Join(got, "|") != "see this |[paste #1 +21 lines] ok" {
+		t.Fatalf("marker: %q", got)
+	}
+}
+
+// TestEditorWrappedCursor: ↑/↓ keep the column across word-wrapped rows,
+// and the cursor stays on the row it is drawn on.
+func TestEditorWrappedCursor(t *testing.T) {
+	m := testEditor()
+	m.setText("make the timeout configurable please")
+	rowsOf(m, 16)
+	press(m, key(tea.KeyCtrlA))
+	press(m, key(tea.KeyRight), key(tea.KeyRight), key(tea.KeyRight))
+	steps := []struct {
+		k   tea.KeyType
+		col int
+	}{{tea.KeyDown, 12}, {tea.KeyDown, 20}, {tea.KeyDown, 33}, {tea.KeyUp, 20}, {tea.KeyUp, 12}, {tea.KeyUp, 3}}
+	for _, s := range steps {
+		press(m, key(s.k))
+		if m.col != s.col {
+			t.Fatalf("%s: col %d, want %d", key(s.k), m.col, s.col)
+		}
+	}
+	// Past the end of a shorter row: on its last character, still that row.
+	m.col = 30
+	press(m, key(tea.KeyLeft), key(tea.KeyUp)) // from the space after "configurable"
+	if k := m.cursorRow(m.layout()); k != 1 || m.col != 16 {
+		t.Fatalf("up to a shorter row: row %d col %d", k, m.col)
+	}
+	// The cursor is drawn where it is.
+	v := ansi.Strip(view(m))
+	if !strings.Contains(v, "configurable") {
+		t.Fatalf("view:\n%s", v)
+	}
+
+	// Wide characters: the goal is a column, not a rune count.
+	m.setText("日本語のテ キスト")
+	rowsOf(m, 12)
+	press(m, key(tea.KeyCtrlA), key(tea.KeyRight), key(tea.KeyRight), key(tea.KeyDown))
+	if m.col != 8 {
+		t.Fatalf("down over wide characters: col %d, want 8", m.col)
+	}
+}
