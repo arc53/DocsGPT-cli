@@ -45,7 +45,27 @@ res, err := client.RunWithTools(ctx, messages, docsgpt.RunOptions{
 | `Send`, `SendStream` | One request, whole or streamed (`StreamHandler` per delta) |
 | `RunWithTools` | The tool-call loop, streamed or not |
 | `Models` | The key's agent (`GET /v1/models`); a cheap way to check a key |
-| `APIError` | A non-2xx reply: status code and body |
+| `APIError` | A non-2xx reply: status code, body, `Message()` (the server's message, one line), `Code()`, `RetryAfter` |
+| `RetryPolicy` | `Client.Retry`: how failed chat requests are sent again |
+
+## Retries
+
+`NewClient` retries a chat request up to 3 times (after 2s, 4s, 8s) when it
+failed before any of the answer arrived: 408, 429, 502, 503, 504, or a
+connection refused, reset or timed out. A `Retry-After` is honoured, up to
+`MaxDelay` (a longer one returns the error at once), and so is
+`x-should-retry: false`; a spent usage limit (`error_code` ending in
+`limit-reached`) is not retried. A stream that fails once it has started is
+never retried, so an answer never comes twice.
+
+```go
+client.Retry.OnRetry = func(ev docsgpt.RetryEvent) {
+	log.Printf("retrying (%d/%d) in %s: %v", ev.Attempt, ev.MaxRetries, ev.Delay, ev.Err)
+}
+client.Retry = docsgpt.RetryPolicy{} // never retry
+```
+
+Cancelling the context ends a wait at once.
 
 ## Versioning
 
