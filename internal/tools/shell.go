@@ -10,5 +10,5 @@ import (
 // limit. It returns the output and exit status, for the model.
 func RunShell(ctx context.Context, show UI, command string) string {
 	s := &Session{AutoApprove: true, Timeout: 100 * 365 * 24 * time.Hour, UI: show}
-	return s.runCommand(ctx, func() {}, command, "")
+	return s.runCommand(ctx, func() {}, command, "", 0)
 }

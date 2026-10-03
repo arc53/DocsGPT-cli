@@ -162,9 +162,11 @@ func runAsk(args []string, out *askResult) error {
 	baseURL := cfg.ResolveURL(globalURL)
 	client := docsgpt.NewClient(baseURL, apiKey)
 
+	// Tool calls need a person on stdin to approve them.
+	offerTools := !globalNoTools && (globalAutoApprove || stdinIsTerminal())
 	fullQuestion := question
 	if !globalNoContext {
-		fullQuestion = ctxenrich.Prepend(ctxenrich.Build(cfg.Settings), question)
+		fullQuestion = ctxenrich.Prepend(ctxenrich.Build(cfg.Settings, offerTools), question)
 	}
 
 	messages := []docsgpt.Message{
@@ -184,10 +186,9 @@ func runAsk(args []string, out *askResult) error {
 	defer stop()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	// Tool calls need a person on stdin to approve them.
 	var toolDefs []docsgpt.Tool
-	if !globalNoTools && (globalAutoApprove || stdinIsTerminal()) {
-		toolDefs = tools.ToolDefinitions()
+	if offerTools {
+		toolDefs = tools.ToolDefinitions(globalTimeout)
 	}
 	toolSession := &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second}
 
@@ -208,15 +209,15 @@ func runAsk(args []string, out *askResult) error {
 		}
 	}
 
-	onToolCall := func(tc docsgpt.ToolCall) string {
+	onToolResult := func(tc docsgpt.ToolCall) docsgpt.ToolResult {
 		texts = append(texts, "")
 		if renderer == nil {
 			result := toolSession.Handle(ctx, cancel, tc)
 			out.ToolCalls = append(out.ToolCalls, askToolCall{
 				Name:      tools.NormalizeName(tc.Function.Name),
 				Arguments: jsonArguments(tc.Function.Arguments),
-				Result:    result,
-				Approved:  !tools.Refused(result),
+				Result:    result.Content,
+				Approved:  !tools.Refused(result.Content),
 			})
 			return result
 		}
@@ -234,7 +235,7 @@ func runAsk(args []string, out *askResult) error {
 		defer ui.HoldInput()()
 	}
 	res, err := client.Run(ctx, messages, docsgpt.RunOptions{
-		Tools: toolDefs, Stream: !globalNoStream, OnDelta: onDelta, OnToolCall: onToolCall,
+		Tools: toolDefs, Stream: !globalNoStream, OnDelta: onDelta, OnToolResult: onToolResult,
 	})
 	if renderer != nil {
 		renderer.Flush()

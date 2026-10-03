@@ -17,7 +17,9 @@ cmd/docsgpt-cli/     → Entry point (package main), calls cmd.Execute(). Lives 
                        first by import-path order, checked by main_test.go
 sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, package
                        docsgpt: the public chat client (Client, Send, SendStream,
-                       Run + RunOptions/RunResult (RunWithTools: the old positional form, deprecated), Models, StreamHandler,
+                       Run + RunOptions/RunResult (RunWithTools: the old positional form, deprecated;
+                       OnToolResult → ToolResult{Content, Parts}: a tool message with images,
+                       which the server shows the model), Models, StreamHandler,
                        Source, APIError with Message/Code/RetryAfter, RetryPolicy:
                        Client.Retry, 3 retries 2s/4s/8s of a chat request that failed
                        before its response — 408/429/502-504, refused/reset/timeout,
@@ -89,7 +91,9 @@ internal/
     install.go       → InstallService / UninstallService over systemd (service.go), launchd (launchd.go), Task Scheduler (wintask.go)
     transport.go     → Signed polling + SSE session transport; invocation.go runs and streams commands (approval decided server-side; its own denylist floor); pairing.go, device.go, revoke.go
   context/
-    enricher.go      → the <context> block: cwd, capped listing, AGENTS.md/CLAUDE.md (git root → cwd, 12KB), shell history (opt-in)
+    enricher.go      → the <context> block: cwd, capped listing, AGENTS.md/CLAUDE.md (git root → cwd, 12KB), shell history (opt-in);
+                       with tools: `System:` (OS/arch, sh -c or cmd.exe /C, no terminal),
+                       <tools_guide> and <coding_guide> (toolGuide), last in the block
   attach/
     attach.go        → File (id, path, name, image, size, sha256, ref, clipboard; Marker
                        `[image #1 · 240 KB]` / `[file #2 · spec.pdf · 1.2 MB]`), Open
@@ -128,8 +132,17 @@ internal/
                        item's later paragraphs on new lines, loose items a blank line
                        apart), then `rewrap` wraps at spaces only (wrapWords: words
                        never split unless wider than a row, styles carried per row)
-                       under indent / quote bars / list hang. Unindented tables go to
-                       a glamour renderer at the width. Links (incl. autolinks, bare
+                       under indent / quote bars / list hang. Unindented tables:
+                       table.go (`renderTable`, pi's layout): parsed by the same
+                       goldmark, each cell's inlines rendered by glamour on one line
+                       (header wrapped in Strong; `<br>` → a line of the cell; links
+                       placed per cell), a dim ┌─┬─┐ box, a ├─┼─┤ rule under the header
+                       and between rows, GFM alignment kept; columns at their widest
+                       cell while it fits, else shrunk toward their longest word
+                       (capped at 30) and wrapped by wrapWords, never under their
+                       widest character; too narrow → the raw markdown. Tables inside
+                       lists/quotes stay glamour's. Copy: a table copies as shown
+                       (copy.go markdownPlain). Links (incl. autolinks, bare
                        URLs) are marked in the AST (`markLinks`: U+FDD0/FDD1 emoji
                        nodes around the text, destination → "#" so glamour prints no
                        URL), then `placeLinks` swaps the markers for OSC 8 (ST) or a
@@ -159,10 +172,14 @@ internal/
                        toolBox rows tinted by the outcome; keeps the output the
                        model gets, 2000 lines / 50 KB, lines cut to their last
                        4 KB; a ui.Expander: collapsed the last 5 lines under
-                       `… N earlier lines · ctrl+o to expand`, expanded all kept)
+                       `… N earlier lines · ctrl+o to expand`, expanded all kept;
+                       Start (screenTools.Output) shows `running · 3s` under the
+                       output from the first second until Close, redrawn by the
+                       busy spinner's frames)
     style.go         → Accent/Muted/Dim/Success/Warn helpers, ErrorMsg (stderr)
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
-                       (live last-5-lines region), DiffPreview for writes. With
+                       (live last-5-lines region, `running · 3s` under it from the
+                       first second, a 1s timer), DiffPreview for writes. With
                        colors and stderr a 256/truecolor TTY a block is a toolBox:
                        full-width rows on colToolBg (pi's Box(1,1): padding row
                        above/below, one column each side; resets re-apply the bg),
@@ -200,17 +217,34 @@ internal/
                        suspend_*.go: Ctrl+Z; hold_*.go: echo off while ask streams,
                        DiscardInput
   tools/
-    definitions.go   → Tool schemas: run_command, read_file (offset/limit), write_file
-    approval.go      → Session: per chat session / ask run; title, approval, execution,
-                       status per call, shown and asked through Session.UI. Approve /
-                       Always allow / Always approve (sets AutoApprove) / Deny / Edit;
-                       readReason (when a read asks; home compared with os.SameFile),
-                       secretNames
+    definitions.go   → Tool schemas: run_command (timeout: seconds, ≤1h or --tool-timeout),
+                       read_file (offset/limit; images), edit_file (path, edits[{old_text,
+                       new_text}]), write_file; descriptions name the OS and shell and say
+                       which tool to use for what (the server ignores our system prompt)
+    args.go          → callArgs, read leniently: numbers as strings/floats, edits as an
+                       array, one object, a JSON string, camelCase names, or old_text/
+                       new_text beside path; expandPath (~, a leading @ when the path
+                       without it exists)
+    approval.go      → Session: per chat session / ask run; Handle → docsgpt.ToolResult;
+                       title, approval, execution, status per call, shown and asked
+                       through Session.UI. Approve / Always allow / Always approve (sets
+                       AutoApprove) / Deny / Edit; readReason (when a read asks; home
+                       compared with os.SameFile), writeReason (readReason + .git; asks
+                       even after "Always allow writes", which is offered only for files
+                       it covers), a working_directory with a readReason never auto-
+                       allowed; resolve (symlinks through the existing part), secretNames;
+                       editFile re-reads before writing (changed → error), keeps the mode
+    edit.go          → applyEdits: each old_text matched in the original, exactly, else
+                       normalized (trailing spaces, \r\n, typographic quotes/dashes/
+                       spaces; fuzzyText maps back to the file's bytes); once each, no
+                       overlaps; BOM kept, new_text gets \r\n in a CRLF file
+    image.go         → readImage (PNG/JPEG/GIF/WebP/BMP by their bytes, ≤20 MB, sent as
+                       an image part; the server scales it), readText (edit's input)
     allow.go         → alwaysKey: what "Always allow" covers, and when it is never offered
                        (its doc comment is the source of truth for the rules)
     executor.go      → runCommand (caller's ctx + timeout; own session without a
                        controlling terminal, whole group killed; Windows: hidden console,
-                       taskkill /T, NoDefaultCurrentDirectoryInExePath=1 so cmd.exe
+                       taskkill /T by its System32 path, NoDefaultCurrentDirectoryInExePath=1 so cmd.exe
                        never runs a program from the working directory), regularFile + readFile (regular files only, chunked,
                        ctx-aware line ranges), writeFile (creates parents)
     ui.go            → UI: Open/Lines/Output/Close a block, Choose, Edit; stderrUI (the
@@ -271,7 +305,7 @@ neither configured (`--json`: no PAT) = exit 1, not a usage error.
 2. Loads config from `~/.docsgpt/config.json`, resolves API key (Bearer auth, first-run prompt via `chatKey`) and base URL
 3. Unless `--no-context`, prepends the `<context>` block (see chat)
 4. Sends to `POST {base_url}/v1/chat/completions` with streaming
-5. Handles tool calls (run_command, read_file, write_file) with user approval loop; tools are only offered when stdin is a TTY or `--auto-approve` is set. Tool UI (titles, approval prompt, command output, status) goes to stderr
+5. Handles tool calls (run_command, read_file, edit_file, write_file) with user approval loop; tools are only offered when stdin is a TTY or `--auto-approve` is set. Tool UI (titles, approval prompt, command output, status) goes to stderr
 6. stdout not a TTY: stdout carries only the answer, control sequences stripped (no header, sources, clipboard). On a TTY: header, rendered answer, dim `Sources` block, first bash/sh block copied to the clipboard (with a dim note)
 
 Errors (every command) go to stderr; a missing question or a bad flag is a usage error (exit 2, flags with a `--help` pointer); Ctrl+C exits `ask` with 130; TERM and HUP cancel ask and chat like Ctrl+C (so the deferred terminal restores run) and exit 128 + the signal (143, 129): `signalContext` cancels with a `ui.Signal` cause, prompts return `ui.Signal` (bubbletea's own handler is off: it would submit the prompt on TERM), and `exitCodeFor` maps it.
@@ -306,6 +340,9 @@ or with TERM=dumb it refuses.
   (ToolBlock; reasoning stays with /think), new ones are added in that state;
   a scrolled-back view keeps its top line, or goes to the start of the block
   at its top when that block folds; flash `Tool output expanded/collapsed`.
+  A click (no drag, no link) on one that folds toggles it alone, after the
+  500ms a second click would take (a double click selects a word instead);
+  its first line keeps its row, or comes to the top from above the view.
 - Selection (`ui/selection.go`, pi's fullscreen behaviour): with the mouse on,
   a left press in the transcript starts it, drag events (cell motion, 1002)
   extend it, the release copies it (`ui.Copy`, in a tea.Cmd) and flashes
@@ -366,6 +403,12 @@ or with TERM=dumb it refuses.
   `[paste #N +L lines]` markers (one unit: the cursor never rests inside one, any
   deletion that reaches into one removes it whole; expanded on send, shown
   collapsed in the transcript); Ctrl+A/E/K/U/W, Alt+←/→; Ctrl+G opens $VISUAL/$EDITOR.
+  Kill ring (`killring.go`, pi's): Ctrl+K/U/W, Alt+Backspace and Alt+D
+  (Alt+Delete) kill onto it (at a line's edge the line break; a run of kills
+  one entry, backward ones prepended; 100 kept, the pastes and files of
+  killed markers with them), Ctrl+Y yanks the latest (markers renumbered),
+  Alt+Y right after a yank swaps in the one before, round the ring; each one
+  undo step; the ring outlives a send.
   Attachments: `files` beside `pastes` (FileMarker, same one-unit rules, in
   undo states, renumbered by requeue, kept for the $EDITOR result and the
   draft while browsing history); Ctrl+V runs attach.Paste in a tea.Cmd
@@ -413,8 +456,11 @@ or with TERM=dumb it refuses.
   ignore by default, so ask and chat put a `<context>` block (cwd, first 50 entries
   with `/` on dirs, AGENTS.md or else CLAUDE.md of every dir from the git root down
   to cwd within 12KB, shell history only with `send_last_commands`, no placeholder
-  text) before the first user message, and again only when it changes.
-  `--no-context` keeps the tools; `--no-tools` drops them.
+  text; with tools also the system/shell line and the tool and coding guides)
+  before the first user message, and again only when it changes.
+  `--no-context` keeps the tools; `--no-tools` drops them. Images read_file
+  sent are dropped from the history and session after the run (Parts=nil), like
+  attachments.
 - Sessions (`internal/session`): created lazily with the first answer; header
   (cwd, server, key, conversation_id), then `message` lines (the sent message, `text`
   = what was typed, sources on the last assistant message) and `state` lines (server,
@@ -483,10 +529,10 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set a
 
 ### Tool call flow
 1. CLI sends `tools` array in request
-2. If model returns `finish_reason: "tool_calls"`, CLI shows the call's title (`$ cmd`, `read path`, `write path (+N −M)` with a short diff) and asks: Approve (a), Always allow (l, only when there is a narrow key), Always approve (p: every later call of the session unasked, i.e. AutoApprove), Deny (d), Edit (e, commands only: prefilled input, then asked again); the muted line under the row describes the highlighted choice. Ctrl+C/Esc at the prompt cancels the whole run
+2. If model returns `finish_reason: "tool_calls"`, CLI shows the call's title (`$ cmd` with `· timeout 10m` when the model set one, `read path`, `edit path (+N −M)` / `write path (+N −M)` with a short diff) and asks: Approve (a), Always allow (l, only when there is a narrow key), Always approve (p: every later call of the session unasked, i.e. AutoApprove), Deny (d), Edit (e, commands only: prefilled input, then asked again); the muted line under the row describes the highlighted choice. Ctrl+C/Esc at the prompt cancels the whole run
 3. On approve: executes locally (command output in a live 5-line tail, then `✓ exit 0 · 1.2s` / `✗ …`), sends result back as `role: "tool"` message
 4. Model continues with tool results — loop repeats until `finish_reason: "stop"`
-5. Security stance (like pi): approval is the only gate, there is no command blocklist. `read_file` asks only for files outside the working directory (symlinks resolved), when the working directory is the home directory or above it (compared as files, so case-insensitive spellings count), or for secret-looking names on the way (`.env*`, `.envrc`, `.netrc`, `*.pem`, `*.key`, `id_*`, `.ssh`, `.aws`, `.docsgpt`, `*_history`, … `secretNames`); devices, FIFOs and directories are refused. "Always allow" lasts for the session: all writes, all reads, or later commands with the same key — the program plus its subcommand word (`git status`, `npm test`), the program alone for plain read-only programs (`ls`, `cat`, `rg`) or option-only calls — and each later command is re-checked. Never offered for shell syntax beyond quotes, `VAR=value` prefixes, programs given as a path, code runners (shells, wrappers, interpreters, `find`, `make`, `tar`, editors, `cmd`/`powershell`/`start`), risky options (`-c`, `-C`, `-e`, `-o`, `-x`, `--exec*`, `--upload-pack`, `--git-dir`, …), risky subcommands (`git config`, `npm exec`, `docker run`), a path argument leaving the cwd (absolute, `~`, `..`), or options before the subcommand other than known value-less ones (`git --no-pager`); the doc comment of `alwaysKey` is the source of truth. Known gap (documented in docs/tools.md): a subcommand key covers its destructive forms (`git branch` → `git branch -D`). Commands run without the terminal, so password prompts fail at once. `--auto-approve` (or "Always approve", or `/approve` in chat) skips every prompt but still prints each title and status. Host mode (no person at the device) keeps its own denylist in `internal/host/invocation.go`
+5. Security stance (like pi): approval is the only gate, there is no command blocklist. `read_file` asks only for files outside the working directory (symlinks resolved), when the working directory is the home directory or above it (compared as files, so case-insensitive spellings count), or for secret-looking names on the way (`.env*`, `.envrc`, `.netrc`, `*.pem`, `*.key`, `id_*`, `.ssh`, `.aws`, `.docsgpt`, `*_history`, … `secretNames`); devices, FIFOs and directories are refused. "Always allow" lasts for the session: writes and edits inside the cwd (not secret-looking, not in `.git`; others always ask), all reads, or later commands with the same key run in the cwd (a `working_directory` outside it or secret-looking always asks) — the program plus its subcommand word (`git status`, `npm test`), the program alone for plain read-only programs (`ls`, `cat`, `rg`) or option-only calls — and each later command is re-checked. Never offered for shell syntax beyond quotes, `VAR=value` prefixes, programs given as a path, code runners (shells, wrappers, interpreters, `find`, `make`, `tar`, editors, `cmd`/`powershell`/`start`), risky options (`-c`, `-C`, `-e`, `-o`, `-x`, `--exec*`, `--upload-pack`, `--git-dir`, …), risky subcommands (`git config`, `npm exec`, `docker run`), a path argument leaving the cwd (absolute, `~`, `..`), or options before the subcommand other than known value-less ones (`git --no-pager`); the doc comment of `alwaysKey` is the source of truth. Known gap (documented in docs/tools.md): a subcommand key covers its destructive forms (`git branch` → `git branch -D`). Commands run without the terminal, so password prompts fail at once. `--auto-approve` (or "Always approve", or `/approve` in chat) skips every prompt but still prints each title and status. Host mode (no person at the device) keeps its own denylist in `internal/host/invocation.go`
 
 ## Config
 

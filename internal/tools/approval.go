@@ -42,49 +42,92 @@ func (s *Session) ui() UI {
 
 // Handle runs one tool call and returns the result for the model. A
 // Ctrl+C (or Esc) at the approval prompt calls cancel, which stops the run.
-func (s *Session) Handle(ctx context.Context, cancel context.CancelFunc, tc docsgpt.ToolCall) string {
+func (s *Session) Handle(ctx context.Context, cancel context.CancelFunc, tc docsgpt.ToolCall) docsgpt.ToolResult {
+	text := func(s string) docsgpt.ToolResult { return docsgpt.ToolResult{Content: s} }
 	if ctx.Err() != nil {
-		return "The user interrupted the run before this tool call ran."
+		return text("The user interrupted the run before this tool call ran.")
 	}
-	var args struct {
-		Command          string `json:"command"`
-		WorkingDirectory string `json:"working_directory"`
-		Path             string `json:"path"`
-		Content          string `json:"content"`
-		Offset           int    `json:"offset"`
-		Limit            int    `json:"limit"`
-	}
+	var args callArgs
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-		return "Error: invalid arguments: " + err.Error()
+		return text("Error: invalid arguments: " + err.Error())
 	}
 	switch name := NormalizeName(tc.Function.Name); name {
 	case "run_command":
-		return s.runCommand(ctx, cancel, args.Command, args.WorkingDirectory)
+		dir := args.WorkingDirectory
+		if strings.TrimSpace(dir) != "" {
+			dir = expandPath(dir)
+		}
+		return text(s.runCommand(ctx, cancel, args.Command, dir, time.Duration(args.Timeout)*time.Second))
 	case "read_file":
-		return s.readFile(ctx, cancel, args.Path, args.Offset, args.Limit)
+		if strings.TrimSpace(args.Path) == "" {
+			return text(s.fail("read", "no path given", "Error: path is required."))
+		}
+		return s.readFile(ctx, cancel, expandPath(args.Path), int(args.Offset), int(args.Limit))
+	case "edit_file":
+		if strings.TrimSpace(args.Path) == "" {
+			return text(s.fail("edit", "no path given", "Error: path is required."))
+		}
+		edits := args.Edits
+		if len(edits) == 0 && args.OldText != "" {
+			edits = editList{{args.OldText, args.NewText}}
+		}
+		return text(s.editFile(ctx, cancel, expandPath(args.Path), edits))
 	case "write_file":
-		return s.writeFile(ctx, cancel, args.Path, args.Content)
+		if strings.TrimSpace(args.Path) == "" {
+			return text(s.fail("write", "no path given", "Error: path is required."))
+		}
+		return text(s.writeFile(ctx, cancel, expandPath(args.Path), args.Content))
 	default:
-		return "Error: unknown tool " + name
+		return text("Error: unknown tool " + name)
 	}
 }
 
-func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, command, dir string) string {
-	var note string
-	if dir != "" {
-		note = "in " + dir
+// fail shows a call that cannot run, titled title, failed with status,
+// and returns result.
+func (s *Session) fail(title, status, result string) string {
+	s.ui().Open(title, "")
+	s.ui().Close(false, status)
+	return result
+}
+
+// runCommand runs command in dir (the working directory when ""), for at
+// most timeout when the model gave one (capped at maxTimeout seconds or
+// the session's own timeout, whichever is longer), else s.Timeout.
+func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, command, dir string, timeout time.Duration) string {
+	if strings.TrimSpace(command) == "" {
+		return s.fail("$", "empty command", "Error: the command is empty.")
 	}
+	limit := s.Timeout
+	if timeout > 0 {
+		limit = min(timeout, max(s.Timeout, maxTimeout*time.Second))
+	}
+	// "Always allow" covers a command where it was allowed: in a directory
+	// outside the working directory, or one that may hold secrets, the
+	// same command (cat id_rsa) is another matter.
+	var notes []string
+	var dirReason string
+	if dir != "" {
+		notes = append(notes, "in "+display.ShortPath(dir))
+		dirReason = readReason(resolve(dir))
+	}
+	if timeout > 0 {
+		notes = append(notes, "timeout "+timeoutText(limit))
+	}
+	if dirReason != "" {
+		notes = append(notes, "("+dirReason+")")
+	}
+	note := strings.Join(notes, " · ")
 	edited, titled := false, false
 	for {
 		if !titled {
 			s.ui().Open("$ "+command, note)
 			titled = true
 		}
-		if s.AutoApprove || s.allowed[alwaysKey(command)] {
+		if s.AutoApprove || dirReason == "" && s.allowed[alwaysKey(command)] {
 			break
 		}
 		var always *ui.Item
-		if key := display.Safe(alwaysKey(command)); key != "" {
+		if key := display.Safe(alwaysKey(command)); key != "" && dirReason == "" {
 			always = &ui.Item{Label: "Always allow " + key, Description: "run " + key + " commands without asking this session"}
 		}
 		choice, refusal := s.ask(cancel, "run once", always, true)
@@ -112,7 +155,7 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 
 	var out tailBuffer
 	start := time.Now()
-	err := runCommand(ctx, command, dir, s.Timeout, io.MultiWriter(&out, s.ui().Output()))
+	err := runCommand(ctx, command, dir, limit, io.MultiWriter(&out, s.ui().Output()))
 	took := display.Duration(time.Since(start))
 
 	result := out.String()
@@ -131,8 +174,8 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 		s.ui().Close(false, "cancelled")
 		return result + "\n[The user interrupted the command.]"
 	case errors.Is(err, errTimeout):
-		s.ui().Close(false, "timed out after "+display.Duration(s.Timeout))
-		return result + fmt.Sprintf("\n[The command timed out after %s.]", display.Duration(s.Timeout))
+		s.ui().Close(false, "timed out after "+timeoutText(limit))
+		return result + fmt.Sprintf("\n[The command timed out after %s. Run it again with a longer timeout if it needs one.]", timeoutText(limit))
 	case errors.As(err, &exit):
 		s.ui().Close(false, fmt.Sprintf("exit %d · %s", exit.ExitCode(), took))
 		return result + fmt.Sprintf("\n[The command exited with code %d.]", exit.ExitCode())
@@ -141,7 +184,8 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 	return result + "\n[The command failed: " + err.Error() + "]"
 }
 
-func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path string, offset, limit int) string {
+func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path string, offset, limit int) docsgpt.ToolResult {
+	text := func(s string) docsgpt.ToolResult { return docsgpt.ToolResult{Content: s} }
 	title := "read " + display.ShortPath(path)
 	if offset > 1 || limit > 0 {
 		title += fmt.Sprintf(":%d", max(offset, 1))
@@ -151,9 +195,7 @@ func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path 
 	}
 	real, err := regularFile(path)
 	if err != nil {
-		s.ui().Open(title, "")
-		s.ui().Close(false, err.Error())
-		return "Error: " + err.Error()
+		return text(s.fail(title, err.Error(), "Error: "+err.Error()))
 	}
 	var reason string
 	if !s.AutoApprove && !s.allowReads {
@@ -180,7 +222,7 @@ func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path 
 		choice, refusal := s.ask(cancel, "read this file once",
 			&ui.Item{Label: "Always allow reads", Description: "read any file without asking this session"}, false)
 		if refusal != "" {
-			return refusal
+			return text(refusal)
 		}
 		s.allowReads = choice == "always"
 	}
@@ -191,24 +233,92 @@ func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path 
 		readCtx, stop = context.WithTimeout(ctx, s.Timeout)
 		defer stop()
 	}
-	text, shown, total, err := readFile(readCtx, real, offset, limit)
+	if img, err := readImage(real); img != nil || err != nil {
+		if err != nil {
+			s.ui().Close(false, err.Error())
+			return text("Error: " + err.Error())
+		}
+		s.ui().Close(true, img.status)
+		return docsgpt.ToolResult{
+			Content: fmt.Sprintf("[Image %s: %s. It is attached to this result.]", display.ShortPath(path), img.status),
+			Parts:   []docsgpt.ContentPart{docsgpt.ImagePart(img.mimeType, img.data)},
+		}
+	}
+	body, shown, total, err := readFile(readCtx, real, offset, limit)
 	switch {
 	case ctx.Err() != nil:
 		s.ui().Close(false, "cancelled")
-		return "The user interrupted the read."
+		return text("The user interrupted the read.")
 	case errors.Is(err, context.DeadlineExceeded):
 		s.ui().Close(false, "timed out after "+display.Duration(s.Timeout))
-		return "Error: reading the file timed out."
+		return text("Error: reading the file timed out.")
 	case err != nil:
 		s.ui().Close(false, err.Error())
-		return "Error: " + err.Error()
+		return text("Error: " + err.Error())
 	}
 	status := lines(shown)
 	if shown < total {
 		status += fmt.Sprintf(" of %d", total)
 	}
 	s.ui().Close(true, status)
-	return text
+	if total == 0 {
+		return text("(empty file)")
+	}
+	return text(body)
+}
+
+// timeoutText writes a timeout as 45s, 2m, 1m30s or 1h1m: hours, minutes
+// and seconds, leaving out zeros at the end.
+func timeoutText(d time.Duration) string {
+	sec := int(d.Round(time.Second) / time.Second)
+	h, m := sec/3600, sec/60%60
+	sec %= 60
+	var out string
+	if h > 0 {
+		out += fmt.Sprintf("%dh", h)
+	}
+	if m > 0 || h > 0 && sec > 0 {
+		out += fmt.Sprintf("%dm", m)
+	}
+	if sec > 0 || out == "" {
+		out += fmt.Sprintf("%ds", sec)
+	}
+	return out
+}
+
+// resolve makes path absolute and resolves its symlinks as far as it
+// exists: a file to be created is resolved through its directory.
+func resolve(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	rest := ""
+	for d := abs; ; {
+		if real, err := filepath.EvalSymlinks(d); err == nil {
+			return filepath.Join(real, rest)
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return abs
+		}
+		rest = filepath.Join(filepath.Base(d), rest)
+		d = parent
+	}
+}
+
+// writeReason says why writing path needs the user's approval even after
+// "Always allow writes", or "" when it does not: as for reads (readReason),
+// and inside a .git directory, whose hooks and config run code.
+func writeReason(path string) string {
+	real := resolve(path)
+	if reason := readReason(real); reason != "" {
+		return reason
+	}
+	if slices.Contains(strings.Split(real, string(filepath.Separator)), ".git") {
+		return "inside a .git directory"
+	}
+	return ""
 }
 
 // readReason says why reading the file at real (as resolved by
@@ -282,33 +392,32 @@ func (s *Session) writeFile(ctx context.Context, cancel context.CancelFunc, path
 	title := "write " + display.ShortPath(path)
 	fi, err := os.Stat(path)
 	if err == nil && !fi.Mode().IsRegular() {
-		s.ui().Open(title, "")
-		s.ui().Close(false, path+" is not a regular file")
-		return "Error: " + path + " is not a regular file"
+		return s.fail(title, path+" is not a regular file", "Error: "+path+" is not a regular file")
 	}
 	var before []byte
 	if err == nil && fi.Size() <= maxPreviewBytes {
 		before, _ = os.ReadFile(path)
 	}
 	preview, added, removed := display.DiffPreview(string(before), content, 10)
+	reason := s.writeApproval(path)
+	var note string
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		s.ui().Open(title, "(new, "+lines(added)+")")
+		note = "(new, " + lines(added) + ")"
 	case err == nil && fi.Size() > maxPreviewBytes:
 		preview = nil
-		s.ui().Open(title, fmt.Sprintf("(replaces %d bytes with %s)", fi.Size(), lines(added)))
+		note = fmt.Sprintf("(replaces %d bytes with %s)", fi.Size(), lines(added))
 	default:
-		s.ui().Open(title, fmt.Sprintf("(+%d −%d)", added, removed))
+		note = fmt.Sprintf("(+%d −%d)", added, removed)
 	}
+	if reason != "" {
+		note += " (" + reason + ")"
+	}
+	s.ui().Open(title, note)
 	s.ui().Lines(preview)
 
-	if !s.AutoApprove && !s.allowWrites {
-		choice, refusal := s.ask(cancel, "write this file once",
-			&ui.Item{Label: "Always allow writes", Description: "write any file without asking this session"}, false)
-		if refusal != "" {
-			return refusal
-		}
-		s.allowWrites = choice == "always"
+	if refusal := s.approveWrite(cancel, "write this file once", reason); refusal != "" {
+		return refusal
 	}
 	if ctx.Err() != nil {
 		s.ui().Close(false, "cancelled")
@@ -320,6 +429,97 @@ func (s *Session) writeFile(ctx context.Context, cancel context.CancelFunc, path
 	}
 	s.ui().Close(true, "wrote "+lines(len(splitLines(content))))
 	return fmt.Sprintf("Wrote %d bytes to %s.", len(content), path)
+}
+
+// maxEditBytes is the largest file edit_file changes.
+const maxEditBytes = 10 << 20
+
+func (s *Session) editFile(ctx context.Context, cancel context.CancelFunc, path string, edits []edit) string {
+	title := "edit " + display.ShortPath(path)
+	real, err := regularFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return s.fail(title, "no such file", "Error: "+path+" does not exist; create a new file with write_file.")
+	}
+	if err != nil {
+		return s.fail(title, err.Error(), "Error: "+err.Error())
+	}
+	before, err := readText(real, maxEditBytes)
+	if err != nil {
+		return s.fail(title, err.Error(), "Error: "+err.Error())
+	}
+	after, at, err := applyEdits(before, edits)
+	if err != nil {
+		return s.fail(title, "not applied", "Error: "+err.Error())
+	}
+	preview, added, removed := display.DiffPreview(before, after, 10)
+	reason := s.writeApproval(real)
+	note := fmt.Sprintf("(+%d −%d)", added, removed)
+	if reason != "" {
+		note += " (" + reason + ")"
+	}
+	s.ui().Open(title, note)
+	s.ui().Lines(preview)
+
+	if refusal := s.approveWrite(cancel, "make this edit once", reason); refusal != "" {
+		return refusal
+	}
+	if ctx.Err() != nil {
+		s.ui().Close(false, "cancelled")
+		return "The user interrupted the run before this tool call ran."
+	}
+	// What was approved is a change to the file as it was shown.
+	if now, err := readText(real, maxEditBytes); err != nil || now != before {
+		s.ui().Close(false, "the file changed")
+		return "Error: " + path + " changed while the edit waited for approval; read it again."
+	}
+	fi, err := os.Stat(real)
+	if err == nil {
+		err = os.WriteFile(real, []byte(after), fi.Mode().Perm())
+	}
+	if err != nil {
+		s.ui().Close(false, err.Error())
+		return "Error: " + err.Error()
+	}
+	s.ui().Close(true, fmt.Sprintf("+%d −%d", added, removed))
+	where := make([]string, len(at))
+	for i, n := range at {
+		where[i] = fmt.Sprint(n)
+	}
+	blocks := "1 block"
+	if len(at) > 1 {
+		blocks = fmt.Sprintf("%d blocks", len(at))
+	}
+	return fmt.Sprintf("Edited %s: replaced %s, at line %s.", path, blocks, strings.Join(where, ", "))
+}
+
+// writeApproval is why a write or edit of path must be asked about even
+// with "Always allow writes" (writeReason), or "" when it need not be.
+func (s *Session) writeApproval(path string) string {
+	if s.AutoApprove {
+		return ""
+	}
+	return writeReason(path)
+}
+
+// approveWrite asks about a write or edit, unless AutoApprove is set or
+// the user allowed writes and reason is "". "Always allow writes" is
+// offered only for a file it would cover: one with no reason to ask.
+func (s *Session) approveWrite(cancel context.CancelFunc, once, reason string) (refusal string) {
+	if s.AutoApprove || s.allowWrites && reason == "" {
+		return ""
+	}
+	var always *ui.Item
+	if reason == "" {
+		always = &ui.Item{Label: "Always allow writes", Description: "write and edit files in the working directory without asking this session"}
+	}
+	choice, refusal := s.ask(cancel, once, always, false)
+	if refusal != "" {
+		return refusal
+	}
+	if choice == "always" {
+		s.allowWrites = true
+	}
+	return ""
 }
 
 // ask shows the approval choices under the tool's title: Approve (once

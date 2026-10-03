@@ -147,7 +147,7 @@ func runChat(first string) error {
 	}
 	s.reset()
 	if !globalNoTools {
-		s.toolDefs = tools.ToolDefinitions()
+		s.toolDefs = tools.ToolDefinitions(globalTimeout)
 	}
 	var commands []ui.Command
 	for _, c := range chatCommands {
@@ -320,6 +320,7 @@ func (t *screenTools) Lines(lines []string) {
 func (t *screenTools) Output() io.Writer {
 	t.scr.Status("Running…")
 	block := t.block
+	block.Start()
 	return writerFunc(func(p []byte) (int, error) {
 		block.Write(p)
 		t.scr.Changed()
@@ -412,7 +413,7 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 	}
 	block := ""
 	if !globalNoContext {
-		if block = ctxenrich.Build(s.cfg.Settings); block != s.sentContext {
+		if block = ctxenrich.Build(s.cfg.Settings, s.toolDefs != nil); block != s.sentContext {
 			content = ctxenrich.Prepend(block, content)
 		}
 	}
@@ -441,7 +442,7 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 				s.scr.Changed()
 			}
 		},
-		OnToolCall: func(tc docsgpt.ToolCall) string {
+		OnToolResult: func(tc docsgpt.ToolCall) docsgpt.ToolResult {
 			ans.Finish()
 			texts = append(texts, ans.Content())
 			out := s.tools.Handle(ctx, cancel, tc)
@@ -477,8 +478,12 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 
 	// The server keeps the files with the conversation: the history and
 	// the session hold the message's text, and the session the files'
-	// paths and hashes, never their bytes.
+	// paths and hashes, never their bytes. Images read_file sent go the
+	// same way: their tool results keep the text, which names the file.
 	res.Messages[len(messages)-1].Parts = nil
+	for i := len(messages); i < len(res.Messages); i++ {
+		res.Messages[i].Parts = nil
+	}
 	var added []session.Entry
 	for i := range res.Messages[len(messages)-1:] {
 		added = append(added, session.Entry{Message: &res.Messages[len(messages)-1+i]})
@@ -775,6 +780,7 @@ func (s *chatSession) help(string) {
 		{"↑ ↓", "move between lines, browse earlier messages"},
 		{"ctrl+g", "edit the message in $EDITOR"},
 		{"ctrl+-", "undo"},
+		{"ctrl+y, alt+y", "put back the text last deleted, then earlier ones"},
 		{"alt+↑", "edit the queued messages (the answer goes on)"},
 		{"wheel, pgup pgdn", "scroll (shift+↑ ↓ by a line)"},
 		{"drag", "select text and copy it (double click: a word, triple: a line)"},

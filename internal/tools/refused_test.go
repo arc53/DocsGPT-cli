@@ -36,7 +36,7 @@ func TestRefused(t *testing.T) {
 		{choosingUI{choice: "approve"}, false},
 	} {
 		s := &Session{UI: tc.ui, Timeout: time.Minute}
-		got := s.Handle(context.Background(), func() {}, call)
+		got := s.Handle(context.Background(), func() {}, call).Content
 		if Refused(got) != tc.refused {
 			t.Errorf("%+v: Refused(%q) = %v", tc.ui, got, !tc.refused)
 		}
