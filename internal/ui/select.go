@@ -46,7 +46,14 @@ type Select struct {
 	// Summary is the line left once an item is chosen; it defaults to
 	// "Title: Label" and an empty result leaves nothing.
 	Summary func(Item) string
+	// Actions are keys that pick the selected item for something other
+	// than Enter does (rename, delete), shown in the hint line; a Screen's
+	// SelectAction reports which.
+	Actions []Action
 }
+
+// Action is a key of a Select list and what it does, for the hint line.
+type Action struct{ Key, Name string }
 
 // Run shows the prompt and returns the chosen item's value.
 func (s Select) Run() (string, error) {
@@ -73,6 +80,7 @@ type selectModel struct {
 	maxRows int
 	done    bool
 	chosen  *Item
+	action  string // the Actions key that chose it, "" for Enter
 }
 
 func newSelectModel(s Select) *selectModel {
@@ -118,6 +126,15 @@ func (m *selectModel) key(k tea.KeyMsg) tea.Cmd {
 			return m.finish(&m.Items[m.matches[m.cursor]])
 		}
 		return nil
+	}
+	for _, a := range m.Actions {
+		if k.String() == a.Key && !k.Paste {
+			if len(m.matches) == 0 {
+				return nil
+			}
+			m.action = a.Key
+			return m.finish(&m.Items[m.matches[m.cursor]])
+		}
 	}
 	if it := m.shortcut(k); it != nil {
 		return m.finish(it)
@@ -226,7 +243,11 @@ func (m *selectModel) View() string {
 	if m.Filter && len(m.filter.text) > 0 {
 		esc = "clear"
 	}
-	lines = append(lines, hints(m.width, "↑↓", "navigate", "enter", "select", "esc", esc))
+	pairs := []string{"↑↓", "navigate", "enter", "select"}
+	for _, a := range m.Actions {
+		pairs = append(pairs, a.Key, a.Name)
+	}
+	lines = append(lines, hints(m.width, append(pairs, "esc", esc)...))
 	return frame(lines, m.width)
 }
 
