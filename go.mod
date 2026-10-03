@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/alecthomas/chroma/v2 v2.20.0
-	github.com/arc53/DocsGPT-cli/sdk v0.2.0
+	github.com/arc53/DocsGPT-cli/sdk v0.3.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/glamour v1.0.0
@@ -49,6 +49,5 @@ require (
 	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
 	golang.org/x/net v0.38.0 // indirect
-	golang.org/x/term v0.36.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
 )
