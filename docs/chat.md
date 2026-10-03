@@ -11,16 +11,47 @@ docsgpt-cli -r                   # pick an earlier chat to resume
 terminal. Answers stream in as markdown, followed by a short **Sources** list
 (linked when the source has a URL).
 
-The chat takes over the window: what it showed moves up into the scrollback
-(nothing is erased), a short header opens it (version, keys, and the
-`AGENTS.md` / `CLAUDE.md` files the context sends), and the input waits at the
-bottom of the window, blank space above it until the conversation fills the
-window. Your message is printed right under the previous answer, and the answer
-streams below it; the input is back at the bottom when it is done. Everything
-stays on the normal screen, so the scrollback keeps the whole conversation.
-`/new` and `/resume` start the window over the same way. Under the input: the
+The chat takes the whole window, like a full-screen program: a short header
+opens the conversation (version, keys, and the `AGENTS.md` / `CLAUDE.md` files
+the context sends), and the input stays at the bottom with a line under it: the
 directory and its git branch on the left, the key and the server (and what is
-on, such as `think on`) on the right.
+on, such as `think on`) on the right. You can type while an answer streams in;
+Enter then queues your message until the answer is done. When you leave, the
+conversation is printed to the terminal, so it ends up in its scrollback as
+usual.
+
+## Scrolling
+
+The chat scrolls its own conversation, so the terminal's scrollbar has nothing
+to show while it runs.
+
+| Key | Action |
+|---|---|
+| Mouse wheel | Scroll |
+| PgUp / PgDn | A page up / down |
+| Shift+↑ / Shift+↓ | A line up / down |
+| Ctrl+↑ / Ctrl+↓ | Your previous / next message |
+| End, Ctrl+End | Back to the end (End when nothing is typed) |
+| Home, Ctrl+Home | To the start (Home when nothing is typed) |
+
+At the end, the view follows the answer as it streams. Scrolled back, it stays
+where you put it, and the line above the input counts what came in meanwhile
+(`↓ 12 new lines · end to jump`). Sending a message, or a question from the
+chat (an approval), brings you back to the end. Resizing the window wraps
+everything again at the new width.
+
+### Selecting text
+
+The chat takes the mouse for the wheel, so the terminal's own selection needs a
+modifier: Shift-drag in most terminals (kitty, WezTerm, Ghostty, Alacritty,
+Windows Terminal, GNOME Terminal, xterm, and tmux), Option-drag in iTerm2,
+Fn-drag in Terminal.app. `/copy` copies the last answer, or one of its code
+blocks.
+
+`docsgpt-cli config set mouse off` (or `/settings`) leaves the mouse to the
+terminal: selection works as usual and the keys above still scroll. The wheel
+then does whatever the terminal does on a full-screen program: many send ↑ and
+↓, which browse your earlier messages in the input.
 
 ## Editor
 
@@ -34,19 +65,22 @@ on, such as `think on`) on the right.
 | Alt+← / Alt+→ (Ctrl+← / Ctrl+→) | Previous / next word |
 | Ctrl+W, Alt+Backspace | Delete the previous word |
 | Ctrl+U / Ctrl+K | Delete to the start / end of the line |
+| Esc | Stop the answer or the command that runs |
 | Ctrl+C | Stop the answer, or clear the input; twice on an empty input quits |
 | Ctrl+D | Quit |
+| Ctrl+Z | Suspend (`fg` to come back) |
+| Ctrl+L | Redraw the window |
 
 Shift+Enter needs a terminal that can tell it from Enter: one with the kitty
 keyboard protocol or xterm's `modifyOtherKeys`, such as kitty, Ghostty,
-iTerm2, WezTerm, foot, Alacritty or xterm. The input asks for both while it is
-open and turns them off when it closes. Terminal.app sends a plain Enter for
+iTerm2, WezTerm, foot, Alacritty or xterm. The chat asks for both while it
+runs and turns them off when it ends. Terminal.app sends a plain Enter for
 Shift+Enter: use Ctrl+J there. In tmux, add `set -g extended-keys on` to
 `~/.tmux.conf` and restart tmux; until then the header shows `ctrl+j` instead
 of `shift+enter`.
 
 A long paste (over 10 lines or 1000 characters) shows as
-`[paste #1 +200 lines]` until it is sent. The marker is one piece: the cursor
+`[paste #1 +200 lines]` in the input. The marker is one piece: the cursor
 never stops inside it, and deleting any part of it deletes all of it.
 
 Your messages are kept in `~/.docsgpt/history` for ↑; lines that look like
@@ -89,7 +123,7 @@ in; the list shows only the chats recorded for it.
 
 - `docsgpt-cli -c` continues the latest chat of this directory.
 - `docsgpt-cli -r` or `/resume` lists them (type to filter) with age, length and
-  key; the last few exchanges are shown again.
+  key; the conversation is shown again.
 - A resumed chat goes on in the same server conversation when the key and
   server are the same. Otherwise it continues in a new conversation, with the
   saved messages as history.
@@ -97,13 +131,13 @@ in; the list shows only the chats recorded for it.
 
 ## Stopping
 
-Ctrl+C stops the answer, or the command the agent (or `!cmd`) is running, and
-leaves you in the chat. A `TERM` or `HUP` signal (`kill`, `timeout`, a closed
-terminal) stops it the same way and ends the chat, also while you type or pick
-from a menu (nothing half-typed is sent). Either way the terminal is restored
-(echo on) before the CLI exits. Exit codes follow the
-shell's: `130` for Ctrl+C in a one-shot question, `143` for `TERM`, `129` for
-`HUP`.
+Esc or Ctrl+C stops the answer, or the command the agent (or `!cmd`) is
+running, and leaves you in the chat; messages you queued meanwhile go back into
+the input. Esc or Ctrl+C at an approval stops the whole answer. A `TERM` or
+`HUP` signal (`kill`, `timeout`, a closed terminal) ends the chat, also while
+you type or pick from a menu (nothing half-typed is sent). Either way the
+terminal is restored before the CLI exits. Exit codes follow the shell's: `130`
+for Ctrl+C in a one-shot question, `143` for `TERM`, `129` for `HUP`.
 
 ## Context
 

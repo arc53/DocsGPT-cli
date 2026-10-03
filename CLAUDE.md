@@ -37,7 +37,7 @@ deployment/          → install.sh / install.ps1 (attached to every release)
 cmd/
   root.go            → Root command = the entry point (chat on a TTY, else one-shot ask), typo guard + questionArgs (extra words after a command: exit 2 with `To ask it as a question: docsgpt-cli -- "…"`), global flags (--url, --key, --token), chat flags (+ --no-stdin), help groups + usage template, Execute (startup config, update gate)
   ask.go             → Single-shot Q&A with streaming + tool support (hidden alias; the root runs it)
-  chat.go            → Interactive chat (hidden alias; optional first message): editor loop, the slash command table, !cmd, sessions (-c/-r//resume)
+  chat.go            → Interactive chat (hidden alias; optional first message): drives the full-screen ui.Screen from a goroutine (loop over Screen.Next), the slash command table, !cmd, sessions (-c/-r//resume), screenTools (tools.UI in the transcript and panel), transcript printed on exit
   config.go          → config get / set / show / path + the settings menu; one `settings` table drives all of them
   install.go         → Hidden `install` (run by the install scripts), wiring over internal/install
   update.go          → Self-update to latest GitHub release (--check, --yes/-y: needed off a terminal, else ui.Confirm; --rollback, hidden --worker)
@@ -95,11 +95,18 @@ internal/
                        code fences drawn by us (dim ``` lines, 2-space indent, chroma
                        tokens colored from the palette)
     chrome.go        → one dim header line (docsgpt · key · host · cwd) for ask; chat:
-                       ClaimScreen (h-1 newlines from the cursor row r scroll exactly the
-                       r-1 rows above into the scrollback, then home), ChatHeader (2-row
-                       mark + version, key hints, `Context` files), ChatFooter (cwd + git
-                       branch read from .git/HEAD, worktrees and detached too); the
-                       user-message block, Ago
+                       chatHeader (2-row mark + version, key hints, `Context` files),
+                       ChatFooter (cwd + git branch read from .git/HEAD, worktrees and
+                       detached too); the user-message block, Ago
+    blocks.go        → the chat transcript's ui.Blocks, each rendered at the width and
+                       cached per width (`fit` cuts over-wide rows, continuation rows
+                       indented like the line): Header (banner once + chatHeader),
+                       User (a ui.Prompt), Markdown, Sources, Note/Failure/Done/Text;
+                       Answer (streamed: reasoning dim italic on top when shown, the
+                       finished markdown blocks rendered once via commitPoint, the
+                       last one again per frame; one glamour renderer kept per width);
+                       ToolBlock (title + note, preview, last 5 output lines, ✓/✗
+                       status, on toolBox rows tinted by the outcome)
     style.go         → Accent/Muted/Dim/Success/Warn helpers, ErrorMsg (stderr)
     tool.go          → tool blocks on stderr: bold title, status line (✓/✗), TailView
                        (live last-5-lines region), DiffPreview for writes. With
@@ -122,22 +129,23 @@ internal/
                        http(s) URLs only), TTY only
     background*.go   → auto theme: COLORFGBG, else one OSC 11 query (stdout TTY only,
                        150ms max); the answer also feeds glamour and lipgloss
-    banner.go        → dino banner, interactive chat only, default "once", no animation
+    banner.go        → dino banner, top of the chat's transcript, default "once"
   ui/                → inline bubbletea prompts: Select (list / inline row that stops at
-                       its ends, filter, key shortcuts), Confirm, Input (mask,
-                       validate), Spinner (stderr); TERM/HUP end a prompt with
-                       ui.Signal (and ui.Stopped reports it);
-                       Stderr option for prompts drawn while stdout carries an answer.
-                       editor.go: the chat input (Editor; Pin = pinned to the window
-                       bottom); keys.go: ttyInput (keyboard protocol → legacy bytes,
-                       cursor position replies), NewlineKey; history.go: prompt history
-                       file; fuzzy.go: popup/filter matching; hold_*.go: echo off while
-                       an answer streams, DiscardInput
+                       its ends, filter, key shortcuts), Confirm/ConfirmWith, Input
+                       (mask, validate), Spinner (stderr); TERM/HUP end a prompt with
+                       ui.Signal; Stderr option for prompts drawn while stdout carries
+                       an answer; Prompter (Inline, or a Screen's panel).
+                       screen.go: the chat's full-screen program (see chat command);
+                       editor.go: its input (editorModel, embedded); keys.go: ttyInput
+                       (keyboard protocol → legacy bytes), NewlineKey; history.go:
+                       prompt history file; fuzzy.go: popup/filter matching;
+                       suspend_*.go: Ctrl+Z; hold_*.go: echo off while ask streams,
+                       DiscardInput
   tools/
     definitions.go   → Tool schemas: run_command, read_file (offset/limit), write_file
     approval.go      → Session: per chat session / ask run; title, approval, execution,
-                       status per call. Inline Approve / Always allow / Always
-                       approve (sets AutoApprove) / Deny / Edit;
+                       status per call, shown and asked through Session.UI. Approve /
+                       Always allow / Always approve (sets AutoApprove) / Deny / Edit;
                        readReason (when a read asks; home compared with os.SameFile),
                        secretNames
     allow.go         → alwaysKey: what "Always allow" covers, and when it is never offered
@@ -147,6 +155,8 @@ internal/
                        taskkill /T, NoDefaultCurrentDirectoryInExePath=1 so cmd.exe
                        never runs a program from the working directory), regularFile + readFile (regular files only, chunked,
                        ctx-aware line ranges), writeFile (creates parents)
+    ui.go            → UI: Open/Lines/Output/Close a block, Choose, Edit; stderrUI (the
+                       default, ask): display's stderr blocks + inline prompts
     shell.go         → RunShell: the chat's `!cmd` (no approval, no time limit)
     procgroup_*.go   → own process group / session, whole-tree kill (Unix), taskkill (Windows)
     truncate.go      → model-bound output: last 2000 lines / 50KB, line/rune safe, with
@@ -208,29 +218,50 @@ neither configured (`--json`: no PAT) = exit 1, not a usage error.
 Errors (every command) go to stderr; a missing question or a bad flag is a usage error (exit 2, flags with a `--help` pointer); Ctrl+C exits `ask` with 130; TERM and HUP cancel ask and chat like Ctrl+C (so the deferred terminal restores run) and exit 128 + the signal (143, 129): `signalContext` cancels with a `ui.Signal` cause, prompts return `ui.Signal` (bubbletea's own handler is off: it would submit the prompt on TERM), and `exitCodeFor` maps it.
 
 ### chat command
-Loop: `ui.Editor.Run` (a fresh inline bubbletea program per message, so it is never
-running while an answer streams) → `handle`: `/command`, `!cmd`, or a message.
-- Window (main screen, never the alternate one): `top()` = `display.ClaimScreen` +
-  banner (once) + `ChatHeader`, at start (after the `-r` picker, so Esc there leaves
-  the window alone), on `/new` and on resume. The editor runs with `Pin`: Init asks
-  for the cursor row (CSI 6n; the reply is taken out of the input by ttyInput and
-  comes back as a cursorMsg; Windows reads the console) and draws nothing until it
-  comes (500ms max; a terminal that never answers is not asked again); the frame is
-  blank rows + the editor, ending on the window's last row, and collapses to its
-  first row when done, so the next output lands right under the previous one. It
-  never quits while a reply is due (it would reach the shell). On resize it asks
-  again 80ms later (bubbletea leaves the cursor on the frame's last row); rows a
-  narrower window wrapped from the old frame are counted (`residue`), the cursor is
-  moved up over them and the frame redrawn from there. Known: blank rows the
-  terminal pushes into the scrollback when the window gets shorter stay there.
-  Nothing is pinned while an answer streams (a scroll region would keep lines out
-  of tmux's scrollback; the renderer redraws with relative moves).
-- Keys: while the editor runs, `keysOn` pushes kitty keyboard flags 1
-  (disambiguate) and xterm modifyOtherKeys 1; `keysOff` (deferred in `run()`, also
-  around Ctrl+G's $EDITOR via plainKeys, which hands the program the real stdin)
-  pops/resets them. ttyInput translates `CSI code;mods u` and `CSI 27;mods;code ~`
+One bubbletea program for the whole chat, `ui.Screen`, on the alternate screen
+(like pi's fullscreen mode); `runChat` runs it on the main goroutine and the chat
+logic (`loop`: -r/-c/header, then `Screen.Next` → `handle`) on another, which
+drives it through methods that send closures into the program (`doMsg`): Add,
+Clear, Changed (one redraw per ~33ms), Busy/Status (spinner + what Esc/Ctrl+C
+cancel), Footer, Select/Input (blocking, in the panel), Mouse, Quit. Not on a TTY
+or with TERM=dumb it refuses.
+- Layout, bottom up: footer, editor (dim rules; at most 30% of the height), the
+  panel (a Select or Input, above the editor, which keeps its text but loses its
+  cursor), one status row (spinner `Thinking…`/`Answering…`/`Running…` · `esc to
+  stop`, `N queued`; right: `↓ N new lines · end to jump` when scrolled back),
+  and the transcript filling the rest: the blocks (`ui.Block`, see display's
+  blocks.go) a blank line apart, top-aligned, only the visible rows sliced into
+  the frame. Every write is one synchronized update (`termOutput`, CSI ?2026).
+- Scrolling: `top` + `follow` (at the end, the view follows; scrolled back it
+  stays, `leftAt` counts new lines). Wheel via SGR mouse (bubbletea cell motion,
+  the only mode it manages and restores): 1 line per event on macOS (the system
+  accelerates, one event per line, pi's finding), else 3, 1 in bursts under 5ms.
+  PgUp/PgDn (page − 1; a list panel keeps them), Shift+↑/↓ a line, Ctrl+↑/↓ to the
+  previous/next `ui.Prompt` block (the user's messages), Home/End with an empty
+  editor and no panel, Ctrl+Home/Ctrl+End always. Sending, and a panel opening,
+  return to the end. A resize keeps a scrolled-back view on the same block, at
+  the same share of it (blocks re-render at the new width).
+- Input: the editor always takes keys (typing while an answer streams); Enter while
+  the chat is busy queues the message (sent after; Esc/Ctrl+C put the queue back
+  into the editor). Esc or Ctrl+C with something cancellable running cancels it;
+  idle, Ctrl+C clears, twice within 1s quits, Ctrl+D on empty quits (also while
+  busy). A panel takes the keys only 300ms after it opened, so keys typed just
+  before an approval appeared go to the editor. Ctrl+Z suspends (tea.Exec of a
+  `handoff`), Ctrl+G runs $EDITOR the same way, Ctrl+L repaints.
+- Terminal modes: alt screen, bracketed paste and mouse by bubbletea; `keysOn`
+  (kitty flags 1 + modifyOtherKeys 1) written in Init, after the alt screen is up
+  (kitty keeps a flag stack per screen), and after every handoff with the mouse
+  (bubbletea's RestoreTerminal re-enables neither); `keysOff` in each handoff and
+  after Run. TERM/HUP (own handler) quit the program and come back as `ui.Signal`;
+  a `kill -INT` interrupts like the key. A panic in the chat goroutine kills the
+  program (terminal restored) and re-panics on the main goroutine.
+- Exit: after Run, the transcript (only if something was asked or resumed) is
+  rendered at the final width and printed to the normal screen (not after HUP), then
+  `Continue this chat with: docsgpt-cli -c` when saved.
+- Keys of the editor: ttyInput translates `CSI code;mods u` and `CSI 27;mods;code ~`
   back to legacy bytes (Shift+Enter → `\n` = ctrl+j, Ctrl+C → 0x03, Esc → ESC, …),
-  holds an unfinished CSI across reads, passes bracketed pastes through untouched.
+  holds an unfinished CSI (keys, SGR mouse reports) across reads, passes bracketed
+  pastes through untouched.
 - Editor: dim rules above and below the text, a dim footer (left `~/dir (branch)`,
   right `key · host`, then `+N command outputs`, `think on`, then `auto-approve` in the warning color; it is dim as a whole,
   so a differently styled item goes last; the left is cut from its start).
@@ -239,30 +270,26 @@ running while an answer streams) → `handle`: `/command`, `!cmd`, or a message.
   not matching `secretLike`; trimming writes a temp file and renames it); bracketed pastes >10 lines or >1000 chars become
   `[paste #N +L lines]` markers (one unit: the cursor never rests inside one, any
   deletion that reaches into one removes it whole; expanded on send, shown
-  collapsed in the scrollback); Ctrl+A/E/K/U/W, Alt+←/→; Ctrl+G opens $VISUAL/$EDITOR;
-  Ctrl+C clears, twice within 1s on an empty input quits (dim hint); Ctrl+D on empty
-  quits. Typing `/` opens the command popup (prefix then fuzzy matches); Tab
+  collapsed in the transcript); Ctrl+A/E/K/U/W, Alt+←/→; Ctrl+G opens $VISUAL/$EDITOR.
+  Typing `/` opens the command popup (prefix then fuzzy matches, under the editor); Tab
   completes, Enter runs the exact or selected command at once, Esc closes it.
-- Commands (`chatCommands`, one table for popup, /help, dispatch): /new (/clear),
-  /resume, /copy (whole answer, or a `ui.Select` of its code blocks), /export [file]
-  (markdown, default `docsgpt-<date>.md`; `~/` expanded; an existing file only
-  after a `ui.Confirm`, default No), /think, /approve (toggles the tools
-  Session's AutoApprove; "Always allow" choices are kept), /key (switch or add a key → new
-  conversation), /settings (the config menu), /help, /quit (/exit). An unknown
-  `/word` is an error; `/path/like …` is a message. `!cmd` runs through
-  `tools.RunShell` (no approval, no time limit) and its output is prepended to the
-  next message; `!!cmd` is not sent.
-- Rhythm: every block ends with one blank line (user block, answer + sources,
-  command output, tool blocks open with their own: a tool call right after the user
-  block moves up one row first); the editor and pickers draw right after it and
-  leave nothing when dismissed.
-- Sending: the user block (`display.UserMessage`, subtle background, `❯` without
-  colors), then `RunWithTools` with the messages + `conversation_id`; the server
-  then takes the history from the stored conversation, an older one from the
-  messages. A failed or interrupted turn is dropped; a failed one also drops the
-  conversation id. Ctrl+C is a real SIGINT (signalContext) since the editor
-  is not running; `ui.HoldInput` turns the echo off meanwhile (typed text waits for
-  the next editor; `DiscardInput` before a tool approval).
+- Commands (`chatCommands`, one table for popup, /help, dispatch): /new (/clear:
+  the transcript starts over), /resume, /copy (whole answer, or a pick of its code
+  blocks), /export [file] (markdown, default `docsgpt-<date>.md`; `~/` expanded; an
+  existing file only after a confirmation, default No), /think, /approve (toggles
+  the tools Session's AutoApprove; "Always allow" choices are kept), /key (switch
+  or add a key → new conversation), /settings (the config menu in the panel; the
+  mouse setting applies at once), /help, /quit (/exit). An unknown `/word` is an
+  error; `/path/like …` is a message. `!cmd` runs through `tools.RunShell` (no
+  approval, no time limit, cancellable) into a tool block and its output is
+  prepended to the next message; `!!cmd` is not sent.
+- Sending: a `display.User` block, then `RunWithTools` with the messages +
+  `conversation_id`; the server then takes the history from the stored
+  conversation, an older one from the messages. Each answer segment is a
+  `display.Answer` block (a new one after every tool call); tool calls go through
+  `screenTools` (a ToolBlock per call, approvals as an inline Select in the panel).
+  A failed or interrupted turn is dropped (`Interrupted.` note); a failed one also
+  drops the conversation id. Sources follow as a block.
 - Context: the server treats `system` messages as a prompt override that agents
   ignore by default, so ask and chat put a `<context>` block (cwd, first 50 entries
   with `/` on dirs, AGENTS.md or else CLAUDE.md of every dir from the git root down
@@ -273,12 +300,12 @@ running while an answer streams) → `handle`: `/command`, `!cmd`, or a message.
   (cwd, server, key, conversation_id), then `message` lines (the sent message, `text`
   = what was typed, sources on the last assistant message) and `state` lines (server,
   key, conversation id) when any of them changes; loading takes the latest. `-c` = latest in cwd, `-r`/`/resume` = filterable
-  picker (first message · age · count · key). Resuming reprints the last 3
-  exchanges under `── resumed · 3h ago · N messages ──`, restores history, the
+  picker (first message · age · count · key). Resuming shows every exchange again
+  under `── resumed · 3h ago · N messages ──`, restores history, the
   conversation id and the last context block; a chat of another key switches to it
   when stored (and no --key/env override), else warns and goes on in a new
   conversation; another server likewise. /new and /key start a new session.
-The approval prompt is a bubbletea program on stderr; it reads keys in raw mode, so Ctrl+C there cancels the run at once.
+In ask, the approval prompt is a bubbletea program on stderr; it reads keys in raw mode, so Ctrl+C there cancels the run at once.
 
 ### Auto-update flow
 Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set auto_update`); env kill switch `DOCSGPT_NO_UPDATE_CHECK`.
@@ -351,7 +378,7 @@ Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on fi
 - `spf13/cobra` — CLI framework
 - `charmbracelet/glamour` + `lipgloss` — markdown rendering and styling (our own style, no auto-style query)
 - `alecthomas/chroma` — code block highlighting, colored from the palette
-- `charmbracelet/bubbletea` — every interactive prompt, the chat editor included
+- `charmbracelet/bubbletea` (v1) — every interactive prompt, and the full-screen chat
 - `charmbracelet/x/ansi`, `muesli/termenv`, `mattn/go-isatty`, `x/term`, `x/sys` — widths and wrapping, color profile, TTY checks, raw mode / echo off
 - `atotto/clipboard` — clipboard access
 - `minio/selfupdate` — atomic binary replacement for the update command

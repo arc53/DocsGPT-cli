@@ -34,7 +34,9 @@ run once
 
 Always allow is offered only when there is a safe narrow scope (see below);
 the line under the choices says what the highlighted one does. Ctrl+C or Esc at
-the prompt stops the whole answer.
+the prompt stops the whole answer. In the chat the choices open above the
+input; what you were typing as they appeared stays in the input instead of
+answering them.
 
 Commands run without your terminal: one that asks for a password fails instead
 of waiting. They get `--tool-timeout` seconds (default 30) and are killed with
