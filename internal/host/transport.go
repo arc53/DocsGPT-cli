@@ -26,12 +26,13 @@ var ErrRevoked = errors.New("device session revoked")
 // poll is rejected (which indicates a bad token from the start).
 var ErrAuthRejected = errors.New("auth rejected")
 
-// State enumerates the two daemon states.
+// State enumerates the daemon states.
 type State int
 
 const (
 	StatePolling State = iota
 	StateStreaming
+	StateRestarting // held by an update so no session opens
 )
 
 func (s State) String() string {
@@ -40,6 +41,8 @@ func (s State) String() string {
 		return "polling"
 	case StateStreaming:
 		return "streaming"
+	case StateRestarting:
+		return "restarting"
 	default:
 		return "unknown"
 	}
