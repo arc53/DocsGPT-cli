@@ -426,3 +426,24 @@ func (t *Transport) PostOutput(ctx context.Context, sessionID, invocationID stri
 	}
 	return nil
 }
+
+// post sends a signed JSON body to a server path and returns the HTTP
+// status. The body is drained so the connection can be reused.
+func (t *Transport) post(ctx context.Context, path string, body []byte) (int, error) {
+	endpoint := strings.TrimRight(t.Cfg.BaseURL, "/") + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// Sign over the exact body bytes so the signature stays valid against
+	// the body the server reads back.
+	t.signHeaders(req, body)
+	resp, err := t.Client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	return resp.StatusCode, nil
+}
