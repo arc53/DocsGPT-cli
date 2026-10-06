@@ -86,10 +86,13 @@ internal/
     documents.go     → -f expansion: files / directories / stdin, verbatim multi-document YAML splitting, kind: Agent validation
     resolve.go       → --resolve parsing, mapping onto the server `resolution` object, missing/unavailable gating
   host/
-    config.go        → ~/.docsgpt/host.yml (device id, base URL, poll interval, log file; flat YAML, 0600); identity.go: Ed25519 host.key + request signing
-    daemon.go        → RunDaemon: poll/SSE loop, idle heartbeat, idle-only auto-update + restart (revoke → ErrRevoked, exit 0); banner.go startup lines, servicemode.go + console_*.go: Windows task logging to host.log
+    config.go        → ~/.docsgpt/host.yml (device id, base URL, poll interval, log file; flat YAML, 0600), SpoolDir ~/.docsgpt/host-spool; identity.go: Ed25519 host.key + request signing
+    daemon.go        → RunDaemon: spool lock + Recover, poll/SSE loop, idle heartbeat, auto-update + restart only when Jobs.Idle (holds the Baton in StateRestarting so no session opens), SIGINT/SIGTERM → Jobs.Shutdown (a second signal forces) (revoke → ErrRevoked, exit 0); banner.go startup lines, servicemode.go + console_*.go: Windows task logging to host.log
+    jobs.go          → Jobs: runs each invocation in the background (outlives its SSE session), Cancel (`event: cancel`), Kick (retry now after a reconnect), Shutdown (stop commands as host_shutdown, flush 5 s), Recover (spooled reports; a command cut off by a crash → `interrupted`)
+    outbox.go        → per-invocation outbox: ack, then stdout/stderr/control chunks in seq order, batched, retried 1 s → 60 s with jitter until 2xx; 404/410 or another 4xx (not 401/408/429) drops it; given up 1 h past the command's timeout; 1 MiB of unsent output (oldest dropped, control chunk `truncated`); journal <invocation>.ndjson in the spool, replayed on start, rewritten as it doubles
+    invocation.go    → runCommand: `sh -c` / `cmd /C` in its own session (proc_unix.go Setsid; proc_windows.go taskkill /T /F), timeout or cancel → SIGTERM to the group, SIGKILL after 5 s; the denylist floor
     install.go       → InstallService / UninstallService over systemd (service.go), launchd (launchd.go), Task Scheduler (wintask.go)
-    transport.go     → Signed polling + SSE session transport; invocation.go runs and streams commands (approval decided server-side; its own denylist floor); pairing.go, device.go, revoke.go
+    transport.go     → Signed polling + SSE session transport (`invocation`, `cancel`, `revoke`, `session_end`; every request sends `X-Device-Capabilities: cancel,outbox`); approval is decided server-side; pairing.go, device.go, revoke.go
   context/
     enricher.go      → the <context> block: cwd, capped listing, AGENTS.md/CLAUDE.md (git root → cwd, 12KB), shell history (opt-in);
                        with tools: `System:` (OS/arch, sh -c or cmd.exe /C, no terminal),
@@ -500,7 +503,7 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set a
 2. A detached worker (`update --worker`) refreshes the release cache daily and, in "on" mode, downloads + sha256-verifies the new binary into ~/.docsgpt/staging
 3. The next launch validates the staged manifest and swaps it in near-instantly; the old binary is kept in ~/.docsgpt/backup for `update --rollback`
 4. Rollback records a skip version so auto-update won't reinstall it; a manual `update` clears the skip
-5. Host daemons check every ~12h while idle (10 min boot delay), apply directly, then restart: exec(2) on Unix (same PID), exit(3) on Windows (Task Scheduler RestartOnFailure); all shipped service configs restart only on failure since a revoke exits 0
+5. Host daemons check every ~12h while idle — no session, no command running, every report delivered — (10 min boot delay), apply directly, then restart: exec(2) on Unix (same PID), exit(3) on Windows (Task Scheduler RestartOnFailure); all shipped service configs restart only on failure since a revoke exits 0
 6. Everything is stamped release-version-only: `update` refuses "dev"/git-describe builds and Homebrew-managed binaries
 7. What's new: every check stores the latest release's notes; Apply and ApplyStaged record the installed version, and the next chat on that version shows the notes once (cmd/whatsnew.go)
 
