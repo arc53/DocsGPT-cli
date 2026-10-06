@@ -3,8 +3,11 @@
 package host
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -28,11 +31,25 @@ func childPID(t *testing.T, path string) int {
 	return pid
 }
 
+// alive reports whether pid runs. A zombie (killed, but its new parent has
+// not reaped it yet, as in a container whose PID 1 does not reap) is dead.
+func alive(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	if stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
+		fields := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))
+		return len(fields) == 0 || fields[0] != "Z"
+	}
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	return err != nil || !strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
+}
+
 // assertDead fails when pid is still alive shortly after the command ended.
 func assertDead(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
-	for syscall.Kill(pid, 0) == nil {
+	for alive(pid) {
 		if time.Now().After(deadline) {
 			syscall.Kill(pid, syscall.SIGKILL)
 			t.Fatalf("process %d survived the command's end", pid)

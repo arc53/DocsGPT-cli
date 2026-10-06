@@ -294,16 +294,16 @@ func TestRunPollingReportsReconnect(t *testing.T) {
 	tr := newTestTransport(server.URL)
 	var reconnects atomic.Int32
 	tr.OnReconnect = func() { reconnects.Add(1) }
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	go func() {
-		for calls.Load() < 3 && ctx.Err() == nil {
+		for reconnects.Load() == 0 && ctx.Err() == nil {
 			time.Sleep(10 * time.Millisecond)
 		}
 		cancel()
 	}()
 	_, _ = tr.RunPolling(ctx, time.Now().Add(time.Minute))
 	if n := reconnects.Load(); n != 1 {
-		t.Errorf("OnReconnect called %d times, want 1", n)
+		t.Errorf("OnReconnect called %d times, want 1 (after %d polls)", n, calls.Load())
 	}
 }
