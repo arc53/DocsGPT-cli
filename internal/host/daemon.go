@@ -89,8 +89,10 @@ func RunDaemon(opts DaemonOptions) error {
 	go runAutoUpdate(ctx, t, opts.Version, opts.AutoUpdate)
 
 	// Commands run in the background, outside any session, so the SSE loop
-	// keeps reading the next events.
+	// keeps reading the next events (a cancel among them).
 	t.OnInvocation = jobs.Start
+	t.OnCancel = jobs.Cancel
+	t.OnReconnect = jobs.Kick
 
 	err = serve(ctx, t)
 	if !jobs.Idle() {

@@ -127,7 +127,13 @@ type Transport struct {
 	Baton        *Baton
 	Client       *http.Client
 	OnInvocation func(inv Invocation)
+	OnCancel     func(invocationID string) // `event: cancel`
+	OnReconnect  func()                    // a poll succeeded after failing
 }
+
+// capabilities tells the server what this client supports: stopping a
+// command on `event: cancel`, and an outbox that retries reports.
+const capabilities = "cancel,outbox"
 
 // NewTransport wires the standard collaborators together.
 func NewTransport(cfg HostConfig, key *HostKey, version string) *Transport {
@@ -150,6 +156,7 @@ func (t *Transport) authHeader() string {
 // verification disabled — it ignores the signature then, so this is harmless
 // and keeps the default off-path working.
 func (t *Transport) signHeaders(req *http.Request, body []byte) {
+	req.Header.Set("X-Device-Capabilities", capabilities)
 	if t.Key == nil {
 		return
 	}
@@ -267,6 +274,9 @@ func (t *Transport) RunPolling(ctx context.Context, fastUntil time.Time) (*PollR
 			}
 			continue
 		}
+		if (bo.errorCount > 0 || authFailures > 0) && t.OnReconnect != nil {
+			t.OnReconnect()
+		}
 		bo.recordOK()
 		sawSuccess = true
 		authFailures = 0
@@ -290,7 +300,8 @@ func (t *Transport) RunPolling(ctx context.Context, fastUntil time.Time) (*PollR
 }
 
 // RunSSE opens the SSE stream for `sessionID` and dispatches events to
-// `t.OnInvocation` until the server closes or `ctx` cancels. Returns
+// `t.OnInvocation` and `t.OnCancel` until the server closes or `ctx`
+// cancels. Other event names are ignored. Returns
 // ErrRevoked on a 401 (device revoked while a session was being
 // negotiated) or when an `event: revoke` arrives on the open stream.
 func (t *Transport) RunSSE(ctx context.Context, sessionID string, lastEventID string) error {
@@ -334,6 +345,14 @@ func (t *Transport) RunSSE(ctx context.Context, sessionID string, lastEventID st
 			if json.Unmarshal([]byte(data), &inv) == nil && t.OnInvocation != nil {
 				t.Baton.TouchActivity()
 				t.OnInvocation(inv)
+			}
+		case "cancel":
+			var c struct {
+				InvocationID string `json:"invocation_id"`
+			}
+			if json.Unmarshal([]byte(data), &c) == nil && c.InvocationID != "" && t.OnCancel != nil {
+				t.Baton.TouchActivity()
+				t.OnCancel(c.InvocationID)
 			}
 		case "revoke":
 			revoked = true
