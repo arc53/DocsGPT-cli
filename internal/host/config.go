@@ -46,9 +46,15 @@ func HostConfigPath() string {
 	return filepath.Join(hostConfigDir(), "host.yml")
 }
 
-// HasLocalState reports whether host.yml or host.key exists.
+// SpoolDir holds the reports of commands not yet delivered to the server
+// (one journal per invocation), so a restart does not lose them.
+func SpoolDir() string {
+	return filepath.Join(hostConfigDir(), "host-spool")
+}
+
+// HasLocalState reports whether host.yml, host.key or the spool exists.
 func HasLocalState() bool {
-	for _, p := range []string{HostConfigPath(), keyPath()} {
+	for _, p := range []string{HostConfigPath(), keyPath(), SpoolDir()} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			return true
 		}
@@ -56,17 +62,19 @@ func HasLocalState() bool {
 	return false
 }
 
-// ClearLocalState deletes host.yml and host.key without contacting the
-// server and returns the names of the files it removed.
+// ClearLocalState deletes host.yml, host.key and the spool without
+// contacting the server and returns the names of what it removed.
 func ClearLocalState() ([]string, error) {
 	removed := []string{}
-	for _, p := range []string{HostConfigPath(), keyPath()} {
+	for _, p := range []string{HostConfigPath(), keyPath(), SpoolDir()} {
 		name := filepath.Base(p)
-		if err := os.Remove(p); err == nil {
-			removed = append(removed, name)
-		} else if !os.IsNotExist(err) {
+		if _, err := os.Stat(p); os.IsNotExist(err) {
+			continue
+		}
+		if err := os.RemoveAll(p); err != nil {
 			return removed, fmt.Errorf("remove %s: %w", name, err)
 		}
+		removed = append(removed, name)
 	}
 	return removed, nil
 }

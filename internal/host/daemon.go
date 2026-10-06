@@ -57,27 +57,52 @@ func RunDaemon(opts DaemonOptions) error {
 	ShowStartupBanner(cfg)
 
 	t := NewTransport(cfg, key, opts.Version)
+	jobs := newJobs(t, cfg.DeviceID, "")
+	if err := jobs.openSpool(SpoolDir()); err != nil {
+		fmt.Fprintln(os.Stderr, display.Warn("command reports are kept in memory only: "+err.Error()))
+	}
+	if n := jobs.Recover(); n > 0 {
+		fmt.Println(display.Muted(fmt.Sprintf("%s delivering %d command report(s) left by the last run",
+			LogStamp(time.Now()), n)))
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// force ends the shutdown's waiting: a second Ctrl+C kills the running
+	// commands at once and leaves undelivered reports in the spool.
+	force, forceNow := context.WithCancel(context.Background())
+	defer forceNow()
 
-	sigCh := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 	go func() {
 		<-sigCh
 		fmt.Println()
 		fmt.Println(display.Muted("Shutting down host..."))
 		cancel()
+		<-sigCh
+		forceNow()
 	}()
 
 	go runIdleHeartbeat(ctx, t)
 	go runAutoUpdate(ctx, t, opts.Version, opts.AutoUpdate)
 
-	// Each invocation arrives via OnInvocation; spawn a goroutine to
-	// execute + stream so the SSE loop keeps reading next events.
-	t.OnInvocation = func(inv Invocation) {
-		go ExecuteAndStream(ctx, t, t.Baton.SessionID(), inv)
-	}
+	// Commands run in the background, outside any session, so the SSE loop
+	// keeps reading the next events.
+	t.OnInvocation = jobs.Start
 
+	err = serve(ctx, t)
+	if !jobs.Idle() {
+		fmt.Println(display.Muted("Stopping running commands and sending their reports (Ctrl+C again to force)..."))
+	}
+	jobs.Shutdown(force)
+	return err
+}
+
+// serve runs poll and SSE sessions until ctx ends (nil) or the device is
+// revoked (ErrRevoked).
+func serve(ctx context.Context, t *Transport) error {
 	revoked := func() error {
 		fmt.Fprintln(os.Stderr, display.Warn("device has been revoked, terminating"))
 		return ErrRevoked
