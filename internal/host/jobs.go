@@ -91,6 +91,9 @@ func (j *Jobs) openSpool(dir string) error {
 // a cancel that arrives later on the same stream always finds it.
 func (j *Jobs) Start(inv Invocation) {
 	id := inv.InvocationID
+	if id == "" {
+		return
+	}
 	j.mu.Lock()
 	if j.closed {
 		j.mu.Unlock()
@@ -99,7 +102,7 @@ func (j *Jobs) Start(inv Invocation) {
 		ob.end(chunk{ExitCode: intPtr(-1), Error: "host_shutdown", Detail: "the host was shutting down; the command was not run"})
 		return
 	}
-	if _, dup := j.runs[id]; dup || id == "" {
+	if _, dup := j.runs[id]; dup {
 		j.mu.Unlock()
 		return
 	}
