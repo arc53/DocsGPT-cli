@@ -282,6 +282,8 @@ var hostRevokeCmd = &cobra.Command{
 		cfg.DeviceID = ""
 		cfg.SessionToken = ""
 		_ = cfg.Save()
+		// Undelivered reports hold command output; the server would refuse them now.
+		_ = os.RemoveAll(host.SpoolDir())
 		fmt.Println(display.Success("Local pairing cleared."))
 		return nil
 	},

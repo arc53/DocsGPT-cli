@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"net/http"
@@ -219,5 +220,90 @@ func TestRunSSERevokeEventReturnsRevoked(t *testing.T) {
 	err := tr.RunSSE(ctx, "sess_test", "")
 	if !errors.Is(err, ErrRevoked) {
 		t.Fatalf("expected ErrRevoked on event: revoke, got %v", err)
+	}
+}
+
+// TestRunSSEDispatchesCancel: `event: cancel` reaches OnCancel with the
+// invocation id, alongside invocations on the same stream.
+func TestRunSSEDispatchesCancel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: invocation\nid: 1\ndata: {\"invocation_id\":\"inv_a\",\"action\":\"run_command\",\"params\":{\"command\":\"true\"}}\n\n")
+		fmt.Fprint(w, "event: cancel\nid: 2\ndata: {\"type\":\"cancel\",\"action\":\"cancel\",\"invocation_id\":\"inv_a\"}\n\n")
+		fmt.Fprint(w, "event: cancel\nid: 3\ndata: {\"type\":\"cancel\"}\n\n")
+	}))
+	defer server.Close()
+
+	tr := newTestTransport(server.URL)
+	var events []string
+	tr.OnInvocation = func(inv Invocation) { events = append(events, "run "+inv.InvocationID) }
+	tr.OnCancel = func(id string) { events = append(events, "cancel "+id) }
+	if err := tr.RunSSE(context.Background(), "sess_test", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(events); got != "[run inv_a cancel inv_a]" {
+		t.Errorf("events = %s", got)
+	}
+}
+
+// TestRequestsAdvertiseCapabilities: every device request says the client
+// can cancel and keeps an outbox, so the server can tell it from older ones.
+func TestRequestsAdvertiseCapabilities(t *testing.T) {
+	var got []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("X-Device-Capabilities"))
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	tr := newTestTransport(server.URL)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr.Key = &HostKey{Private: priv, Public: pub}
+	if _, _, err := tr.PollOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.post(context.Background(), "/api/devices/sessions/s/invocations/i/output", []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range got {
+		if h != "cancel,outbox" {
+			t.Errorf("X-Device-Capabilities = %q, want cancel,outbox", h)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("saw %d requests", len(got))
+	}
+}
+
+// TestRunPollingReportsReconnect: a poll that succeeds after a failed one
+// calls OnReconnect, so waiting reports are retried at once.
+func TestRunPollingReportsReconnect(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 2 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	tr := newTestTransport(server.URL)
+	var reconnects atomic.Int32
+	tr.OnReconnect = func() { reconnects.Add(1) }
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	go func() {
+		for reconnects.Load() == 0 && ctx.Err() == nil {
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+	}()
+	_, _ = tr.RunPolling(ctx, time.Now().Add(time.Minute))
+	if n := reconnects.Load(); n != 1 {
+		t.Errorf("OnReconnect called %d times, want 1 (after %d polls)", n, calls.Load())
 	}
 }

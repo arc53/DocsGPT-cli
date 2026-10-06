@@ -26,12 +26,13 @@ var ErrRevoked = errors.New("device session revoked")
 // poll is rejected (which indicates a bad token from the start).
 var ErrAuthRejected = errors.New("auth rejected")
 
-// State enumerates the two daemon states.
+// State enumerates the daemon states.
 type State int
 
 const (
 	StatePolling State = iota
 	StateStreaming
+	StateRestarting // held by an update so no session opens
 )
 
 func (s State) String() string {
@@ -40,6 +41,8 @@ func (s State) String() string {
 		return "polling"
 	case StateStreaming:
 		return "streaming"
+	case StateRestarting:
+		return "restarting"
 	default:
 		return "unknown"
 	}
@@ -127,7 +130,13 @@ type Transport struct {
 	Baton        *Baton
 	Client       *http.Client
 	OnInvocation func(inv Invocation)
+	OnCancel     func(invocationID string) // `event: cancel`
+	OnReconnect  func()                    // a poll succeeded after failing
 }
+
+// capabilities tells the server what this client supports: stopping a
+// command on `event: cancel`, and an outbox that retries reports.
+const capabilities = "cancel,outbox"
 
 // NewTransport wires the standard collaborators together.
 func NewTransport(cfg HostConfig, key *HostKey, version string) *Transport {
@@ -150,6 +159,7 @@ func (t *Transport) authHeader() string {
 // verification disabled — it ignores the signature then, so this is harmless
 // and keeps the default off-path working.
 func (t *Transport) signHeaders(req *http.Request, body []byte) {
+	req.Header.Set("X-Device-Capabilities", capabilities)
 	if t.Key == nil {
 		return
 	}
@@ -267,6 +277,9 @@ func (t *Transport) RunPolling(ctx context.Context, fastUntil time.Time) (*PollR
 			}
 			continue
 		}
+		if (bo.errorCount > 0 || authFailures > 0) && t.OnReconnect != nil {
+			t.OnReconnect()
+		}
 		bo.recordOK()
 		sawSuccess = true
 		authFailures = 0
@@ -290,7 +303,8 @@ func (t *Transport) RunPolling(ctx context.Context, fastUntil time.Time) (*PollR
 }
 
 // RunSSE opens the SSE stream for `sessionID` and dispatches events to
-// `t.OnInvocation` until the server closes or `ctx` cancels. Returns
+// `t.OnInvocation` and `t.OnCancel` until the server closes or `ctx`
+// cancels. Other event names are ignored. Returns
 // ErrRevoked on a 401 (device revoked while a session was being
 // negotiated) or when an `event: revoke` arrives on the open stream.
 func (t *Transport) RunSSE(ctx context.Context, sessionID string, lastEventID string) error {
@@ -335,6 +349,14 @@ func (t *Transport) RunSSE(ctx context.Context, sessionID string, lastEventID st
 				t.Baton.TouchActivity()
 				t.OnInvocation(inv)
 			}
+		case "cancel":
+			var c struct {
+				InvocationID string `json:"invocation_id"`
+			}
+			if json.Unmarshal([]byte(data), &c) == nil && c.InvocationID != "" && t.OnCancel != nil {
+				t.Baton.TouchActivity()
+				t.OnCancel(c.InvocationID)
+			}
 		case "revoke":
 			revoked = true
 		case "session_end":
@@ -374,18 +396,13 @@ func (t *Transport) RunSSE(ctx context.Context, sessionID string, lastEventID st
 	return scanner.Err()
 }
 
-// PostAck reports the CLI's accept/deny decision for an invocation.
-func (t *Transport) PostAck(ctx context.Context, sessionID, invocationID, decision, reason string) error {
-	body, _ := json.Marshal(map[string]string{
-		"decision": decision,
-		"reason":   reason,
-	})
-	endpoint := strings.TrimRight(t.Cfg.BaseURL, "/") +
-		"/api/devices/sessions/" + sessionID +
-		"/invocations/" + invocationID + "/ack"
+// post sends a signed JSON body to a server path and returns the HTTP
+// status. The body is drained so the connection can be reused.
+func (t *Transport) post(ctx context.Context, path string, body []byte) (int, error) {
+	endpoint := strings.TrimRight(t.Cfg.BaseURL, "/") + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	// Sign over the exact body bytes so the signature stays valid against
@@ -393,36 +410,9 @@ func (t *Transport) PostAck(ctx context.Context, sessionID, invocationID, decisi
 	t.signHeaders(req, body)
 	resp, err := t.Client.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ack HTTP %d: %s", resp.StatusCode, string(respBody))
-	}
-	return nil
-}
-
-// PostOutput streams a single body of NDJSON chunks for an invocation.
-func (t *Transport) PostOutput(ctx context.Context, sessionID, invocationID string, body []byte) error {
-	endpoint := strings.TrimRight(t.Cfg.BaseURL, "/") +
-		"/api/devices/sessions/" + sessionID +
-		"/invocations/" + invocationID + "/output"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	// Sign over the exact body bytes (see PostAck).
-	t.signHeaders(req, body)
-	resp, err := t.Client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("output HTTP %d: %s", resp.StatusCode, string(respBody))
-	}
-	return nil
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	return resp.StatusCode, nil
 }

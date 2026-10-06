@@ -57,27 +57,54 @@ func RunDaemon(opts DaemonOptions) error {
 	ShowStartupBanner(cfg)
 
 	t := NewTransport(cfg, key, opts.Version)
+	jobs := newJobs(t, cfg.DeviceID, "")
+	if err := jobs.openSpool(SpoolDir()); err != nil {
+		fmt.Fprintln(os.Stderr, display.Warn("command reports are kept in memory only: "+err.Error()))
+	}
+	if n := jobs.Recover(); n > 0 {
+		fmt.Println(display.Muted(fmt.Sprintf("%s delivering %d command report(s) left by the last run",
+			LogStamp(time.Now()), n)))
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// force ends the shutdown's waiting: a second Ctrl+C kills the running
+	// commands at once and leaves undelivered reports in the spool.
+	force, forceNow := context.WithCancel(context.Background())
+	defer forceNow()
 
-	sigCh := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 	go func() {
 		<-sigCh
 		fmt.Println()
 		fmt.Println(display.Muted("Shutting down host..."))
 		cancel()
+		<-sigCh
+		forceNow()
 	}()
 
 	go runIdleHeartbeat(ctx, t)
-	go runAutoUpdate(ctx, t, opts.Version, opts.AutoUpdate)
+	go runAutoUpdate(ctx, t, jobs, opts.Version, opts.AutoUpdate)
 
-	// Each invocation arrives via OnInvocation; spawn a goroutine to
-	// execute + stream so the SSE loop keeps reading next events.
-	t.OnInvocation = func(inv Invocation) {
-		go ExecuteAndStream(ctx, t, t.Baton.SessionID(), inv)
+	// Commands run in the background, outside any session, so the SSE loop
+	// keeps reading the next events (a cancel among them).
+	t.OnInvocation = jobs.Start
+	t.OnCancel = jobs.Cancel
+	t.OnReconnect = jobs.Kick
+
+	err = serve(ctx, t)
+	if !jobs.Idle() {
+		fmt.Println(display.Muted("Stopping running commands and sending their reports (Ctrl+C again to force)..."))
 	}
+	jobs.Shutdown(force)
+	return err
+}
 
+// serve runs poll and SSE sessions until ctx ends (nil) or the device is
+// revoked (ErrRevoked).
+func serve(ctx context.Context, t *Transport) error {
 	revoked := func() error {
 		fmt.Fprintln(os.Stderr, display.Warn("device has been revoked, terminating"))
 		return ErrRevoked
@@ -154,8 +181,9 @@ const (
 )
 
 // runAutoUpdate periodically installs new releases and restarts the
-// daemon into them, but only while idle (polling, no active session).
-func runAutoUpdate(ctx context.Context, t *Transport, version, mode string) {
+// daemon into them, but only while idle: polling, no session, no command
+// running and every report delivered.
+func runAutoUpdate(ctx context.Context, t *Transport, jobs *Jobs, version, mode string) {
 	if mode == update.ModeOff {
 		return
 	}
@@ -169,7 +197,7 @@ func runAutoUpdate(ctx context.Context, t *Transport, version, mode string) {
 		}
 		delay = updateInterval + rand.N(2*time.Hour)
 
-		if t.Baton.State() != StatePolling {
+		if t.Baton.State() != StatePolling || !jobs.Idle() {
 			delay = updateBusyRetry
 			continue
 		}
@@ -193,9 +221,9 @@ func runAutoUpdate(ctx context.Context, t *Transport, version, mode string) {
 		if ver == "" {
 			continue
 		}
-		// Sessions may have opened during the download; hold the restart
-		// until the daemon is idle again.
-		for t.Baton.State() != StatePolling {
+		// Sessions may have opened, and commands started, during the
+		// download; hold the restart until the daemon is idle again.
+		for !holdForRestart(t, jobs) {
 			select {
 			case <-ctx.Done():
 				return
@@ -210,7 +238,23 @@ func runAutoUpdate(ctx context.Context, t *Transport, version, mode string) {
 		// Unreachable unless the restart itself failed; the new binary is on
 		// disk, so the next supervisor restart still picks it up.
 		fmt.Fprintln(os.Stderr, display.Warn("restart after update failed: "+err.Error()))
+		t.Baton.Transition(StateRestarting, StatePolling)
 	}
+}
+
+// holdForRestart takes the baton, so no session (and no command) can start,
+// and keeps it only when nothing runs and every report was delivered.
+// Undelivered reports would survive in the spool, but not when the spool is
+// unavailable, so they are waited for too.
+func holdForRestart(t *Transport, jobs *Jobs) bool {
+	if !t.Baton.Transition(StatePolling, StateRestarting) {
+		return false
+	}
+	if jobs.Idle() {
+		return true
+	}
+	t.Baton.Transition(StateRestarting, StatePolling)
+	return false
 }
 
 // HumanDuration renders a Duration as 14s, 2m, 1h, etc. Trades precision

@@ -63,7 +63,9 @@ More in the [quickstart](docs/quickstart.md).
 - **Bench.** Assert on your agents' answers, compare agents and models.
   [Bench](docs/bench.md)
 - **Host mode.** Pair a machine with your DocsGPT account and let agents run
-  tools on it. [Host mode](docs/host.md)
+  tools on it, including background commands of up to an hour that you can
+  cancel, with results that survive network drops and restarts.
+  [Host mode](docs/host.md)
 - **Auto-update.** New releases are downloaded, verified and installed in the
   background. [Updating](docs/install.md#updating)
 - **A Go SDK.** The chat client the CLI is built on. [sdk](sdk/README.md)
