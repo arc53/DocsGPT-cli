@@ -101,6 +101,21 @@ function Install-DocsGPTCli {
             $env:DOCSGPT_NO_UPDATE_CHECK = $previous
         }
 
+        # `install` adds its directory to the user PATH in the registry, which
+        # only new processes read; this window keeps the PATH it started with,
+        # so `docsgpt-cli` right after the install would not be found. We run
+        # inside the caller's session (`iex`), so putting the directory on
+        # $env:Path here fixes this window too. Same directory as getInstallDir
+        # in internal/install (Go's os.UserHomeDir is USERPROFILE on Windows).
+        $installDir = Join-Path $env:USERPROFILE 'bin'
+        if ($env:DOCSGPT_NO_MODIFY_PATH -ne '1' -and
+            (Test-Path (Join-Path $installDir 'docsgpt-cli.exe'))) {
+            $entries = $env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') }
+            if ($entries -notcontains $installDir.TrimEnd('\')) {
+                $env:Path = "$installDir;$env:Path"
+            }
+        }
+
         Say "Run 'docsgpt-cli --help' to get started."
     }
     finally {

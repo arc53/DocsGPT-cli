@@ -76,7 +76,8 @@ func Run() error {
 		if err := addToWindowsPATH(installDir); err != nil {
 			return fmt.Errorf("could not add %s to PATH: %w", installDir, err)
 		}
-		fmt.Println(display.Muted("Added " + installDir + " to your PATH. Open a new terminal to pick it up."))
+		// install.ps1 puts it on the PATH of the window it ran in as well.
+		fmt.Println(display.Muted("Added " + installDir + " to your user PATH; new terminals pick it up."))
 		return nil
 	}
 

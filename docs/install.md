@@ -17,6 +17,12 @@ the published `checksums.txt`, and hands over to `docsgpt-cli install`, which
 puts the binary on your `PATH`: `/usr/local/bin` when it is writable, else
 `~/.local/bin` (`%USERPROFILE%\bin` on Windows). Run it again to upgrade.
 
+On Windows the directory goes on your user `PATH`, and the PowerShell window
+that ran the script can use `docsgpt-cli` at once. Other windows that were
+already open keep their old `PATH`: open a new one. A terminal inside an
+editor (VS Code, for one) gets its environment from the editor, so restart
+the editor.
+
 To read the script first, download it: `curl -fsSL https://docs.ac/install-cli -o install.sh`,
 then `bash install.sh`.
 
