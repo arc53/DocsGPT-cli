@@ -191,31 +191,61 @@ func TestTabStatusSettings(t *testing.T) {
 }
 
 // TestTabStatusApproval: one approval is one wait, through Edit and the
-// question asked again, and working comes back once when it is resolved.
+// question asked again; working comes back once, as soon as the call is
+// approved (a read or write runs before its block closes) or denied, and
+// a cancelled one is left to the run, which clears the tab.
 func TestTabStatusApproval(t *testing.T) {
 	s, statuses := tabChat(t)
 	tt := s.tools.UI.(*screenTools)
+	// choose answers an approval as Choose does, with choice picked (a
+	// headless screen cannot be answered).
+	choose := func(choice string) {
+		tt.ask(true)
+		tt.decided(choice, nil)
+	}
 	s.tabStatus("working", tabWorking)
 	statuses()
 
 	tt.Open("$ ls", "")
-	tt.Choose([]ui.Item{{Label: "Approve", Value: "approve"}}) // Edit chosen
+	choose("edit")
 	tt.Edit("Edit command", "ls")
 	tt.Open("$ ls -l", "")
-	tt.Choose([]ui.Item{{Label: "Approve", Value: "approve"}}) // approved
+	choose("approve")
 	tt.Output()
 	tt.Close(true, "exit 0")
 	if got := statuses(); !slices.Equal(got, []string{"waiting", "working"}) {
 		t.Errorf("edited, then approved: %q", got)
 	}
 
+	tt.Open("write x", "")
+	tt.Lines([]string{"+x"})
+	choose("approve")
+	if got := statuses(); !slices.Equal(got, []string{"waiting", "working"}) {
+		t.Errorf("write approved, before it runs: %q", got)
+	}
+	tt.Close(true, "wrote 1 line")
+	if got := statuses(); len(got) != 0 {
+		t.Errorf("write done: %q", got)
+	}
+
 	tt.Open("$ rm x", "")
-	tt.Choose([]ui.Item{{Label: "Deny", Value: "deny"}}) // denied, or cancelled
+	choose("deny")
 	tt.Close(false, "denied")
 	if got := statuses(); !slices.Equal(got, []string{"waiting", "working"}) {
 		t.Errorf("denied: %q", got)
 	}
 
+	tt.Open("read ~/x", "")
+	tt.Choose([]ui.Item{{Label: "Approve", Value: "approve"}}) // Esc
+	tt.Close(false, "cancelled")
+	if got := statuses(); !slices.Equal(got, []string{"waiting"}) {
+		t.Errorf("cancelled: %q", got)
+	}
+	s.tabStatus("", "") // the stopped run
+	statuses()
+
+	s.tabStatus("working", tabWorking)
+	statuses()
 	tt.Open("$ ls", "") // auto-approved
 	tt.Output()
 	tt.Close(true, "exit 0")

@@ -350,9 +350,9 @@ type screenTools struct {
 }
 
 // ask tells waiting the user is asked (on), or no longer. An approval
-// stays one wait through Edit and the question asked again, and ends when
-// the call runs or closes (approved, denied, cancelled): no status flips
-// in between.
+// stays one wait through Edit and the question asked again, and ends once:
+// when the call is approved (see decided) or denied. A cancelled one
+// leaves the status to the run, which clears it as it stops.
 func (t *screenTools) ask(on bool) {
 	if t.waiting != nil && t.asking != on {
 		t.asking = on
@@ -374,7 +374,6 @@ func (t *screenTools) Lines(lines []string) {
 }
 
 func (t *screenTools) Output() io.Writer {
-	t.ask(false)
 	t.scr.Status("Running…")
 	block := t.block
 	block.Start()
@@ -386,7 +385,11 @@ func (t *screenTools) Output() io.Writer {
 }
 
 func (t *screenTools) Close(ok bool, status string) {
-	t.ask(false)
+	if status == "cancelled" {
+		t.asking = false
+	} else {
+		t.ask(false)
+	}
 	t.block.Close(ok, status)
 	t.block = nil
 	t.scr.Changed()
@@ -397,7 +400,17 @@ func (t *screenTools) Choose(items []ui.Item) (string, error) {
 		t.notify("A tool call waits for your approval")
 	}
 	t.ask(true)
-	return t.scr.Select(ui.Select{Items: items, Inline: true})
+	return t.decided(t.scr.Select(ui.Select{Items: items, Inline: true}))
+}
+
+// decided ends the wait when choice approves the call, before it runs:
+// not on Edit (the question comes again), a denial or an error (Close
+// follows).
+func (t *screenTools) decided(choice string, err error) (string, error) {
+	if err == nil && choice != "edit" && choice != "deny" {
+		t.ask(false)
+	}
+	return choice, err
 }
 
 func (t *screenTools) Edit(title, value string) (string, error) {

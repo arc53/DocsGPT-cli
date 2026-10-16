@@ -100,7 +100,7 @@ func (s *Screen) ClearTabStatus(force bool) {
 // untab clears the tab status the terminal shows (the screen is handed
 // back or gone); retab shows it again.
 func (m *screenModel) untab() {
-	if m.tabShown != "" {
+	if m.out != nil && m.tabShown != "" {
 		m.out.WriteString(tabStatusSeq(tabClear))
 		m.tabShown = ""
 	}

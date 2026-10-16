@@ -497,8 +497,8 @@ or with TERM=dumb it refuses.
   chat notifies on an answer, a failure and an approval, unless `notify` is off.
   `Screen.TabStatus` sets iTerm2's session status (OSC 21337: subtitle + dot,
   others ignore it): `working` from a send or `!cmd`, `waiting` from an
-  approval's Choose until its call runs or closes (screenTools.ask: Edit and the
-  question again stay one wait), `done` / `failed` (a failed answer, a `!cmd`
+  approval's Choose until it is approved (screenTools.decided) or denied, once
+  (Edit and the question again stay one wait; a cancel is left to the run's clear), `done` / `failed` (a failed answer, a `!cmd`
   exiting non-zero: RunShell's ok, a message not sent for its files); cleared by
   a stop, reset, Ctrl+Z (back on resume) and exit. `Screen.ClearTabStatus` once
   at the chat's start clears what a killed chat left. Setting `tab_status`

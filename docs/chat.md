@@ -267,7 +267,9 @@ works over ssh too: the status travels with the output.
 
 A chat that is killed (`kill -9`, out of memory) cannot clear its status, so
 the tab keeps it, `working` say, until the next chat starts in that tab and
-clears it (unless `tab_status` is off then).
+clears it. That chat clears it only where it would send a status itself: not
+with `tab_status` off, nor under `auto` inside tmux or screen (a status a
+chat with `on` left in tmux stays until a chat with `on` starts there).
 
 Terminals without the feature ignore the sequence (OSC 21337). tmux and GNU
 screen drop it, so inside them it is not sent; with
