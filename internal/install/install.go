@@ -77,11 +77,14 @@ func Run() error {
 		// repair addToWindowsPATH does.
 		changed, err := addToWindowsPATH(installDir)
 		switch {
+		case err != nil && onPath(installDir):
+			// It runs by name here already: not worth failing the install.
+			fmt.Println(display.Muted("Could not check your user PATH: " + err.Error()))
 		case err != nil:
 			return fmt.Errorf("could not add %s to PATH: %w", installDir, err)
 		case changed:
 			// install.ps1 puts it on the PATH of the window it ran in as well.
-			fmt.Println(display.Muted("Added " + installDir + " to your user PATH; new terminals pick it up."))
+			fmt.Println(display.Muted("Updated your user PATH with " + installDir + "; new terminals pick it up."))
 		case !onPath(installDir):
 			fmt.Println(display.Muted(installDir + " is on your user PATH; new terminals pick it up."))
 		}
@@ -334,7 +337,8 @@ func addToWindowsPATH(dir string) (changed bool, err error) {
 	// this fix did that to a user PATH of one entry, so entries ending in dir
 	// are split again.
 	script := fmt.Sprintf(
-		"$dir = '%s';"+
+		"$ErrorActionPreference = 'Stop';"+
+			"$dir = '%s';"+
 			"$path = [Environment]::GetEnvironmentVariable('Path', 'User');"+
 			"if ($null -eq $path) { $path = '' };"+
 			"$parts = @();"+

@@ -452,8 +452,9 @@ func DiffPreview(before, after string, limit int) (preview []string, added, remo
 	}
 
 	// Lines of a CRLF file end in \r, which Safe shows as ␍: dropped when
-	// both sides use CRLF, kept to show a change of line endings.
-	crlf := strings.Contains(before, "\r\n") && strings.Contains(after, "\r\n")
+	// both sides use CRLF (or one is empty: a new file), kept to show a
+	// change of line endings.
+	crlf := (before == "" || strings.Contains(before, "\r\n")) && (after == "" || strings.Contains(after, "\r\n"))
 	numW := len(strconv.Itoa(len(a) + len(b)))
 	width := stderrWidth() - numW - 6
 	for k, o := range ops {

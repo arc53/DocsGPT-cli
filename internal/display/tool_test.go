@@ -22,6 +22,11 @@ func TestDiffPreview(t *testing.T) {
 	if want := []string{"1 - hello world", "1 + bye world"}; strings.Join(preview, "|") != strings.Join(want, "|") {
 		t.Errorf("CRLF: got %q, want %q", preview, want)
 	}
+	// So do a new CRLF file's.
+	preview, _, _ = DiffPreview("", "a\r\n", 10)
+	if want := []string{"1 + a"}; strings.Join(preview, "|") != strings.Join(want, "|") {
+		t.Errorf("new CRLF file: got %q, want %q", preview, want)
+	}
 	// A change of line endings keeps them visible.
 	preview, _, _ = DiffPreview("a\r\n", "a\n", 10)
 	if want := []string{"1 - a␍", "1 + a"}; strings.Join(preview, "|") != strings.Join(want, "|") {
