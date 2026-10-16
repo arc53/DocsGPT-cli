@@ -281,8 +281,12 @@ const (
 
 // tabStatus shows what the chat is doing on the terminal's tab (see
 // Screen.TabStatus), "" for nothing, unless turned off; "on" sends it
-// also where it would not reach the terminal by itself.
+// also where it would not reach the terminal by itself. Before the screen
+// exists (runChat resets the session first) there is nothing to show.
 func (s *chatSession) tabStatus(text, color string) {
+	if s.scr == nil {
+		return
+	}
 	mode := s.cfg.Settings.TabStatus
 	if mode == "off" {
 		text = ""
