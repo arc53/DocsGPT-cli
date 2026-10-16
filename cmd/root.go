@@ -233,6 +233,7 @@ const groupAnnotation = "docsgpt/group"
 func Execute() {
 	setupCompletion()
 	questionArgs()
+	ui.EnableVT()
 
 	if err := config.MigrateIfNeeded(); err != nil {
 		display.ErrorMsg(err.Error())

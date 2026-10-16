@@ -66,18 +66,28 @@ func Run() error {
 	}
 
 	if runtime.GOOS == "windows" {
-		if onPath(installDir) {
-			return nil
-		}
 		if os.Getenv(noModifyPathEnv) == "1" {
-			fmt.Println(display.Muted("Add " + installDir + " to your PATH to run docsgpt-cli by name."))
+			if !onPath(installDir) {
+				fmt.Println(display.Muted("Add " + installDir + " to your PATH to run docsgpt-cli by name."))
+			}
 			return nil
 		}
-		if err := addToWindowsPATH(installDir); err != nil {
+		// Even when this window's PATH has the directory (install.ps1 adds
+		// it, or the user did): the user PATH may still need it, or the
+		// repair addToWindowsPATH does.
+		changed, err := addToWindowsPATH(installDir)
+		switch {
+		case err != nil && onPath(installDir):
+			// It runs by name here already: not worth failing the install.
+			fmt.Println(display.Muted("Could not check your user PATH: " + err.Error()))
+		case err != nil:
 			return fmt.Errorf("could not add %s to PATH: %w", installDir, err)
+		case changed:
+			// install.ps1 puts it on the PATH of the window it ran in as well.
+			fmt.Println(display.Muted("Updated your user PATH with " + installDir + "; new terminals pick it up."))
+		case !onPath(installDir):
+			fmt.Println(display.Muted(installDir + " is on your user PATH; new terminals pick it up."))
 		}
-		// install.ps1 puts it on the PATH of the window it ran in as well.
-		fmt.Println(display.Muted("Added " + installDir + " to your user PATH; new terminals pick it up."))
 		return nil
 	}
 
@@ -315,22 +325,34 @@ func bashProfile(home string) string {
 	return ".bash_profile"
 }
 
-func addToWindowsPATH(dir string) error {
+// addToWindowsPATH puts dir on the user PATH, reporting whether it had to
+// change it.
+func addToWindowsPATH(dir string) (changed bool, err error) {
 	// setx is unusable here: %PATH% is not expanded outside cmd.exe, it merges
 	// the machine PATH into the user PATH, and it truncates values to 1024
 	// characters. Update only the user PATH via PowerShell instead.
+	//
+	// $parts must be an array (@()): a pipeline yielding one entry gives a
+	// string, and + then glued dir onto it, without a ';'. Installers before
+	// this fix did that to a user PATH of one entry, so entries ending in dir
+	// are split again.
 	script := fmt.Sprintf(
-		"$dir = '%s';"+
+		"$ErrorActionPreference = 'Stop';"+
+			"$dir = '%s';"+
 			"$path = [Environment]::GetEnvironmentVariable('Path', 'User');"+
 			"if ($null -eq $path) { $path = '' };"+
-			"$parts = $path -split ';' | Where-Object { $_ -ne '' };"+
-			"if ($parts -notcontains $dir) {"+
-			"[Environment]::SetEnvironmentVariable('Path', (($parts + $dir) -join ';'), 'User')"+
-			"}",
+			"$parts = @();"+
+			"foreach ($p in ($path -split ';')) {"+
+			"while ($p.Length -gt $dir.Length -and $p.EndsWith($dir, [StringComparison]::OrdinalIgnoreCase)) {"+
+			"$p = $p.Substring(0, $p.Length - $dir.Length) };"+
+			"if ($p -ne '') { $parts += $p } };"+
+			"if ($parts -notcontains $dir) { $parts += $dir };"+
+			"$new = $parts -join ';';"+
+			"if ($new -ne $path) { [Environment]::SetEnvironmentVariable('Path', $new, 'User'); 'changed' }",
 		strings.ReplaceAll(dir, "'", "''"),
 	)
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
-	return cmd.Run()
+	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script).Output()
+	return strings.TrimSpace(string(out)) == "changed", err
 }
 
 // appendToShellConfig adds entry to configPath unless it is already there.

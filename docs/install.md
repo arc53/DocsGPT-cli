@@ -23,6 +23,11 @@ already open keep their old `PATH`: open a new one. A terminal inside an
 editor (VS Code, for one) gets its environment from the editor, so restart
 the editor.
 
+Installers up to v1.10.1 could join the directory onto the last entry of a
+user `PATH` that held a single entry (`…\WindowsAppsC:\Users\you\bin`), which
+breaks both: `docsgpt-cli` and the Store apps' commands (`winget`) are not
+found in new windows. Running the install command again repairs the entry.
+
 To read the script first, download it: `curl -fsSL https://docs.ac/install-cli -o install.sh`,
 then `bash install.sh`.
 
