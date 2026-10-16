@@ -79,6 +79,10 @@ type chatSession struct {
 	tools         *tools.Session
 	quit          bool
 
+	// tab and tabColor are the status the tab shows (see tabStatus), kept
+	// to show it again when the setting changes.
+	tab, tabColor string
+
 	scr  *ui.Screen
 	ctx  context.Context // ends with the chat
 	said bool            // something was asked or shown again: the transcript is printed on exit
@@ -207,6 +211,11 @@ func runChat(first string) error {
 // loop starts the chat (-r, -c, a first message), then handles what the
 // user sends until the screen ends or they quit.
 func (s *chatSession) loop(first string) {
+	// A chat killed before it could clear its tab status (kill -9, out of
+	// memory) leaves it there: clear it now.
+	if mode := s.cfg.Settings.TabStatus; mode != "off" {
+		s.scr.ClearTabStatus(mode == "on")
+	}
 	switch {
 	case chatResume:
 		if !s.pickSession() {
@@ -284,6 +293,7 @@ const (
 // also where it would not reach the terminal by itself. Before the screen
 // exists (runChat resets the session first) there is nothing to show.
 func (s *chatSession) tabStatus(text, color string) {
+	s.tab, s.tabColor = text, color
 	if s.scr == nil {
 		return
 	}
@@ -294,7 +304,8 @@ func (s *chatSession) tabStatus(text, color string) {
 	s.scr.TabStatus(text, color, mode == "on")
 }
 
-// waiting marks the tab while a tool call waits for the user.
+// waiting marks the tab while a tool call waits for the user, and back
+// as working once it no longer does.
 func (s *chatSession) waiting(on bool) {
 	if on {
 		s.tabStatus("waiting", tabWaiting)
@@ -335,6 +346,18 @@ type screenTools struct {
 	block   *display.ToolBlock
 	notify  func(body string)
 	waiting func(on bool) // the user is asked, then no longer
+	asking  bool          // waiting(true) was called last
+}
+
+// ask tells waiting the user is asked (on), or no longer. An approval
+// stays one wait through Edit and the question asked again, and ends once:
+// when the call is approved (see decided) or denied. A cancelled one
+// leaves the status to the run, which clears it as it stops.
+func (t *screenTools) ask(on bool) {
+	if t.waiting != nil && t.asking != on {
+		t.asking = on
+		t.waiting(on)
+	}
 }
 
 func (t *screenTools) Open(title, note string) {
@@ -362,6 +385,11 @@ func (t *screenTools) Output() io.Writer {
 }
 
 func (t *screenTools) Close(ok bool, status string) {
+	if status == "cancelled" {
+		t.asking = false
+	} else {
+		t.ask(false)
+	}
 	t.block.Close(ok, status)
 	t.block = nil
 	t.scr.Changed()
@@ -371,18 +399,22 @@ func (t *screenTools) Choose(items []ui.Item) (string, error) {
 	if t.notify != nil {
 		t.notify("A tool call waits for your approval")
 	}
-	if t.waiting != nil {
-		t.waiting(true)
-		defer t.waiting(false)
+	t.ask(true)
+	return t.decided(t.scr.Select(ui.Select{Items: items, Inline: true}))
+}
+
+// decided ends the wait when choice approves the call, before it runs:
+// not on Edit (the question comes again), a denial or an error (Close
+// follows).
+func (t *screenTools) decided(choice string, err error) (string, error) {
+	if err == nil && choice != "edit" && choice != "deny" {
+		t.ask(false)
 	}
-	return t.scr.Select(ui.Select{Items: items, Inline: true})
+	return choice, err
 }
 
 func (t *screenTools) Edit(title, value string) (string, error) {
-	if t.waiting != nil {
-		t.waiting(true)
-		defer t.waiting(false)
-	}
+	t.ask(true)
 	return t.scr.Input(ui.Input{Title: title, Value: value})
 }
 
@@ -431,10 +463,13 @@ func (s *chatSession) shell(line string) {
 	s.scr.Busy("Running…", cancel)
 	defer s.scr.Busy("", nil)
 	s.tabStatus("working", tabWorking)
-	out := tools.RunShell(ctx, s.tools.UI, command)
-	if ctx.Err() != nil {
+	out, ok := tools.RunShell(ctx, s.tools.UI, command)
+	switch {
+	case ctx.Err() != nil:
 		s.tabStatus("", "")
-	} else {
+	case !ok:
+		s.tabStatus("failed", tabFailed)
+	default:
 		s.tabStatus("done", tabDone)
 	}
 	if keep {
@@ -448,8 +483,12 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 	s.said = true
 	att, err := attachFiles(shown, files)
 	if err != nil {
+		// Failed, not cleared: a queued message may fail while the user
+		// is away, and it waits in the input for them.
 		s.fail("Not sent: " + err.Error())
 		s.scr.PutBack(ui.Message{Text: text, Shown: text, Files: files})
+		s.tabStatus("failed", tabFailed)
+		s.notify("A message was not sent")
 		return
 	}
 	s.scr.Add(display.User(attach.Show(shown, att.files)))
@@ -802,16 +841,22 @@ func (s *chatSession) settings(string) {
 		s.fail(err.Error())
 	}
 	if cfg, err := config.Load(); err == nil && saved {
-		s.cfg.Settings = cfg.Settings
-		s.scr.Mouse(cfg.Settings.Mouse != "off")
-		if cfg.Settings.TabStatus == "off" {
-			s.tabStatus("", "")
-		}
-		display.SetHyperlinks(cfg.Settings.Hyperlinks)
-		if url := cfg.ResolveURL(globalURL); url != s.baseURL {
-			s.baseURL, s.client.BaseURL = url, url
-			s.reset()
-		}
+		s.applySettings(cfg)
+	}
+}
+
+// applySettings takes the settings saved in /settings.
+func (s *chatSession) applySettings(cfg config.Config) {
+	retab := cfg.Settings.TabStatus != s.cfg.Settings.TabStatus
+	s.cfg.Settings = cfg.Settings
+	s.scr.Mouse(cfg.Settings.Mouse != "off")
+	if retab { // the status shown again as the new mode has it
+		s.tabStatus(s.tab, s.tabColor)
+	}
+	display.SetHyperlinks(cfg.Settings.Hyperlinks)
+	if url := cfg.ResolveURL(globalURL); url != s.baseURL {
+		s.baseURL, s.client.BaseURL = url, url
+		s.reset()
 	}
 }
 

@@ -499,10 +499,15 @@ or with TERM=dumb it refuses.
   OSC 777 (Ghostty, WezTerm, foot, rxvt, VTE), else BEL (also in tmux/screen). The
   chat notifies on an answer, a failure and an approval, unless `notify` is off.
   `Screen.TabStatus` sets iTerm2's session status (OSC 21337: subtitle + dot,
-  others ignore it): `working` from a send or `!cmd`, `waiting` around an
-  approval (screenTools.waiting), `done` / `failed`; cleared by a stop, reset,
-  Ctrl+Z (back on resume) and exit. Setting `tab_status` auto|on|off: auto skips
-  tmux, screen and TERM=linux; on sends there too (tmux: DCS passthrough).
+  others ignore it): `working` from a send or `!cmd`, `waiting` from an
+  approval's Choose until it is approved (screenTools.decided) or denied, once
+  (Edit and the question again stay one wait; a cancel is left to the run's clear), `done` / `failed` (a failed answer, a `!cmd`
+  exiting non-zero: RunShell's ok, a message not sent for its files); cleared by
+  a stop, reset, Ctrl+Z (back on resume) and exit. `Screen.ClearTabStatus` once
+  at the chat's start clears what a killed chat left. Setting `tab_status`
+  auto|on|off: auto skips tmux, screen and TERM=linux; on sends there too (tmux:
+  DCS passthrough; screen still drops it); changing it in /settings re-applies
+  the current status (chatSession.tab).
 In ask, the approval prompt is a bubbletea program on stderr; it reads keys in raw mode, so Ctrl+C there cancels the run at once.
 
 ### Auto-update flow

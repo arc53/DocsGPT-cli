@@ -59,7 +59,8 @@ const tabClear = "status=;indicator=;status-color="
 // (OSC 21337), which other terminals ignore. "" clears it; it is cleared
 // when the screen ends and while it is suspended. Inside tmux or screen,
 // which drop the sequence, and on the Linux console it is only sent when
-// force: through tmux's passthrough then (allow-passthrough on).
+// force: through tmux's passthrough then (allow-passthrough on; screen
+// still drops it).
 func (s *Screen) TabStatus(text, color string, force bool) {
 	s.do(func(m *screenModel) tea.Cmd {
 		m.tab = ""
@@ -84,11 +85,23 @@ func (m *screenModel) retab() {
 	m.tabShown = m.tab
 }
 
-// untab clears the tab status the terminal shows, writing to stdout (the
-// screen is handed back or gone); retab shows it again.
+// ClearTabStatus clears a tab status left by an earlier chat that could
+// not clear it (killed, say), before this one shows any: written once,
+// where TabStatus with force would send it.
+func (s *Screen) ClearTabStatus(force bool) {
+	s.do(func(m *screenModel) tea.Cmd {
+		if m.out != nil && m.tab == "" && m.tabShown == "" && (force || tabStatusHere()) {
+			m.out.WriteString(tabStatusSeq(tabClear))
+		}
+		return nil
+	})
+}
+
+// untab clears the tab status the terminal shows (the screen is handed
+// back or gone); retab shows it again.
 func (m *screenModel) untab() {
-	if m.tabShown != "" {
-		os.Stdout.WriteString(tabStatusSeq(tabClear))
+	if m.out != nil && m.tabShown != "" {
+		m.out.WriteString(tabStatusSeq(tabClear))
 		m.tabShown = ""
 	}
 }

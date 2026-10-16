@@ -7,9 +7,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/session"
 	"github.com/arc53/DocsGPT-cli/internal/tools"
 	"github.com/arc53/DocsGPT-cli/internal/ui"
@@ -85,5 +88,168 @@ func TestResetBeforeScreen(t *testing.T) {
 	s.reset()
 	if s.sess == nil {
 		t.Fatal("no session after reset")
+	}
+}
+
+// tabChat is a chat on a headless screen whose terminal sequences go to a
+// file, outside tmux and screen; statuses returns the tab statuses written
+// since it was called last ("" for a clear).
+func tabChat(t *testing.T) (s *chatSession, statuses func() []string) {
+	t.Helper()
+	isolateConfig(t)
+	for _, env := range []string{"TMUX", "STY", "TERM"} {
+		t.Setenv(env, "")
+	}
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	scr := ui.NewScreen(ui.ScreenOptions{Headless: true, Output: f})
+	s = &chatSession{cfg: config.DefaultConfig(), baseURL: "https://example.com", keyName: "k", scr: scr, ctx: context.Background(),
+		sess: session.New(t.TempDir(), "https://example.com", "k")}
+	s.tools = &tools.Session{UI: &screenTools{scr: scr, waiting: s.waiting}}
+	status := regexp.MustCompile(`21337;status=([^;]*);`)
+	return s, func() []string {
+		t.Helper()
+		b, _ := os.ReadFile(f.Name())
+		f.Truncate(0)
+		f.Seek(0, 0)
+		var got []string
+		for _, m := range status.FindAllStringSubmatch(string(b), -1) {
+			got = append(got, m[1])
+		}
+		return got
+	}
+}
+
+// TestTabStatusStartup: a chat starts by clearing a status an earlier one
+// left (killed before it could), where statuses are sent.
+func TestTabStatusStartup(t *testing.T) {
+	for _, c := range []struct {
+		mode, tmux string
+		want       []string
+	}{{"auto", "", []string{""}}, {"off", "", nil}, {"auto", "/tmp/tmux-1/default,1,0", nil}, {"on", "/tmp/tmux-1/default,1,0", []string{""}}} {
+		s, statuses := tabChat(t)
+		t.Setenv("TMUX", c.tmux)
+		s.cfg.Settings.TabStatus = c.mode
+		s.loop("")
+		if got := statuses(); !slices.Equal(got, c.want) {
+			t.Errorf("%s (tmux %q): %q, want %q", c.mode, c.tmux, got, c.want)
+		}
+	}
+}
+
+// TestTabStatusShell: a !cmd that fails shows failed, not done.
+func TestTabStatusShell(t *testing.T) {
+	s, statuses := tabChat(t)
+	s.handle(ui.Message{Text: "!exit 3", Shown: "!exit 3"})
+	if got := statuses(); !slices.Equal(got, []string{"working", "failed"}) {
+		t.Errorf("failing !cmd: %q", got)
+	}
+	s.handle(ui.Message{Text: "!echo ok", Shown: "!echo ok"})
+	if got := statuses(); !slices.Equal(got, []string{"working", "done"}) {
+		t.Errorf("!cmd: %q", got)
+	}
+}
+
+// TestTabStatusNotSent: a message whose files cannot go, put back into
+// the input, shows failed rather than the status of the answer before.
+func TestTabStatusNotSent(t *testing.T) {
+	s, statuses := tabChat(t)
+	t.Chdir(t.TempDir())
+	os.WriteFile("empty.txt", nil, 0o644)
+	s.tabStatus("done", tabDone)
+	statuses()
+	s.send("see @empty.txt", "see @empty.txt")
+	if got := statuses(); !slices.Equal(got, []string{"failed"}) {
+		t.Errorf("not sent: %q", got)
+	}
+}
+
+// TestTabStatusSettings: changing tab_status shows the status again as
+// the new mode has it: inside tmux, auto clears the status "on" sent, on
+// sends it again, off clears it.
+func TestTabStatusSettings(t *testing.T) {
+	s, statuses := tabChat(t)
+	t.Setenv("TMUX", "/tmp/tmux-1/default,1,0")
+	cfg := config.DefaultConfig()
+	cfg.BaseURL = s.baseURL
+	s.cfg.Settings.TabStatus = "on"
+	s.tabStatus("working", tabWorking)
+	statuses()
+	for _, step := range []struct {
+		mode string
+		want []string
+	}{{"auto", []string{""}}, {"on", []string{"working"}}, {"off", []string{""}}, {"auto", nil}, {"on", []string{"working"}}} {
+		cfg.Settings.TabStatus = step.mode
+		s.applySettings(cfg)
+		if got := statuses(); !slices.Equal(got, step.want) {
+			t.Errorf("to %s: %q, want %q", step.mode, got, step.want)
+		}
+	}
+}
+
+// TestTabStatusApproval: one approval is one wait, through Edit and the
+// question asked again; working comes back once, as soon as the call is
+// approved (a read or write runs before its block closes) or denied, and
+// a cancelled one is left to the run, which clears the tab.
+func TestTabStatusApproval(t *testing.T) {
+	s, statuses := tabChat(t)
+	tt := s.tools.UI.(*screenTools)
+	// choose answers an approval as Choose does, with choice picked (a
+	// headless screen cannot be answered).
+	choose := func(choice string) {
+		tt.ask(true)
+		tt.decided(choice, nil)
+	}
+	s.tabStatus("working", tabWorking)
+	statuses()
+
+	tt.Open("$ ls", "")
+	choose("edit")
+	tt.Edit("Edit command", "ls")
+	tt.Open("$ ls -l", "")
+	choose("approve")
+	tt.Output()
+	tt.Close(true, "exit 0")
+	if got := statuses(); !slices.Equal(got, []string{"waiting", "working"}) {
+		t.Errorf("edited, then approved: %q", got)
+	}
+
+	tt.Open("write x", "")
+	tt.Lines([]string{"+x"})
+	choose("approve")
+	if got := statuses(); !slices.Equal(got, []string{"waiting", "working"}) {
+		t.Errorf("write approved, before it runs: %q", got)
+	}
+	tt.Close(true, "wrote 1 line")
+	if got := statuses(); len(got) != 0 {
+		t.Errorf("write done: %q", got)
+	}
+
+	tt.Open("$ rm x", "")
+	choose("deny")
+	tt.Close(false, "denied")
+	if got := statuses(); !slices.Equal(got, []string{"waiting", "working"}) {
+		t.Errorf("denied: %q", got)
+	}
+
+	tt.Open("read ~/x", "")
+	tt.Choose([]ui.Item{{Label: "Approve", Value: "approve"}}) // Esc
+	tt.Close(false, "cancelled")
+	if got := statuses(); !slices.Equal(got, []string{"waiting"}) {
+		t.Errorf("cancelled: %q", got)
+	}
+	s.tabStatus("", "") // the stopped run
+	statuses()
+
+	s.tabStatus("working", tabWorking)
+	statuses()
+	tt.Open("$ ls", "") // auto-approved
+	tt.Output()
+	tt.Close(true, "exit 0")
+	if got := statuses(); len(got) != 0 {
+		t.Errorf("auto-approved: %q", got)
 	}
 }
