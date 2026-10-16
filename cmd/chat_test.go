@@ -76,3 +76,14 @@ func TestHandleDecidesOnWhatWasShown(t *testing.T) {
 		t.Fatal("a typed /command was sent")
 	}
 }
+
+// TestResetBeforeScreen: runChat resets the session before it makes the
+// screen, which the tab status must not reach for.
+func TestResetBeforeScreen(t *testing.T) {
+	isolateConfig(t)
+	s := &chatSession{baseURL: "https://example.com", keyName: "k"}
+	s.reset()
+	if s.sess == nil {
+		t.Fatal("no session after reset")
+	}
+}
