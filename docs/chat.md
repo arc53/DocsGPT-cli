@@ -257,17 +257,25 @@ notifications off.
 In iTerm2 (3.7 and later) the chat also shows what it is doing under the
 tab's title, with a colored dot: `working` (amber) while it waits for an
 answer or runs a command, `waiting` (purple) while a tool call waits for your
-approval, then `done` (green) or `failed` (red). A stopped answer and a new
-conversation clear it, and so does leaving or suspending the chat. iTerm2's
-Session Status tool and Cockpit list it, and **Window → Notify on Status
-Change** alerts you when it changes. It works over ssh too: the status
-travels with the output.
+approval (editing the command and deciding again is still the same wait),
+then `done` (green) or `failed` (red): an answer that failed, a `!cmd` that
+exited with an error, or a message put back into the input because its files
+could not go. A stopped answer and a new conversation clear it, and so does
+leaving or suspending the chat. iTerm2's Session Status tool and Cockpit list
+it, and **Window → Notify on Status Change** alerts you when it changes. It
+works over ssh too: the status travels with the output.
 
-Terminals without the feature ignore the sequence (OSC 21337). tmux and
+A chat that is killed (`kill -9`, out of memory) cannot clear its status, so
+the tab keeps it, `working` say, until the next chat starts in that tab and
+clears it (unless `tab_status` is off then).
+
+Terminals without the feature ignore the sequence (OSC 21337). tmux and GNU
 screen drop it, so inside them it is not sent; with
 `docsgpt-cli config set tab_status on` it goes through tmux's passthrough,
-which needs `set -g allow-passthrough on` in `~/.tmux.conf`.
-`docsgpt-cli config set tab_status off` (or `/settings`) turns it off.
+which needs `set -g allow-passthrough on` in `~/.tmux.conf` (screen has no
+such passthrough: there it never shows). A change in `/settings` applies to
+the status shown at once. `docsgpt-cli config set tab_status off` (or
+`/settings`) turns it off.
 
 ## Stopping
 
