@@ -467,7 +467,9 @@ func DiffPreview(before, after string, limit int) (preview []string, added, remo
 			sign, style = "+ ", T.Success
 		}
 		num := fmt.Sprintf("%*d", numW, o.line)
-		preview = append(preview, T.Dim.Render(num)+" "+style.Render(sign+ansi.Truncate(Safe(o.text), width, "…")))
+		// A CRLF file's lines end in \r: not shown (Safe would show ␍).
+		text := strings.TrimSuffix(o.text, "\r")
+		preview = append(preview, T.Dim.Render(num)+" "+style.Render(sign+ansi.Truncate(Safe(text), width, "…")))
 	}
 	if more := len(ops) - limit; more > 0 {
 		preview = append(preview, T.Dim.Render(fmt.Sprintf("… %d more changed %s", more, plural(more, "line"))))

@@ -217,7 +217,10 @@ internal/
                        editor.go: its input (editorModel, embedded); keys.go: ttyInput
                        (keyboard protocol → legacy bytes), NewlineKey; history.go:
                        prompt history file; fuzzy.go: popup/filter matching;
-                       suspend_*.go: Ctrl+Z; hold_*.go: echo off while ask streams,
+                       suspend_*.go: Ctrl+Z; vt_*.go: EnableVT (Windows: escape
+                       processing on stdout/stderr for the whole run, from Execute;
+                       the classic console starts with it off and bubbletea only
+                       turns it on while a program runs); hold_*.go: echo off while ask streams,
                        DiscardInput
   tools/
     definitions.go   → Tool schemas: run_command (timeout: seconds, ≤1h or --tool-timeout),
