@@ -22,6 +22,11 @@ func TestDiffPreview(t *testing.T) {
 	if want := []string{"1 - hello world", "1 + bye world"}; strings.Join(preview, "|") != strings.Join(want, "|") {
 		t.Errorf("CRLF: got %q, want %q", preview, want)
 	}
+	// A change of line endings keeps them visible.
+	preview, _, _ = DiffPreview("a\r\n", "a\n", 10)
+	if want := []string{"1 - a␍", "1 + a"}; strings.Join(preview, "|") != strings.Join(want, "|") {
+		t.Errorf("CRLF → LF: got %q, want %q", preview, want)
+	}
 
 	preview, added, _ = DiffPreview("", "a\nb\nc\n", 2)
 	if added != 3 || len(preview) != 3 || preview[2] != "… 1 more changed line" {

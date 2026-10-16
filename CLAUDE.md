@@ -218,7 +218,7 @@ internal/
                        (keyboard protocol → legacy bytes), NewlineKey; history.go:
                        prompt history file; fuzzy.go: popup/filter matching;
                        suspend_*.go: Ctrl+Z; vt_*.go: EnableVT (Windows: escape
-                       processing on stdout/stderr for the whole run, from Execute;
+                       processing on stdout/stderr from Execute, left on at exit;
                        the classic console starts with it off and bubbletea only
                        turns it on while a program runs); hold_*.go: echo off while ask streams,
                        DiscardInput

@@ -233,11 +233,10 @@ const groupAnnotation = "docsgpt/group"
 func Execute() {
 	setupCompletion()
 	questionArgs()
-	restoreVT := ui.EnableVT()
+	ui.EnableVT()
 
 	if err := config.MigrateIfNeeded(); err != nil {
 		display.ErrorMsg(err.Error())
-		restoreVT()
 		os.Exit(exitFailure)
 	}
 	startupConfig, startupConfigErr = config.Load()
@@ -268,10 +267,8 @@ func Execute() {
 		if !errors.Is(err, ui.ErrCancelled) && !errors.Is(err, errReported) {
 			display.ErrorMsg(err.Error())
 		}
-		restoreVT()
 		os.Exit(exitCodeFor(err))
 	}
-	restoreVT()
 }
 
 // updateGate decides how the passive update machinery behaves for this

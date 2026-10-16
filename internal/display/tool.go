@@ -451,6 +451,9 @@ func DiffPreview(before, after string, limit int) (preview []string, added, remo
 		}
 	}
 
+	// Lines of a CRLF file end in \r, which Safe shows as ␍: dropped when
+	// both sides use CRLF, kept to show a change of line endings.
+	crlf := strings.Contains(before, "\r\n") && strings.Contains(after, "\r\n")
 	numW := len(strconv.Itoa(len(a) + len(b)))
 	width := stderrWidth() - numW - 6
 	for k, o := range ops {
@@ -467,8 +470,10 @@ func DiffPreview(before, after string, limit int) (preview []string, added, remo
 			sign, style = "+ ", T.Success
 		}
 		num := fmt.Sprintf("%*d", numW, o.line)
-		// A CRLF file's lines end in \r: not shown (Safe would show ␍).
-		text := strings.TrimSuffix(o.text, "\r")
+		text := o.text
+		if crlf {
+			text = strings.TrimSuffix(text, "\r")
+		}
 		preview = append(preview, T.Dim.Render(num)+" "+style.Render(sign+ansi.Truncate(Safe(text), width, "…")))
 	}
 	if more := len(ops) - limit; more > 0 {
