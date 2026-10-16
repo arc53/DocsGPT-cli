@@ -79,6 +79,10 @@ type chatSession struct {
 	tools         *tools.Session
 	quit          bool
 
+	// tab and tabColor are the status the tab shows (see tabStatus), kept
+	// to show it again when the setting changes.
+	tab, tabColor string
+
 	scr  *ui.Screen
 	ctx  context.Context // ends with the chat
 	said bool            // something was asked or shown again: the transcript is printed on exit
@@ -289,6 +293,7 @@ const (
 // also where it would not reach the terminal by itself. Before the screen
 // exists (runChat resets the session first) there is nothing to show.
 func (s *chatSession) tabStatus(text, color string) {
+	s.tab, s.tabColor = text, color
 	if s.scr == nil {
 		return
 	}
@@ -814,16 +819,22 @@ func (s *chatSession) settings(string) {
 		s.fail(err.Error())
 	}
 	if cfg, err := config.Load(); err == nil && saved {
-		s.cfg.Settings = cfg.Settings
-		s.scr.Mouse(cfg.Settings.Mouse != "off")
-		if cfg.Settings.TabStatus == "off" {
-			s.tabStatus("", "")
-		}
-		display.SetHyperlinks(cfg.Settings.Hyperlinks)
-		if url := cfg.ResolveURL(globalURL); url != s.baseURL {
-			s.baseURL, s.client.BaseURL = url, url
-			s.reset()
-		}
+		s.applySettings(cfg)
+	}
+}
+
+// applySettings takes the settings saved in /settings.
+func (s *chatSession) applySettings(cfg config.Config) {
+	retab := cfg.Settings.TabStatus != s.cfg.Settings.TabStatus
+	s.cfg.Settings = cfg.Settings
+	s.scr.Mouse(cfg.Settings.Mouse != "off")
+	if retab { // the status shown again as the new mode has it
+		s.tabStatus(s.tab, s.tabColor)
+	}
+	display.SetHyperlinks(cfg.Settings.Hyperlinks)
+	if url := cfg.ResolveURL(globalURL); url != s.baseURL {
+		s.baseURL, s.client.BaseURL = url, url
+		s.reset()
 	}
 }
 

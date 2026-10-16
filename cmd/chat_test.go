@@ -166,3 +166,26 @@ func TestTabStatusNotSent(t *testing.T) {
 		t.Errorf("not sent: %q", got)
 	}
 }
+
+// TestTabStatusSettings: changing tab_status shows the status again as
+// the new mode has it: inside tmux, auto clears the status "on" sent, on
+// sends it again, off clears it.
+func TestTabStatusSettings(t *testing.T) {
+	s, statuses := tabChat(t)
+	t.Setenv("TMUX", "/tmp/tmux-1/default,1,0")
+	cfg := config.DefaultConfig()
+	cfg.BaseURL = s.baseURL
+	s.cfg.Settings.TabStatus = "on"
+	s.tabStatus("working", tabWorking)
+	statuses()
+	for _, step := range []struct {
+		mode string
+		want []string
+	}{{"auto", []string{""}}, {"on", []string{"working"}}, {"off", []string{""}}, {"auto", nil}, {"on", []string{"working"}}} {
+		cfg.Settings.TabStatus = step.mode
+		s.applySettings(cfg)
+		if got := statuses(); !slices.Equal(got, step.want) {
+			t.Errorf("to %s: %q, want %q", step.mode, got, step.want)
+		}
+	}
+}
