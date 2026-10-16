@@ -304,7 +304,8 @@ func (s *chatSession) tabStatus(text, color string) {
 	s.scr.TabStatus(text, color, mode == "on")
 }
 
-// waiting marks the tab while a tool call waits for the user.
+// waiting marks the tab while a tool call waits for the user, and back
+// as working once it no longer does.
 func (s *chatSession) waiting(on bool) {
 	if on {
 		s.tabStatus("waiting", tabWaiting)
@@ -345,6 +346,18 @@ type screenTools struct {
 	block   *display.ToolBlock
 	notify  func(body string)
 	waiting func(on bool) // the user is asked, then no longer
+	asking  bool          // waiting(true) was called last
+}
+
+// ask tells waiting the user is asked (on), or no longer. An approval
+// stays one wait through Edit and the question asked again, and ends when
+// the call runs or closes (approved, denied, cancelled): no status flips
+// in between.
+func (t *screenTools) ask(on bool) {
+	if t.waiting != nil && t.asking != on {
+		t.asking = on
+		t.waiting(on)
+	}
 }
 
 func (t *screenTools) Open(title, note string) {
@@ -361,6 +374,7 @@ func (t *screenTools) Lines(lines []string) {
 }
 
 func (t *screenTools) Output() io.Writer {
+	t.ask(false)
 	t.scr.Status("Running…")
 	block := t.block
 	block.Start()
@@ -372,6 +386,7 @@ func (t *screenTools) Output() io.Writer {
 }
 
 func (t *screenTools) Close(ok bool, status string) {
+	t.ask(false)
 	t.block.Close(ok, status)
 	t.block = nil
 	t.scr.Changed()
@@ -381,18 +396,12 @@ func (t *screenTools) Choose(items []ui.Item) (string, error) {
 	if t.notify != nil {
 		t.notify("A tool call waits for your approval")
 	}
-	if t.waiting != nil {
-		t.waiting(true)
-		defer t.waiting(false)
-	}
+	t.ask(true)
 	return t.scr.Select(ui.Select{Items: items, Inline: true})
 }
 
 func (t *screenTools) Edit(title, value string) (string, error) {
-	if t.waiting != nil {
-		t.waiting(true)
-		defer t.waiting(false)
-	}
+	t.ask(true)
 	return t.scr.Input(ui.Input{Title: title, Value: value})
 }
 

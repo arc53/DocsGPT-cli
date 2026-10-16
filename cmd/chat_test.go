@@ -189,3 +189,37 @@ func TestTabStatusSettings(t *testing.T) {
 		}
 	}
 }
+
+// TestTabStatusApproval: one approval is one wait, through Edit and the
+// question asked again, and working comes back once when it is resolved.
+func TestTabStatusApproval(t *testing.T) {
+	s, statuses := tabChat(t)
+	tt := s.tools.UI.(*screenTools)
+	s.tabStatus("working", tabWorking)
+	statuses()
+
+	tt.Open("$ ls", "")
+	tt.Choose([]ui.Item{{Label: "Approve", Value: "approve"}}) // Edit chosen
+	tt.Edit("Edit command", "ls")
+	tt.Open("$ ls -l", "")
+	tt.Choose([]ui.Item{{Label: "Approve", Value: "approve"}}) // approved
+	tt.Output()
+	tt.Close(true, "exit 0")
+	if got := statuses(); !slices.Equal(got, []string{"waiting", "working"}) {
+		t.Errorf("edited, then approved: %q", got)
+	}
+
+	tt.Open("$ rm x", "")
+	tt.Choose([]ui.Item{{Label: "Deny", Value: "deny"}}) // denied, or cancelled
+	tt.Close(false, "denied")
+	if got := statuses(); !slices.Equal(got, []string{"waiting", "working"}) {
+		t.Errorf("denied: %q", got)
+	}
+
+	tt.Open("$ ls", "") // auto-approved
+	tt.Output()
+	tt.Close(true, "exit 0")
+	if got := statuses(); len(got) != 0 {
+		t.Errorf("auto-approved: %q", got)
+	}
+}
