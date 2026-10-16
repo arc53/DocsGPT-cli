@@ -73,6 +73,7 @@ var settings = []setting{
 	choice("retry", "Retry failed requests", func(c *config.Config) *string { return &c.Settings.Retry }, "on", "on", "off"),
 	choice("whats_new", "What's new after an update", func(c *config.Config) *string { return &c.Settings.WhatsNew }, "on", "on", "off"),
 	choice("notify", "Notify when an answer is ready in the background", func(c *config.Config) *string { return &c.Settings.Notify }, "on", "on", "off"),
+	choice("tab_status", "Show the chat's status on the terminal tab", func(c *config.Config) *string { return &c.Settings.TabStatus }, "auto", "auto", "on", "off"),
 	toggle("send_current_directory", "Send working directory", func(c *config.Config) *bool { return &c.Settings.SendCurrentDirectory }),
 	toggle("send_directory_contents", "Send directory listing", func(c *config.Config) *bool { return &c.Settings.SendDirectoryContents }),
 	toggle("send_project_instructions", "Send AGENTS.md", func(c *config.Config) *bool { return &c.Settings.SendProjectInstructions }),

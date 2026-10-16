@@ -159,7 +159,7 @@ func runChat(first string) error {
 		Mouse:    cfg.Settings.Mouse != "off",
 		EscEsc:   "/edit",
 	})
-	s.tools.UI = &screenTools{scr: s.scr, notify: s.notify}
+	s.tools.UI = &screenTools{scr: s.scr, notify: s.notify, waiting: s.waiting}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.ctx = ctx
@@ -271,6 +271,34 @@ func (s *chatSession) notify(body string) {
 	}
 }
 
+// Tab statuses (see tabStatus), in the palette's colors.
+const (
+	tabWorking = "#cd9a22"
+	tabWaiting = "#a798d7"
+	tabDone    = "#68b78d"
+	tabFailed  = "#ea7f81"
+)
+
+// tabStatus shows what the chat is doing on the terminal's tab (see
+// Screen.TabStatus), "" for nothing, unless turned off; "on" sends it
+// also where it would not reach the terminal by itself.
+func (s *chatSession) tabStatus(text, color string) {
+	mode := s.cfg.Settings.TabStatus
+	if mode == "off" {
+		text = ""
+	}
+	s.scr.TabStatus(text, color, mode == "on")
+}
+
+// waiting marks the tab while a tool call waits for the user.
+func (s *chatSession) waiting(on bool) {
+	if on {
+		s.tabStatus("waiting", tabWaiting)
+	} else {
+		s.tabStatus("working", tabWorking)
+	}
+}
+
 // top starts the transcript over with the chat's header.
 func (s *chatSession) top() {
 	var files []string
@@ -299,9 +327,10 @@ func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 // screenTools shows the tool calls in the transcript and asks about them in
 // the screen's panel.
 type screenTools struct {
-	scr    *ui.Screen
-	block  *display.ToolBlock
-	notify func(body string)
+	scr     *ui.Screen
+	block   *display.ToolBlock
+	notify  func(body string)
+	waiting func(on bool) // the user is asked, then no longer
 }
 
 func (t *screenTools) Open(title, note string) {
@@ -338,10 +367,18 @@ func (t *screenTools) Choose(items []ui.Item) (string, error) {
 	if t.notify != nil {
 		t.notify("A tool call waits for your approval")
 	}
+	if t.waiting != nil {
+		t.waiting(true)
+		defer t.waiting(false)
+	}
 	return t.scr.Select(ui.Select{Items: items, Inline: true})
 }
 
 func (t *screenTools) Edit(title, value string) (string, error) {
+	if t.waiting != nil {
+		t.waiting(true)
+		defer t.waiting(false)
+	}
 	return t.scr.Input(ui.Input{Title: title, Value: value})
 }
 
@@ -389,7 +426,13 @@ func (s *chatSession) shell(line string) {
 	defer cancel()
 	s.scr.Busy("Running…", cancel)
 	defer s.scr.Busy("", nil)
+	s.tabStatus("working", tabWorking)
 	out := tools.RunShell(ctx, s.tools.UI, command)
+	if ctx.Err() != nil {
+		s.tabStatus("", "")
+	} else {
+		s.tabStatus("done", tabDone)
+	}
 	if keep {
 		s.shellOutput = append(s.shellOutput, fmt.Sprintf("I ran `%s`:\n```\n%s\n```", command, strings.TrimRight(out, "\n")))
 	}
@@ -423,6 +466,7 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 	defer cancel()
 	s.scr.Busy("Thinking…", cancel)
 	defer s.scr.Busy("", nil)
+	s.tabStatus("working", tabWorking)
 	answer := func() *display.Answer {
 		a := display.NewAnswer(s.showReasoning)
 		s.scr.Add(a)
@@ -464,12 +508,14 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 		s.conversationID = ""
 		if ctx.Err() != nil {
 			s.note("Interrupted.")
+			s.tabStatus("", "")
 			return
 		}
 		// The server may have refused the conversation (deleted, say):
 		// the next turn starts a new one from the messages.
 		s.conversationID = ""
 		s.fail(explainChatError(err, s.baseURL, s.keyName).Error())
+		s.tabStatus("failed", tabFailed)
 		s.notify("The answer failed")
 		return
 	}
@@ -503,6 +549,7 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 	s.history, s.conversationID = res.Messages, res.ConversationID
 	s.sentContext, s.shellOutput = block, nil
 	s.lastAnswer = strings.Join(slices.DeleteFunc(texts, func(t string) bool { return strings.TrimSpace(t) == "" }), "\n\n")
+	s.tabStatus("done", tabDone)
 	s.notify("The answer is ready")
 }
 
@@ -511,6 +558,7 @@ func (s *chatSession) reset() {
 	s.history, s.conversationID, s.sentContext = nil, "", ""
 	s.shellOutput, s.lastAnswer, s.unanswered = nil, "", ui.Message{}
 	s.lastUsage, s.totalUsage = docsgpt.Usage{}, docsgpt.Usage{}
+	s.tabStatus("", "")
 	cwd, _ := os.Getwd()
 	s.sess = session.New(cwd, s.baseURL, s.keyName)
 }
@@ -752,6 +800,9 @@ func (s *chatSession) settings(string) {
 	if cfg, err := config.Load(); err == nil && saved {
 		s.cfg.Settings = cfg.Settings
 		s.scr.Mouse(cfg.Settings.Mouse != "off")
+		if cfg.Settings.TabStatus == "off" {
+			s.tabStatus("", "")
+		}
 		display.SetHyperlinks(cfg.Settings.Hyperlinks)
 		if url := cfg.ResolveURL(globalURL); url != s.baseURL {
 			s.baseURL, s.client.BaseURL = url, url

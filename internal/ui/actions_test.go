@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -147,5 +148,60 @@ func TestNotification(t *testing.T) {
 	t.Setenv("TMUX", "/tmp/tmux-1/default,1,0")
 	if got := notification("DocsGPT", "x"); got != "\a" {
 		t.Errorf("tmux: %q", got)
+	}
+}
+
+// TestTabStatus: a status is written once, a ";" in its text cannot start
+// another field, "" clears what is shown; tmux and the Linux console only
+// get it when forced, tmux wrapped for its passthrough.
+func TestTabStatus(t *testing.T) {
+	for _, env := range []string{"TMUX", "STY", "TERM"} {
+		t.Setenv(env, "")
+	}
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	s := NewScreen(ScreenOptions{Headless: true})
+	s.m.out = &termOutput{File: f}
+	written := func() string {
+		t.Helper()
+		b, _ := os.ReadFile(f.Name())
+		f.Truncate(0)
+		f.Seek(0, 0)
+		return strings.ReplaceAll(strings.ReplaceAll(string(b), syncStart, ""), syncEnd, "")
+	}
+
+	s.TabStatus("done;x", "#68b78d", false)
+	s.TabStatus("done;x", "#68b78d", false)
+	if got := written(); got != "\x1b]21337;status=done,x;indicator=#68b78d;status-color=#68b78d\a" {
+		t.Errorf("status: %q", got)
+	}
+	s.TabStatus("", "", false)
+	s.TabStatus("", "", false)
+	if got := written(); got != "\x1b]21337;"+tabClear+"\a" {
+		t.Errorf("clear: %q", got)
+	}
+
+	t.Setenv("TERM", "linux")
+	s.TabStatus("working", "#cd9a22", false)
+	if got := written(); got != "" {
+		t.Errorf("Linux console: %q", got)
+	}
+
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("TMUX", "/tmp/tmux-1/default,1,0")
+	s.TabStatus("working", "#cd9a22", false)
+	if got := written(); got != "" {
+		t.Errorf("tmux: %q", got)
+	}
+	s.TabStatus("working", "#cd9a22", true)
+	if got := written(); got != "\x1bPtmux;\x1b\x1b]21337;status=working;indicator=#cd9a22;status-color=#cd9a22\a\x1b\\" {
+		t.Errorf("tmux, forced: %q", got)
+	}
+	s.TabStatus("working", "#cd9a22", false) // turned back to auto: cleared
+	if got := written(); got != "\x1bPtmux;\x1b\x1b]21337;"+tabClear+"\a\x1b\\" {
+		t.Errorf("tmux, unforced: %q", got)
 	}
 }
