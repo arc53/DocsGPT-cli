@@ -155,23 +155,7 @@ func TestNotification(t *testing.T) {
 // another field, "" clears what is shown; tmux and the Linux console only
 // get it when forced, tmux wrapped for its passthrough.
 func TestTabStatus(t *testing.T) {
-	for _, env := range []string{"TMUX", "STY", "TERM"} {
-		t.Setenv(env, "")
-	}
-	f, err := os.CreateTemp(t.TempDir(), "out")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	s := NewScreen(ScreenOptions{Headless: true})
-	s.m.out = &termOutput{File: f}
-	written := func() string {
-		t.Helper()
-		b, _ := os.ReadFile(f.Name())
-		f.Truncate(0)
-		f.Seek(0, 0)
-		return strings.ReplaceAll(strings.ReplaceAll(string(b), syncStart, ""), syncEnd, "")
-	}
+	s, written := tabScreen(t)
 
 	s.TabStatus("done;x", "#68b78d", false)
 	s.TabStatus("done;x", "#68b78d", false)
@@ -203,5 +187,88 @@ func TestTabStatus(t *testing.T) {
 	s.TabStatus("working", "#cd9a22", false) // turned back to auto: cleared
 	if got := written(); got != "\x1bPtmux;\x1b\x1b]21337;"+tabClear+"\a\x1b\\" {
 		t.Errorf("tmux, unforced: %q", got)
+	}
+}
+
+// tabScreen is a headless screen outside tmux and screen whose terminal
+// sequences go to a file; written returns what was written since it was
+// called last.
+func tabScreen(t *testing.T) (s *Screen, written func() string) {
+	t.Helper()
+	for _, env := range []string{"TMUX", "STY", "TERM"} {
+		t.Setenv(env, "")
+	}
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return NewScreen(ScreenOptions{Headless: true, Output: f}), func() string {
+		t.Helper()
+		b, _ := os.ReadFile(f.Name())
+		f.Truncate(0)
+		f.Seek(0, 0)
+		return strings.ReplaceAll(strings.ReplaceAll(string(b), syncStart, ""), syncEnd, "")
+	}
+}
+
+// TestTabStatusControls: escape sequences, BEL and other control
+// characters in the status cannot end it early or reach the terminal.
+func TestTabStatusControls(t *testing.T) {
+	s, written := tabScreen(t)
+	s.TabStatus("do\x1b]0;evil\x07ne\r\n\u009b", "#68b78d", false)
+	got := written()
+	body := strings.TrimSuffix(strings.TrimPrefix(got, "\x1b]21337;"), "\a")
+	if body == got || strings.ContainsAny(body, "\x1b\a\r\n\u009b") || strings.Count(body, ";") != 2 {
+		t.Errorf("status: %q", got)
+	}
+}
+
+// TestTabStatusSuspend: Ctrl+Z clears the status while the process is
+// stopped, and it comes back on resume.
+func TestTabStatusSuspend(t *testing.T) {
+	if suspendProcess == nil {
+		t.Skip("no job control")
+	}
+	stopped := false
+	old := suspendProcess
+	suspendProcess = func() { stopped = true }
+	t.Cleanup(func() { suspendProcess = old })
+	s, written := tabScreen(t)
+	s.TabStatus("working", "#cd9a22", false)
+	written()
+
+	s.m.stop()
+	if got := written(); !stopped || got != "\x1b]21337;"+tabClear+"\a" {
+		t.Errorf("suspended (stopped %v): %q", stopped, got)
+	}
+	s.m.Update(resumedMsg{})
+	if got := written(); got != "\x1b]21337;status=working;indicator=#cd9a22;status-color=#cd9a22\a" {
+		t.Errorf("resumed: %q", got)
+	}
+}
+
+// TestClearTabStatus: a status left on the tab is cleared once, where a
+// status would be sent, and never over one this screen shows.
+func TestClearTabStatus(t *testing.T) {
+	s, written := tabScreen(t)
+	s.ClearTabStatus(false)
+	if got := written(); got != "\x1b]21337;"+tabClear+"\a" {
+		t.Errorf("clear: %q", got)
+	}
+	t.Setenv("TMUX", "/tmp/tmux-1/default,1,0")
+	s.ClearTabStatus(false)
+	if got := written(); got != "" {
+		t.Errorf("tmux: %q", got)
+	}
+	s.ClearTabStatus(true)
+	if got := written(); got != "\x1bPtmux;\x1b\x1b]21337;"+tabClear+"\a\x1b\\" {
+		t.Errorf("tmux, forced: %q", got)
+	}
+	s.TabStatus("working", "#cd9a22", true)
+	written()
+	s.ClearTabStatus(true)
+	if got := written(); got != "" {
+		t.Errorf("over a status shown: %q", got)
 	}
 }

@@ -7,9 +7,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/arc53/DocsGPT-cli/internal/config"
 	"github.com/arc53/DocsGPT-cli/internal/session"
 	"github.com/arc53/DocsGPT-cli/internal/tools"
 	"github.com/arc53/DocsGPT-cli/internal/ui"
@@ -85,5 +88,54 @@ func TestResetBeforeScreen(t *testing.T) {
 	s.reset()
 	if s.sess == nil {
 		t.Fatal("no session after reset")
+	}
+}
+
+// tabChat is a chat on a headless screen whose terminal sequences go to a
+// file, outside tmux and screen; statuses returns the tab statuses written
+// since it was called last ("" for a clear).
+func tabChat(t *testing.T) (s *chatSession, statuses func() []string) {
+	t.Helper()
+	isolateConfig(t)
+	for _, env := range []string{"TMUX", "STY", "TERM"} {
+		t.Setenv(env, "")
+	}
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	scr := ui.NewScreen(ui.ScreenOptions{Headless: true, Output: f})
+	s = &chatSession{cfg: config.DefaultConfig(), baseURL: "https://example.com", keyName: "k", scr: scr, ctx: context.Background(),
+		sess: session.New(t.TempDir(), "https://example.com", "k")}
+	s.tools = &tools.Session{UI: &screenTools{scr: scr, waiting: s.waiting}}
+	status := regexp.MustCompile(`21337;status=([^;]*);`)
+	return s, func() []string {
+		t.Helper()
+		b, _ := os.ReadFile(f.Name())
+		f.Truncate(0)
+		f.Seek(0, 0)
+		var got []string
+		for _, m := range status.FindAllStringSubmatch(string(b), -1) {
+			got = append(got, m[1])
+		}
+		return got
+	}
+}
+
+// TestTabStatusStartup: a chat starts by clearing a status an earlier one
+// left (killed before it could), where statuses are sent.
+func TestTabStatusStartup(t *testing.T) {
+	for _, c := range []struct {
+		mode, tmux string
+		want       []string
+	}{{"auto", "", []string{""}}, {"off", "", nil}, {"auto", "/tmp/tmux-1/default,1,0", nil}, {"on", "/tmp/tmux-1/default,1,0", []string{""}}} {
+		s, statuses := tabChat(t)
+		t.Setenv("TMUX", c.tmux)
+		s.cfg.Settings.TabStatus = c.mode
+		s.loop("")
+		if got := statuses(); !slices.Equal(got, c.want) {
+			t.Errorf("%s (tmux %q): %q, want %q", c.mode, c.tmux, got, c.want)
+		}
 	}
 }

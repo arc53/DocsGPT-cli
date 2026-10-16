@@ -207,6 +207,11 @@ func runChat(first string) error {
 // loop starts the chat (-r, -c, a first message), then handles what the
 // user sends until the screen ends or they quit.
 func (s *chatSession) loop(first string) {
+	// A chat killed before it could clear its tab status (kill -9, out of
+	// memory) leaves it there: clear it now.
+	if mode := s.cfg.Settings.TabStatus; mode != "off" {
+		s.scr.ClearTabStatus(mode == "on")
+	}
 	switch {
 	case chatResume:
 		if !s.pickSession() {

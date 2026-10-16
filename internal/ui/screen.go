@@ -51,6 +51,9 @@ type ScreenOptions struct {
 	// Headless keeps the blocks without a terminal, prompts failing with
 	// ErrNotInteractive (for tests).
 	Headless bool
+	// Output, when Headless, takes the sequences the terminal would get
+	// (title, tab status, notifications), for tests.
+	Output *os.File
 }
 
 // Screen is the chat on the alternate screen: the transcript, which it
@@ -78,6 +81,9 @@ func NewScreen(o ScreenOptions) *Screen {
 	m := &screenModel{ed: newEditorModel(o.Commands, o.History), follow: true, mouse: o.Mouse, width: 80, height: 24, escCmd: o.EscEsc}
 	s := &Screen{m: m, headless: o.Headless, done: make(chan struct{})}
 	if o.Headless {
+		if o.Output != nil {
+			m.out = &termOutput{File: o.Output}
+		}
 		return s
 	}
 	if w, h, err := term.GetSize(os.Stdout.Fd()); err == nil {
@@ -1050,15 +1056,19 @@ func (m *screenModel) suspend() tea.Cmd {
 	if suspendProcess == nil {
 		return nil
 	}
-	return tea.Exec(handoff(func() error {
-		if m.titled { // the shell's title while stopped
-			os.Stdout.WriteString(titlePop)
-			m.titled = false
-		}
-		m.untab()
-		suspendProcess()
-		return nil
-	}), func(error) tea.Msg { return resumedMsg{} })
+	return tea.Exec(handoff(m.stop), func(error) tea.Msg { return resumedMsg{} })
+}
+
+// stop stops the process, showing the shell's title and no tab status
+// meanwhile; resumedMsg brings them back.
+func (m *screenModel) stop() error {
+	if m.titled {
+		os.Stdout.WriteString(titlePop)
+		m.titled = false
+	}
+	m.untab()
+	suspendProcess()
+	return nil
 }
 
 // termOutput is stdout for a Screen: every write is one synchronized
