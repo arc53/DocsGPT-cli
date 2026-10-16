@@ -319,14 +319,23 @@ func addToWindowsPATH(dir string) error {
 	// setx is unusable here: %PATH% is not expanded outside cmd.exe, it merges
 	// the machine PATH into the user PATH, and it truncates values to 1024
 	// characters. Update only the user PATH via PowerShell instead.
+	//
+	// $parts must be an array (@()): a pipeline yielding one entry gives a
+	// string, and + then glued dir onto it, without a ';'. Installers before
+	// this fix did that to a user PATH of one entry, so entries ending in dir
+	// are split again.
 	script := fmt.Sprintf(
 		"$dir = '%s';"+
 			"$path = [Environment]::GetEnvironmentVariable('Path', 'User');"+
 			"if ($null -eq $path) { $path = '' };"+
-			"$parts = $path -split ';' | Where-Object { $_ -ne '' };"+
-			"if ($parts -notcontains $dir) {"+
-			"[Environment]::SetEnvironmentVariable('Path', (($parts + $dir) -join ';'), 'User')"+
-			"}",
+			"$parts = @();"+
+			"foreach ($p in ($path -split ';')) {"+
+			"while ($p.Length -gt $dir.Length -and $p.EndsWith($dir, [StringComparison]::OrdinalIgnoreCase)) {"+
+			"$p = $p.Substring(0, $p.Length - $dir.Length) };"+
+			"if ($p -ne '') { $parts += $p } };"+
+			"if ($parts -notcontains $dir) { $parts += $dir };"+
+			"$new = $parts -join ';';"+
+			"if ($new -ne $path) { [Environment]::SetEnvironmentVariable('Path', $new, 'User') }",
 		strings.ReplaceAll(dir, "'", "''"),
 	)
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
