@@ -51,6 +51,65 @@ func cleanTitle(s string) string {
 	return s
 }
 
+// tabClear is the session status that clears the tab's subtitle and dot.
+const tabClear = "status=;indicator=;status-color="
+
+// TabStatus shows text under the tab's title, and a dot of color
+// (#rrggbb) on the tab, while the screen runs: iTerm2's session status
+// (OSC 21337), which other terminals ignore. "" clears it; it is cleared
+// when the screen ends and while it is suspended. Inside tmux or screen,
+// which drop the sequence, and on the Linux console it is only sent when
+// force: through tmux's passthrough then (allow-passthrough on).
+func (s *Screen) TabStatus(text, color string, force bool) {
+	s.do(func(m *screenModel) tea.Cmd {
+		m.tab = ""
+		if text = cleanNote(text); text != "" && (force || tabStatusHere()) {
+			m.tab = "status=" + text + ";indicator=" + color + ";status-color=" + color
+		}
+		m.retab()
+		return nil
+	})
+}
+
+// retab writes the tab status asked for when the terminal shows another.
+func (m *screenModel) retab() {
+	if m.out == nil || m.tab == m.tabShown {
+		return
+	}
+	body := m.tab
+	if body == "" {
+		body = tabClear
+	}
+	m.out.WriteString(tabStatusSeq(body))
+	m.tabShown = m.tab
+}
+
+// untab clears the tab status the terminal shows, writing to stdout (the
+// screen is handed back or gone); retab shows it again.
+func (m *screenModel) untab() {
+	if m.tabShown != "" {
+		os.Stdout.WriteString(tabStatusSeq(tabClear))
+		m.tabShown = ""
+	}
+}
+
+// tabStatusHere reports whether the tab status reaches the terminal
+// without being asked to: not through tmux or screen, which drop it, nor
+// on the Linux console, which knows no such sequence.
+func tabStatusHere() bool {
+	return os.Getenv("TMUX") == "" && os.Getenv("STY") == "" && os.Getenv("TERM") != "linux"
+}
+
+// tabStatusSeq is the sequence that sets the tab status to body, wrapped
+// for tmux's passthrough inside tmux.
+func tabStatusSeq(body string) string {
+	seq := "\x1b]21337;" + body + "\a"
+	if os.Getenv("TMUX") != "" {
+		seq = "\x1bPtmux;" + strings.ReplaceAll(seq, "\x1b", "\x1b\x1b") + "\x1b\\"
+	}
+	return seq
+}
+
 // Notify tells the user something waits for them (an answer, an approval)
 // when the terminal has reported losing focus: a desktop notification
 // where the terminal posts one, else the bell. Without focus reports

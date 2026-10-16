@@ -135,6 +135,7 @@ func (s *Screen) Run() error {
 	if s.m.titled {
 		os.Stdout.WriteString(titlePop)
 	}
+	s.m.untab()
 	select {
 	case sig := <-got:
 		return sig
@@ -399,11 +400,13 @@ type screenModel struct {
 	out    *termOutput
 	redraw atomic.Bool // Changed has a redraw on its way
 
-	escCmd  string      // see ScreenOptions.EscEsc
-	escAt   time.Time   // the first Esc of a pair
-	title   string      // the terminal title set, "" for none
-	titled  bool        // the terminal's own title is saved, to come back
-	blurred atomic.Bool // the terminal reported losing focus
+	escCmd   string      // see ScreenOptions.EscEsc
+	escAt    time.Time   // the first Esc of a pair
+	title    string      // the terminal title set, "" for none
+	titled   bool        // the terminal's own title is saved, to come back
+	tab      string      // the tab status asked for (an OSC 21337 body), "" for none
+	tabShown string      // the tab status the terminal shows
+	blurred  atomic.Bool // the terminal reported losing focus
 }
 
 // Init asks for modified keys once on the alternate screen: kitty keeps
@@ -475,6 +478,7 @@ func (m *screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinTick()
 	case resumedMsg:
 		m.retitle(true)
+		m.retab()
 		return m, m.reclaim()
 	case editedMsg:
 		m.retitle(false) // $EDITOR may have set its own
@@ -1051,6 +1055,7 @@ func (m *screenModel) suspend() tea.Cmd {
 			os.Stdout.WriteString(titlePop)
 			m.titled = false
 		}
+		m.untab()
 		suspendProcess()
 		return nil
 	}), func(error) tea.Msg { return resumedMsg{} })

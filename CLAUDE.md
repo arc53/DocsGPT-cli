@@ -495,6 +495,11 @@ or with TERM=dumb it refuses.
   `Screen.Notify`, which only fires while blurred: OSC 9 (iTerm2), OSC 99 (kitty),
   OSC 777 (Ghostty, WezTerm, foot, rxvt, VTE), else BEL (also in tmux/screen). The
   chat notifies on an answer, a failure and an approval, unless `notify` is off.
+  `Screen.TabStatus` sets iTerm2's session status (OSC 21337: subtitle + dot,
+  others ignore it): `working` from a send or `!cmd`, `waiting` around an
+  approval (screenTools.waiting), `done` / `failed`; cleared by a stop, reset,
+  Ctrl+Z (back on resume) and exit. Setting `tab_status` auto|on|off: auto skips
+  tmux, screen and TERM=linux; on sends there too (tmux: DCS passthrough).
 In ask, the approval prompt is a bubbletea program on stderr; it reads keys in raw mode, so Ctrl+C there cancels the run at once.
 
 ### Auto-update flow

@@ -252,6 +252,23 @@ Dock icon). It needs the terminal's focus reports; in tmux, add
 window alert). `docsgpt-cli config set notify off` (or `/settings`) turns
 notifications off.
 
+### Tab status
+
+In iTerm2 (3.7 and later) the chat also shows what it is doing under the
+tab's title, with a colored dot: `working` (amber) while it waits for an
+answer or runs a command, `waiting` (purple) while a tool call waits for your
+approval, then `done` (green) or `failed` (red). A stopped answer and a new
+conversation clear it, and so does leaving or suspending the chat. iTerm2's
+Session Status tool and Cockpit list it, and **Window → Notify on Status
+Change** alerts you when it changes. It works over ssh too: the status
+travels with the output.
+
+Terminals without the feature ignore the sequence (OSC 21337). tmux and
+screen drop it, so inside them it is not sent; with
+`docsgpt-cli config set tab_status on` it goes through tmux's passthrough,
+which needs `set -g allow-passthrough on` in `~/.tmux.conf`.
+`docsgpt-cli config set tab_status off` (or `/settings`) turns it off.
+
 ## Stopping
 
 Esc or Ctrl+C stops the answer, or the command the agent (or `!cmd`) is
