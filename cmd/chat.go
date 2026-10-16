@@ -436,10 +436,13 @@ func (s *chatSession) shell(line string) {
 	s.scr.Busy("Running…", cancel)
 	defer s.scr.Busy("", nil)
 	s.tabStatus("working", tabWorking)
-	out := tools.RunShell(ctx, s.tools.UI, command)
-	if ctx.Err() != nil {
+	out, ok := tools.RunShell(ctx, s.tools.UI, command)
+	switch {
+	case ctx.Err() != nil:
 		s.tabStatus("", "")
-	} else {
+	case !ok:
+		s.tabStatus("failed", tabFailed)
+	default:
 		s.tabStatus("done", tabDone)
 	}
 	if keep {
@@ -453,8 +456,12 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 	s.said = true
 	att, err := attachFiles(shown, files)
 	if err != nil {
+		// Failed, not cleared: a queued message may fail while the user
+		// is away, and it waits in the input for them.
 		s.fail("Not sent: " + err.Error())
 		s.scr.PutBack(ui.Message{Text: text, Shown: text, Files: files})
+		s.tabStatus("failed", tabFailed)
+		s.notify("A message was not sent")
 		return
 	}
 	s.scr.Add(display.User(attach.Show(shown, att.files)))

@@ -139,3 +139,30 @@ func TestTabStatusStartup(t *testing.T) {
 		}
 	}
 }
+
+// TestTabStatusShell: a !cmd that fails shows failed, not done.
+func TestTabStatusShell(t *testing.T) {
+	s, statuses := tabChat(t)
+	s.handle(ui.Message{Text: "!exit 3", Shown: "!exit 3"})
+	if got := statuses(); !slices.Equal(got, []string{"working", "failed"}) {
+		t.Errorf("failing !cmd: %q", got)
+	}
+	s.handle(ui.Message{Text: "!echo ok", Shown: "!echo ok"})
+	if got := statuses(); !slices.Equal(got, []string{"working", "done"}) {
+		t.Errorf("!cmd: %q", got)
+	}
+}
+
+// TestTabStatusNotSent: a message whose files cannot go, put back into
+// the input, shows failed rather than the status of the answer before.
+func TestTabStatusNotSent(t *testing.T) {
+	s, statuses := tabChat(t)
+	t.Chdir(t.TempDir())
+	os.WriteFile("empty.txt", nil, 0o644)
+	s.tabStatus("done", tabDone)
+	statuses()
+	s.send("see @empty.txt", "see @empty.txt")
+	if got := statuses(); !slices.Equal(got, []string{"failed"}) {
+		t.Errorf("not sent: %q", got)
+	}
+}
