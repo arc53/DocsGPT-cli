@@ -21,6 +21,7 @@ named `--name`. Ingestion runs on the server.
 | `--wait` | Poll ingestion (progress on stderr); exit non-zero if it fails or times out |
 | `--timeout <d>` | How long `--wait` polls (default `10m`) |
 | `--replace` | After ingestion, delete your older sources with the same name (needs `--wait`) |
+| `--sync` | Update your source named `--name` in place, re-embedding only what changed; create it if missing |
 | `--idempotency-key <k>` | Choose the key; `""` sends none |
 | `--json` | Print the result as JSON |
 
@@ -51,6 +52,30 @@ re-pointed at the new one.
   deduplicates the request and reports the earlier source, which may be gone by
   now. `--replace` then deletes nothing and exits `1`. Re-run with a fresh
   `--idempotency-key` (the commit SHA, say) to ingest it again.
+
+## Update a source in place: `--sync`
+
+`--replace` re-ingests everything on every upload: the new source is embedded
+from scratch, even when one page changed. `--sync` updates your existing source
+instead:
+
+```bash
+docsgpt-cli sources upload docs.zip --name "Product docs" --wait --sync
+```
+
+- The files, and the folders inside `.zip` archives, become the source's whole
+  file set. Files that are no longer in the upload are removed from it.
+- The server re-embeds only added, edited and removed files. With nothing
+  changed, nothing is embedded.
+- The source keeps its id, so agents that use it need no `agents apply`.
+- With no source of that name yet, `--sync` creates it like a plain upload.
+  With several of your sources sharing the name, it exits `1` and lists them:
+  delete all but one first.
+- Team-shared sources are never synced. `--sync` and `--replace` cannot be
+  combined.
+
+`--sync` needs a DocsGPT server whose `manage_source_files` endpoint has the
+`sync` operation; an older server answers `400`.
 
 ## Delete
 
