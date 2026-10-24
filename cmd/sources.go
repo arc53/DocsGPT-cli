@@ -22,6 +22,7 @@ var (
 	sourcesUploadKey     string
 	sourcesUploadJSON    bool
 	sourcesUploadReplace bool
+	sourcesUploadSync    bool
 	sourcesDeleteYes     bool
 	promptsListJSON      bool
 	toolsListJSON        bool
@@ -66,6 +67,12 @@ keys for about 24 hours; to force a fresh ingest of identical content within
 that window pass your own --idempotency-key, or --idempotency-key "" to send
 none.
 
+--sync updates your source named --name in place instead of adding a new
+one: the files (and the folders inside .zip archives) become its whole file
+set, files missing from them are removed, and only added, edited and removed
+files are re-embedded. The source keeps its id, so agents need no re-apply.
+With no source of that name yet, it is created as usual.
+
 Exit codes: 0 ok, 1 upload/ingestion failed or timed out, 2 usage error.`,
 	Args: usageArgs(cobra.MinimumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -79,6 +86,7 @@ Exit codes: 0 ok, 1 upload/ingestion failed or timed out, 2 usage error.`,
 				KeySet:  cmd.Flags().Changed("idempotency-key"),
 				JSON:    sourcesUploadJSON,
 				Replace: sourcesUploadReplace,
+				Sync:    sourcesUploadSync,
 			}, os.Stdout, os.Stderr)
 		})
 	},
@@ -147,6 +155,7 @@ func init() {
 	uf.DurationVar(&sourcesUploadTO, "timeout", 10*time.Minute, "How long --wait polls before giving up (e.g. 90s, 15m)")
 	uf.StringVar(&sourcesUploadKey, "idempotency-key", "", "Idempotency-Key header (default: derived from --name and file hashes; \"\" sends none)")
 	uf.BoolVar(&sourcesUploadReplace, "replace", false, "After ingestion, delete your older sources with the same name (needs --wait); re-apply agents that use it")
+	uf.BoolVar(&sourcesUploadSync, "sync", false, "Update your source named --name in place, re-embedding only changed files (created if missing)")
 	uf.BoolVar(&sourcesUploadJSON, "json", false, "Print the result as JSON on stdout")
 
 	sourcesDeleteCmd.Flags().BoolVarP(&sourcesDeleteYes, "yes", "y", false, "Do not ask for confirmation")
@@ -247,6 +256,7 @@ type uploadOptions struct {
 	KeySet  bool // --idempotency-key was passed explicitly ("" disables the header)
 	JSON    bool
 	Replace bool
+	Sync    bool
 
 	// Poll tunes the --wait backoff; zero values use the client defaults.
 	Poll manage.WaitOptions
@@ -257,6 +267,9 @@ type uploadOptions struct {
 func runSourcesUpload(ctx context.Context, c *manage.Client, opts uploadOptions, stdout, stderr io.Writer) error {
 	if opts.Name == "" {
 		return usageErrf("--name is required")
+	}
+	if opts.Sync && opts.Replace {
+		return usageErrf("--sync and --replace cannot be combined: --sync keeps one source and updates it")
 	}
 	if opts.Wait && opts.Timeout <= 0 {
 		return usageErrf("--timeout must be positive")
@@ -274,21 +287,26 @@ func runSourcesUpload(ctx context.Context, c *manage.Client, opts uploadOptions,
 		}
 	}
 
-	key := opts.Key
+	key, syncKey := opts.Key, opts.Key
 	if !opts.KeySet {
 		derived, err := manage.DeriveIdempotencyKey(opts.Name, opts.Files)
 		if err != nil {
 			return err
 		}
 		key = derived
+		if opts.Sync {
+			if syncKey, err = manage.DeriveSyncIdempotencyKey(opts.Name, opts.Files); err != nil {
+				return err
+			}
+		}
 	}
 	if len(key) > manage.IdempotencyKeyMaxLen {
 		return usageErrf("--idempotency-key exceeds %d characters", manage.IdempotencyKeyMaxLen)
 	}
 
 	report, err := c.Ingest(ctx, manage.IngestOptions{
-		Name: opts.Name, Files: opts.Files, Key: key, Wait: opts.Wait, Timeout: opts.Timeout,
-		Replace: opts.Replace, Poll: opts.Poll, Log: stderr,
+		Name: opts.Name, Files: opts.Files, Key: key, SyncKey: syncKey, Wait: opts.Wait, Timeout: opts.Timeout,
+		Replace: opts.Replace, Sync: opts.Sync, Poll: opts.Poll, Log: stderr,
 	})
 	if report == nil {
 		return err

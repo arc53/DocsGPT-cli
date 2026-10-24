@@ -1037,6 +1037,90 @@ func TestSourcesUploadReplace(t *testing.T) {
 	}
 }
 
+func TestSourcesUploadSync(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "docs.zip")
+	os.WriteFile(file, []byte("zip bytes"), 0o644)
+	fast := manage.WaitOptions{Initial: time.Millisecond, Max: 2 * time.Millisecond}
+	syncOpts := func(name string) uploadOptions {
+		return uploadOptions{Files: []string{file}, Name: name, Wait: true, Sync: true, Timeout: 5 * time.Second, Poll: fast}
+	}
+	const list = `[
+		{"id":"src-guide","name":"Guide","ownership":"user"},
+		{"id":"src-team","name":"Handbook","ownership":"team"},
+		{"id":"src-dup-1","name":"Notes","ownership":"user"},
+		{"id":"src-dup-2","name":"notes","ownership":"user"}
+	]`
+
+	tests := []struct {
+		name       string
+		opts       uploadOptions
+		wantExit   int
+		wantErr    string
+		wantSynced string // source_id the sync posted to
+		wantUpload bool   // a new source was created instead
+		wantKey    string // prefix of the Idempotency-Key sent
+	}{
+		{name: "syncs into the one own source with that name", opts: syncOpts("guide"), wantSynced: "src-guide", wantKey: "docsgpt-cli-sync-"},
+		{name: "creates the source when there is none", opts: syncOpts("Changelog"), wantUpload: true, wantKey: "docsgpt-cli-upload-"},
+		{name: "a team source with that name is not synced", opts: syncOpts("Handbook"), wantUpload: true},
+		{name: "refuses several own sources with that name", opts: syncOpts("Notes"), wantExit: 1, wantErr: "src-dup-1"},
+		{
+			name:     "cannot be combined with --replace",
+			opts:     uploadOptions{Files: []string{file}, Name: "Guide", Wait: true, Sync: true, Replace: true},
+			wantExit: 2, wantErr: "--sync and --replace",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				mu       sync.Mutex
+				synced   string
+				uploaded bool
+				key      string
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				switch r.URL.Path {
+				case "/api/manage_source_files":
+					r.ParseMultipartForm(1 << 20)
+					synced, key = r.FormValue("source_id"), r.Header.Get("Idempotency-Key")
+					jsonReply(w, 200, `{"success":true,"reingest_task_id":"task-s","source_id":"`+synced+`","removed_files":["old.md"]}`)
+				case "/api/upload":
+					io.Copy(io.Discard, r.Body)
+					uploaded, key = true, r.Header.Get("Idempotency-Key")
+					jsonReply(w, 200, `{"success":true,"task_id":"task-u","source_id":"src-new"}`)
+				case "/api/task_status":
+					jsonReply(w, 200, `{"status":"SUCCESS","result":{"status":"completed"}}`)
+				case "/api/sources":
+					jsonReply(w, 200, list)
+				default:
+					t.Errorf("unexpected path %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+			var stdout, stderr bytes.Buffer
+			err := runSourcesUpload(context.Background(), manage.New(srv.URL, cmdTestToken, ""), tt.opts, &stdout, &stderr)
+			if got := exitCodeFor(err); got != tt.wantExit {
+				t.Fatalf("exit = %d (%v), want %d", got, err, tt.wantExit)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Errorf("err = %v, want %q", err, tt.wantErr)
+			}
+			if synced != tt.wantSynced || uploaded != tt.wantUpload {
+				t.Errorf("synced = %q, uploaded = %v; want %q, %v", synced, uploaded, tt.wantSynced, tt.wantUpload)
+			}
+			if tt.wantKey != "" && !strings.HasPrefix(key, tt.wantKey) {
+				t.Errorf("Idempotency-Key = %q, want prefix %q", key, tt.wantKey)
+			}
+			if tt.wantSynced != "" && !strings.Contains(stdout.String(), tt.wantSynced) {
+				t.Errorf("stdout = %q", stdout.String())
+			}
+		})
+	}
+}
+
 const hookTestToken = "hookSECRETtok_abc-123"
 
 // triggerServer fakes the agent webhook, /api/agent_webhook and task_status.

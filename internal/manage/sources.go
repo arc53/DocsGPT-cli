@@ -80,6 +80,63 @@ func (c *Client) UploadSource(ctx context.Context, name string, paths []string, 
 	if len(idempotencyKey) > IdempotencyKeyMaxLen {
 		return nil, fmt.Errorf("upload: idempotency key exceeds %d characters", IdempotencyKeyMaxLen)
 	}
+	respBody, err := c.postFiles(ctx, path, [][2]string{{"user", uploadUserField}, {"name", name}}, paths, idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	var out UploadResult
+	if err := decode(http.MethodPost, path, respBody, &out); err != nil {
+		return nil, err
+	}
+	if out.TaskID == "" {
+		return nil, fmt.Errorf("POST %s: response has no task_id: %s", path, truncate(respBody, 300))
+	}
+	return &out, nil
+}
+
+// SyncResult is the POST /api/manage_source_files reply to a sync.
+type SyncResult struct {
+	Success      bool     `json:"success"`
+	TaskID       string   `json:"reingest_task_id"`
+	SourceID     string   `json:"source_id,omitempty"`
+	Files        []string `json:"files,omitempty"`
+	RemovedFiles []string `json:"removed_files,omitempty"`
+}
+
+// SyncSource calls POST /api/manage_source_files with operation=sync (scope
+// sources:write): the files (and .zip archives, unpacked with their folders)
+// become the source's whole file set, files missing from them are removed,
+// and the server re-ingests the source, re-embedding only what changed. The
+// source keeps its id. idempotencyKey, when non-empty, is sent as the
+// Idempotency-Key header.
+func (c *Client) SyncSource(ctx context.Context, sourceID string, paths []string, idempotencyKey string) (*SyncResult, error) {
+	const path = "/api/manage_source_files"
+	if strings.TrimSpace(sourceID) == "" {
+		return nil, errors.New("sync: a source id is required")
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("sync: at least one file is required")
+	}
+	if len(idempotencyKey) > IdempotencyKeyMaxLen {
+		return nil, fmt.Errorf("sync: idempotency key exceeds %d characters", IdempotencyKeyMaxLen)
+	}
+	respBody, err := c.postFiles(ctx, path, [][2]string{{"source_id", sourceID}, {"operation", "sync"}}, paths, idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	var out SyncResult
+	if err := decode(http.MethodPost, path, respBody, &out); err != nil {
+		return nil, err
+	}
+	if out.TaskID == "" {
+		return nil, fmt.Errorf("POST %s: response has no reingest_task_id: %s", path, truncate(respBody, 300))
+	}
+	return &out, nil
+}
+
+// postFiles POSTs a multipart body of fields and one `file` part per path,
+// with the upload timeout. File contents are streamed, never buffered.
+func (c *Client) postFiles(ctx context.Context, path string, fields [][2]string, paths []string, idempotencyKey string) ([]byte, error) {
 	for _, p := range paths {
 		st, err := os.Stat(p)
 		if err != nil {
@@ -93,7 +150,7 @@ func (c *Client) UploadSource(ctx context.Context, name string, paths []string, 
 	ctx, cancel := withTimeout(ctx, c.UploadTimeout, DefaultUploadTimeout)
 	defer cancel()
 
-	body, contentType, length, err := uploadBody(name, paths)
+	body, contentType, length, err := multipartBody(fields, paths)
 	if err != nil {
 		return nil, fmt.Errorf("upload: %w", err)
 	}
@@ -110,31 +167,19 @@ func (c *Client) UploadSource(ctx context.Context, name string, paths []string, 
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
 	}
-	respBody, err := c.send(req, path)
-	if err != nil {
-		return nil, err
-	}
-	var out UploadResult
-	if err := decode(http.MethodPost, path, respBody, &out); err != nil {
-		return nil, err
-	}
-	if out.TaskID == "" {
-		return nil, fmt.Errorf("POST %s: response has no task_id: %s", path, truncate(respBody, 300))
-	}
-	return &out, nil
+	return c.send(req, path)
 }
 
-// uploadBody assembles the multipart body as a chain of in-memory part
+// multipartBody assembles the multipart body as a chain of in-memory part
 // headers and lazily opened files, so its exact length is known up front and
 // file contents are streamed rather than buffered.
-func uploadBody(name string, paths []string) (body io.ReadCloser, contentType string, length int64, err error) {
+func multipartBody(fields [][2]string, paths []string) (body io.ReadCloser, contentType string, length int64, err error) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
-	if err = mw.WriteField("user", uploadUserField); err != nil {
-		return nil, "", 0, err
-	}
-	if err = mw.WriteField("name", name); err != nil {
-		return nil, "", 0, err
+	for _, field := range fields {
+		if err = mw.WriteField(field[0], field[1]); err != nil {
+			return nil, "", 0, err
+		}
 	}
 	chain := &readerChain{}
 	flush := func() {
@@ -213,6 +258,17 @@ func (r *readerChain) Close() error {
 // retry of an upload is deduplicated server-side; any change to the name, a
 // filename or a byte of content yields a new key.
 func DeriveIdempotencyKey(name string, paths []string) (string, error) {
+	return deriveKey("upload", name, paths)
+}
+
+// DeriveSyncIdempotencyKey is DeriveIdempotencyKey for a sync. Its own
+// namespace keeps a sync from being deduplicated against an earlier upload of
+// the same content, which created a different source.
+func DeriveSyncIdempotencyKey(name string, paths []string) (string, error) {
+	return deriveKey("sync", name, paths)
+}
+
+func deriveKey(kind, name string, paths []string) (string, error) {
 	entries := make([]string, 0, len(paths))
 	for _, p := range paths {
 		sum, err := hashFile(p)
@@ -223,13 +279,13 @@ func DeriveIdempotencyKey(name string, paths []string) (string, error) {
 	}
 	sort.Strings(entries)
 	h := sha256.New()
-	io.WriteString(h, "docsgpt-cli/upload/v1\x00")
+	io.WriteString(h, "docsgpt-cli/"+kind+"/v1\x00")
 	io.WriteString(h, name)
 	for _, e := range entries {
 		io.WriteString(h, "\x00")
 		io.WriteString(h, e)
 	}
-	return "docsgpt-cli-upload-" + hex.EncodeToString(h.Sum(nil)), nil
+	return "docsgpt-cli-" + kind + "-" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func hashFile(path string) (string, error) {
@@ -386,17 +442,24 @@ func isStatus(err error, status int) bool {
 
 // IngestOptions are the inputs of Ingest.
 type IngestOptions struct {
-	Name    string
-	Files   []string
-	Key     string // Idempotency-Key; "" sends none
+	Name  string
+	Files []string
+	Key   string // Idempotency-Key; "" sends none
+	// SyncKey is the Idempotency-Key of a Sync request. The server scopes
+	// keys per user, not per endpoint, so a sync must not reuse the key of
+	// the upload that created the source.
+	SyncKey string
 	Wait    bool
 	Timeout time.Duration
 	// Replace deletes the caller's older sources with the same name once the
 	// new one is ingested, so agents that reference the source by name pick
 	// up the new content on their next apply. Needs Wait.
 	Replace bool
-	Poll    WaitOptions // zero: WaitTask defaults
-	Log     io.Writer   // progress lines
+	// Sync updates the caller's own source with this name in place (see
+	// SyncSource) instead of uploading a new one; with none, it uploads.
+	Sync bool
+	Poll WaitOptions // zero: WaitTask defaults
+	Log  io.Writer   // progress lines
 }
 
 // UploadReport is the outcome of Ingest (and the `sources upload --json`
@@ -410,6 +473,8 @@ type UploadReport struct {
 	Waited         bool     `json:"waited"`
 	Status         string   `json:"status,omitempty"`
 	Replaced       []string `json:"replaced,omitempty"`
+	Synced         bool     `json:"synced,omitempty"`
+	RemovedFiles   []string `json:"removed_files,omitempty"`
 	Error          string   `json:"error,omitempty"`
 }
 
@@ -417,19 +482,17 @@ type UploadReport struct {
 // task, then applies Replace. The report is nil when the upload itself
 // failed; otherwise it carries the error too.
 func (c *Client) Ingest(ctx context.Context, opts IngestOptions) (report *UploadReport, err error) {
-	fmt.Fprintf(opts.Log, "uploading %d file(s) as %q...\n", len(opts.Files), opts.Name)
-	res, err := c.UploadSource(ctx, opts.Name, opts.Files, opts.Key)
-	if err != nil {
+	report, err = c.startIngest(ctx, opts)
+	if report == nil {
 		return nil, err
 	}
-	report = &UploadReport{Name: opts.Name, TaskID: res.TaskID, SourceID: res.SourceID, IdempotencyKey: opts.Key}
 	defer func() {
 		if err != nil {
 			report.Error = err.Error()
 		}
 	}()
 
-	if res.TaskID == DeduplicatedTaskID {
+	if report.TaskID == DeduplicatedTaskID {
 		// The key matched an earlier request whose task record is gone: that
 		// ingest already ran, there is nothing to poll.
 		report.Deduplicated = true
@@ -437,7 +500,7 @@ func (c *Client) Ingest(ctx context.Context, opts IngestOptions) (report *Upload
 		return report, c.replaceOlderSources(ctx, opts, report)
 	}
 	if !opts.Wait {
-		fmt.Fprintf(opts.Log, "ingestion queued; poll it with --wait or check the web app (task %s)\n", res.TaskID)
+		fmt.Fprintf(opts.Log, "ingestion queued; poll it with --wait or check the web app (task %s)\n", report.TaskID)
 		return report, nil
 	}
 
@@ -446,17 +509,75 @@ func (c *Client) Ingest(ctx context.Context, opts IngestOptions) (report *Upload
 	poll := opts.Poll
 	poll.OnUpdate = progressLogger(opts.Log, time.Now(), true)
 	report.Waited = true
-	st, err := c.WaitTask(waitCtx, res.TaskID, poll)
+	st, err := c.WaitTask(waitCtx, report.TaskID, poll)
 	if st != nil {
 		report.Status = st.Status
 	}
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			err = fmt.Errorf("timed out after %s waiting for ingestion (task %s is still running server-side; re-run with the same files to resume waiting): %w", opts.Timeout, res.TaskID, err)
+			err = fmt.Errorf("timed out after %s waiting for ingestion (task %s is still running server-side; re-run with the same files to resume waiting): %w", opts.Timeout, report.TaskID, err)
 		}
 		return report, err
 	}
 	return report, c.replaceOlderSources(ctx, opts, report)
+}
+
+// startIngest uploads the files as a new source, or with Sync updates the
+// caller's own source of that name in place. The report is nil when the
+// request itself failed.
+func (c *Client) startIngest(ctx context.Context, opts IngestOptions) (*UploadReport, error) {
+	if opts.Sync {
+		target, err := c.syncTarget(ctx, opts.Name)
+		if err != nil {
+			return nil, err
+		}
+		if target != "" {
+			fmt.Fprintf(opts.Log, "syncing %d file(s) into %q (source %s)...\n", len(opts.Files), opts.Name, target)
+			res, err := c.SyncSource(ctx, target, opts.Files, opts.SyncKey)
+			if err != nil {
+				return nil, err
+			}
+			for _, removed := range res.RemovedFiles {
+				fmt.Fprintf(opts.Log, "removed %s\n", removed)
+			}
+			return &UploadReport{
+				Name: opts.Name, TaskID: res.TaskID, SourceID: target, IdempotencyKey: opts.SyncKey,
+				Synced: true, RemovedFiles: res.RemovedFiles,
+			}, nil
+		}
+		fmt.Fprintf(opts.Log, "no source named %q yet; creating it\n", opts.Name)
+	}
+	fmt.Fprintf(opts.Log, "uploading %d file(s) as %q...\n", len(opts.Files), opts.Name)
+	res, err := c.UploadSource(ctx, opts.Name, opts.Files, opts.Key)
+	if err != nil {
+		return nil, err
+	}
+	return &UploadReport{Name: opts.Name, TaskID: res.TaskID, SourceID: res.SourceID, IdempotencyKey: opts.Key}, nil
+}
+
+// syncTarget is the id of the caller's own source named name (compared
+// case-insensitively, as Replace does), or "" when there is none. Several
+// such sources are an error: which one agents read is not obvious, and
+// syncing one would leave the others stale.
+func (c *Client) syncTarget(ctx context.Context, name string) (string, error) {
+	sources, _, err := c.ListSources(ctx)
+	if err != nil {
+		return "", fmt.Errorf("--sync: list sources: %w", err)
+	}
+	var ids []string
+	for _, src := range sources {
+		if !strings.EqualFold(src.Name, name) || (src.Ownership != "" && src.Ownership != "user") {
+			continue
+		}
+		ids = append(ids, src.ID)
+	}
+	switch len(ids) {
+	case 0:
+		return "", nil
+	case 1:
+		return ids[0], nil
+	}
+	return "", fmt.Errorf("--sync: you have %d sources named %q (%s); delete all but one, then sync again", len(ids), name, strings.Join(ids, ", "))
 }
 
 // replaceOlderSources implements Replace. The server resolves an agent's

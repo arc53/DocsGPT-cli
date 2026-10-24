@@ -256,3 +256,73 @@ func TestTaskStatusProgress(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncSourceMultipart(t *testing.T) {
+	dir := t.TempDir()
+	a := writeTemp(t, dir, "a.md", "alpha")
+	z := writeTemp(t, dir, "docs.zip", "PK-not-really")
+
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/manage_source_files" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		if r.ContentLength <= 0 {
+			t.Errorf("ContentLength = %d, want an explicit length", r.ContentLength)
+		}
+		if got := r.Header.Get("Idempotency-Key"); got != "key-2" {
+			t.Errorf("Idempotency-Key = %q", got)
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		if r.FormValue("source_id") != "src-1" || r.FormValue("operation") != "sync" {
+			t.Errorf("form = %v", r.MultipartForm.Value)
+		}
+		if _, ok := r.MultipartForm.Value["name"]; ok {
+			t.Errorf("sync sent a name field: %v", r.MultipartForm.Value)
+		}
+		files := r.MultipartForm.File["file"]
+		if len(files) != 2 || files[0].Filename != "a.md" || files[1].Filename != "docs.zip" {
+			t.Fatalf("files = %+v", files)
+		}
+		writeJSONResp(w, 200, `{"success":true,"reingest_task_id":"task-9","source_id":"src-1","files":["a.md"],"removed_files":["old.md"]}`)
+	})
+	res, err := c.SyncSource(context.Background(), "src-1", []string{a, z}, "key-2")
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if res.TaskID != "task-9" || res.SourceID != "src-1" || strings.Join(res.RemovedFiles, ",") != "old.md" {
+		t.Errorf("result = %+v", res)
+	}
+}
+
+func TestSyncSourceNeedsATask(t *testing.T) {
+	dir := t.TempDir()
+	a := writeTemp(t, dir, "a.md", "alpha")
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResp(w, 200, `{"success":true}`)
+	})
+	if _, err := c.SyncSource(context.Background(), "src-1", []string{a}, ""); err == nil ||
+		!strings.Contains(err.Error(), "no reingest_task_id") {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := c.SyncSource(context.Background(), "", []string{a}, ""); err == nil {
+		t.Error("an empty source id was accepted")
+	}
+}
+
+func TestDeriveIdempotencyKeyDiffersBetweenUploadAndSync(t *testing.T) {
+	dir := t.TempDir()
+	a := writeTemp(t, dir, "a.md", "alpha")
+	upload, err := DeriveIdempotencyKey("Docs", []string{a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sync, err := DeriveSyncIdempotencyKey("Docs", []string{a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upload == sync || !strings.HasPrefix(sync, "docsgpt-cli-sync-") {
+		t.Errorf("upload = %s, sync = %s", upload, sync)
+	}
+}
