@@ -287,6 +287,9 @@ func runSourcesUpload(ctx context.Context, c *manage.Client, opts uploadOptions,
 		}
 	}
 
+	// A sync carries no derived key: syncing the same files again is
+	// harmless, while a content-derived key would make a revert within the
+	// server's dedup window replay the earlier sync instead of writing.
 	key, syncKey := opts.Key, opts.Key
 	if !opts.KeySet {
 		derived, err := manage.DeriveIdempotencyKey(opts.Name, opts.Files)
@@ -294,11 +297,6 @@ func runSourcesUpload(ctx context.Context, c *manage.Client, opts uploadOptions,
 			return err
 		}
 		key = derived
-		if opts.Sync {
-			if syncKey, err = manage.DeriveSyncIdempotencyKey(opts.Name, opts.Files); err != nil {
-				return err
-			}
-		}
 	}
 	if len(key) > manage.IdempotencyKeyMaxLen {
 		return usageErrf("--idempotency-key exceeds %d characters", manage.IdempotencyKeyMaxLen)

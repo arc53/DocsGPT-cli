@@ -1059,9 +1059,16 @@ func TestSourcesUploadSync(t *testing.T) {
 		wantErr    string
 		wantSynced string // source_id the sync posted to
 		wantUpload bool   // a new source was created instead
-		wantKey    string // prefix of the Idempotency-Key sent
+		wantKey    string // prefix of the Idempotency-Key sent; "-" for none
 	}{
-		{name: "syncs into the one own source with that name", opts: syncOpts("guide"), wantSynced: "src-guide", wantKey: "docsgpt-cli-sync-"},
+		// A content-derived key would make a revert within the server's dedup
+		// window replay the earlier sync instead of writing the files.
+		{name: "syncs into the one own source with that name", opts: syncOpts("guide"), wantSynced: "src-guide", wantKey: "-"},
+		{
+			name:       "an explicit key is sent with a sync",
+			opts:       func() uploadOptions { o := syncOpts("guide"); o.Key, o.KeySet = "ci-run-7", true; return o }(),
+			wantSynced: "src-guide", wantKey: "ci-run-7",
+		},
 		{name: "creates the source when there is none", opts: syncOpts("Changelog"), wantUpload: true, wantKey: "docsgpt-cli-upload-"},
 		{name: "a team source with that name is not synced", opts: syncOpts("Handbook"), wantUpload: true},
 		{name: "refuses several own sources with that name", opts: syncOpts("Notes"), wantExit: 1, wantErr: "src-dup-1"},
@@ -1111,7 +1118,9 @@ func TestSourcesUploadSync(t *testing.T) {
 			if synced != tt.wantSynced || uploaded != tt.wantUpload {
 				t.Errorf("synced = %q, uploaded = %v; want %q, %v", synced, uploaded, tt.wantSynced, tt.wantUpload)
 			}
-			if tt.wantKey != "" && !strings.HasPrefix(key, tt.wantKey) {
+			if tt.wantKey == "-" && key != "" {
+				t.Errorf("Idempotency-Key = %q, want none", key)
+			} else if tt.wantKey != "" && tt.wantKey != "-" && !strings.HasPrefix(key, tt.wantKey) {
 				t.Errorf("Idempotency-Key = %q, want prefix %q", key, tt.wantKey)
 			}
 			if tt.wantSynced != "" && !strings.Contains(stdout.String(), tt.wantSynced) {

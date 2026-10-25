@@ -310,19 +310,3 @@ func TestSyncSourceNeedsATask(t *testing.T) {
 		t.Error("an empty source id was accepted")
 	}
 }
-
-func TestDeriveIdempotencyKeyDiffersBetweenUploadAndSync(t *testing.T) {
-	dir := t.TempDir()
-	a := writeTemp(t, dir, "a.md", "alpha")
-	upload, err := DeriveIdempotencyKey("Docs", []string{a})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sync, err := DeriveSyncIdempotencyKey("Docs", []string{a})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if upload == sync || !strings.HasPrefix(sync, "docsgpt-cli-sync-") {
-		t.Errorf("upload = %s, sync = %s", upload, sync)
-	}
-}

@@ -73,6 +73,10 @@ docsgpt-cli sources upload docs.zip --name "Product docs" --wait --sync
   delete all but one first.
 - Team-shared sources are never synced. `--sync` and `--replace` cannot be
   combined.
+- A sync sends no derived `Idempotency-Key`. Repeating one is harmless: the
+  same files re-embed nothing. A key derived from the content would make a
+  revert within the server's dedup window replay the earlier sync instead of
+  writing the files. An explicit `--idempotency-key` is still sent.
 
 `--sync` needs a DocsGPT server whose `manage_source_files` endpoint has the
 `sync` operation; an older server answers `400`.

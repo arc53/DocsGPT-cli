@@ -258,17 +258,6 @@ func (r *readerChain) Close() error {
 // retry of an upload is deduplicated server-side; any change to the name, a
 // filename or a byte of content yields a new key.
 func DeriveIdempotencyKey(name string, paths []string) (string, error) {
-	return deriveKey("upload", name, paths)
-}
-
-// DeriveSyncIdempotencyKey is DeriveIdempotencyKey for a sync. Its own
-// namespace keeps a sync from being deduplicated against an earlier upload of
-// the same content, which created a different source.
-func DeriveSyncIdempotencyKey(name string, paths []string) (string, error) {
-	return deriveKey("sync", name, paths)
-}
-
-func deriveKey(kind, name string, paths []string) (string, error) {
 	entries := make([]string, 0, len(paths))
 	for _, p := range paths {
 		sum, err := hashFile(p)
@@ -279,13 +268,13 @@ func deriveKey(kind, name string, paths []string) (string, error) {
 	}
 	sort.Strings(entries)
 	h := sha256.New()
-	io.WriteString(h, "docsgpt-cli/"+kind+"/v1\x00")
+	io.WriteString(h, "docsgpt-cli/upload/v1\x00")
 	io.WriteString(h, name)
 	for _, e := range entries {
 		io.WriteString(h, "\x00")
 		io.WriteString(h, e)
 	}
-	return "docsgpt-cli-" + kind + "-" + hex.EncodeToString(h.Sum(nil)), nil
+	return "docsgpt-cli-upload-" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func hashFile(path string) (string, error) {
@@ -445,9 +434,9 @@ type IngestOptions struct {
 	Name  string
 	Files []string
 	Key   string // Idempotency-Key; "" sends none
-	// SyncKey is the Idempotency-Key of a Sync request. The server scopes
-	// keys per user, not per endpoint, so a sync must not reuse the key of
-	// the upload that created the source.
+	// SyncKey is the Idempotency-Key of a Sync request; "" sends none. It is
+	// never the upload's derived key: the server scopes keys per user, not per
+	// endpoint, and a content key would replay an earlier sync after a revert.
 	SyncKey string
 	Wait    bool
 	Timeout time.Duration
