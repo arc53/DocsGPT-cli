@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -125,7 +126,7 @@ func TestRunPassesStreamRunTagAndInlineFiles(t *testing.T) {
 	if uploads != 0 || len(req.AttachmentIDs) != 0 {
 		t.Errorf("inline mode must not upload: uploads=%d ids=%v", uploads, req.AttachmentIDs)
 	}
-	if len(req.InlineFiles) != 1 || req.InlineFiles[0].Name != "f.pdf" || !strings.HasSuffix(req.InlineFiles[0].Path, "/f.pdf") {
+	if len(req.InlineFiles) != 1 || req.InlineFiles[0].Name != "f.pdf" || filepath.Base(req.InlineFiles[0].Path) != "f.pdf" {
 		t.Errorf("InlineFiles = %+v", req.InlineFiles)
 	}
 	if !req.Stream || req.RunTag != "ci" {

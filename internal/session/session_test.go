@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -12,8 +13,15 @@ import (
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 )
 
+// setHome gives the test a home of its own (Windows takes USERPROFILE).
+func setHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
 func TestRecordAndLoad(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t)
 	cwd := "/work/repo"
 	if got := filepath.Base(Dir(cwd)); !strings.HasPrefix(got, "work-repo-") || len(got) != len("work-repo-")+8 {
 		t.Errorf("Dir = %q", got)
@@ -34,10 +42,10 @@ func TestRecordAndLoad(t *testing.T) {
 	// Resumed on another server: the state line records it.
 	s.Record("https://other.example", "other", "conv-3", Entry{Message: &q2, Text: "again"})
 
-	if fi, err := os.Stat(s.Path); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(s.Path); err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("session file mode: %v %v", fi, err)
 	}
-	if fi, _ := os.Stat(Dir(cwd)); fi.Mode().Perm() != 0o700 {
+	if fi, _ := os.Stat(Dir(cwd)); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700 {
 		t.Errorf("session dir mode: %v", fi.Mode())
 	}
 	list, err := List(cwd)
@@ -70,7 +78,7 @@ func exchange(t *testing.T, s *Session, key, conv, q string, usage *docsgpt.Usag
 // later one is appended, "" clears it, and naming does not make a chat
 // recent.
 func TestName(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t)
 	s := New("/w", "https://example.com", "k")
 	if err := s.SetName("early"); err != nil || s.Saved() {
 		t.Fatalf("SetName before a record: %v, saved %v", err, s.Saved())
@@ -97,7 +105,7 @@ func TestName(t *testing.T) {
 
 // TestUsage: each exchange keeps its tokens; the totals come back on load.
 func TestUsage(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t)
 	s := New("/w", "https://example.com", "k")
 	exchange(t, s, "k", "c", "one", &docsgpt.Usage{PromptTokens: 1000, CompletionTokens: 20, TotalTokens: 1020})
 	exchange(t, s, "k", "c", "two", nil) // a server that reported none
@@ -116,7 +124,7 @@ func TestUsage(t *testing.T) {
 // conversation, and again in one that started over (an error, another
 // key, a fork); a resumed chat goes on counting.
 func TestQuestionIndex(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t)
 	s := New("/w", "https://example.com", "k")
 	exchange(t, s, "k", "c1", "a", nil)
 	exchange(t, s, "k", "c1", "b", nil)
@@ -146,7 +154,7 @@ func TestQuestionIndex(t *testing.T) {
 // each took place, into a new file written only with its first record;
 // the original stays whole.
 func TestFork(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t)
 	s := New("/w", "https://example.com", "k")
 	s.SetName("original")
 	exchange(t, s, "k", "c1", "a", &docsgpt.Usage{PromptTokens: 10, CompletionTokens: 1})
@@ -199,7 +207,7 @@ func TestFork(t *testing.T) {
 // TestConcurrentRecords: two chats on one session file (two -c) keep each
 // record's lines whole and together.
 func TestConcurrentRecords(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t)
 	first := New("/w", "https://example.com", "k")
 	q := docsgpt.Message{Role: "user", Content: "hi"}
 	first.Record("https://example.com", "k", "c", Entry{Message: &q})
@@ -230,7 +238,7 @@ func TestConcurrentRecords(t *testing.T) {
 // TestDirsDoNotCollide: paths that read alike keep their own chats, and a
 // session file in the wrong directory is not listed.
 func TestDirsDoNotCollide(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t)
 	if Dir("/x/a-b") == Dir("/x/a/b") || Dir(`C:\x`) == Dir("/C/x") {
 		t.Fatal("different paths share a session directory")
 	}

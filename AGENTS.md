@@ -34,7 +34,8 @@ go build ./... && go vet ./... && go test ./...
 
 - Build binaries outside the repo: `go build -o /tmp/dg ./cmd/docsgpt-cli`.
 - Tests and manual runs never touch the real `~/.docsgpt`: use a throwaway
-  `HOME`, `httptest` servers or a local mock instead of live APIs.
+  `HOME` (and `USERPROFILE`, the home on Windows), `httptest` servers or a
+  local mock instead of live APIs.
 - Do not edit the `require .../sdk` version in `go.mod`; the release workflow
   bumps it.
 

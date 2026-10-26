@@ -63,13 +63,14 @@ func TestAskJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(out)
+	path, _ := json.Marshal(filepath.Join(dir, "notes.txt"))
 	for _, want := range []string{
 		`"answer":"Let me look.\n\nIt says hello."`,
 		`"sources":[{"title":"Guide","url":"https://docs/guide"}]`,
 		`"conversation_id":"conv-1"`, `"model":"gpt-x"`,
 		`"usage":{"prompt_tokens":30,"completion_tokens":5,"total_tokens":35}`,
 		`"tool_calls":[{"name":"read_file","arguments":{"path":"notes.txt"},"result":"hello\n","approved":true}]`,
-		`"attachments":[{"path":"` + filepath.Join(dir, "notes.txt") + `","type":"file","bytes":6,"sha256":"5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"}]`,
+		`"attachments":[{"path":` + string(path) + `,"type":"file","bytes":6,"sha256":"5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"}]`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("%s\nlacks %s", b, want)

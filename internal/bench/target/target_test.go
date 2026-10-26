@@ -87,6 +87,8 @@ func TestV1Target(t *testing.T) {
 		}
 		gotBody, _ = io.ReadAll(r.Body)
 		gotAuth = r.Header.Get("Authorization")
+		// Longer than a tick of the Windows clock, so the latency is not 0.
+		time.Sleep(20 * time.Millisecond)
 		io.WriteString(w, `{
 			"choices":[{"message":{"role":"assistant","content":"The answer is 42.","reasoning_content":"thinking hard"},"finish_reason":"stop"}],
 			"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18},

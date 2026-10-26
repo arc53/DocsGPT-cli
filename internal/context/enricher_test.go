@@ -31,7 +31,7 @@ func TestBuild(t *testing.T) {
 	got := Build(s, false)
 	for _, want := range []string{
 		"<context>\n", "Working directory: " + sub, "Files in it: CLAUDE.md, dir/, f00", "(+5 more)",
-		"from ../AGENTS.md:\n<instructions>\nroot rules\n</instructions>\nProject instructions from CLAUDE.md:\n<instructions>\nsub rules",
+		"from " + filepath.FromSlash("../AGENTS.md") + ":\n<instructions>\nroot rules\n</instructions>\nProject instructions from CLAUDE.md:\n<instructions>\nsub rules",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Build() lacks %q:\n%s", want, got)
