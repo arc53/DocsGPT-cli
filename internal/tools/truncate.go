@@ -68,3 +68,29 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 }
 
 func (b *tailBuffer) String() string { return truncateTail(string(b.buf), b.dropped) }
+
+// truncateHead keeps the start of a tool's result within maxOutputLines
+// and maxOutputBytes, cut at a line end (or, for one huge line, a rune
+// start), and says what was dropped.
+func truncateHead(text string) string {
+	lines := strings.SplitAfter(text, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	keep, size := 0, 0
+	for keep < len(lines) && keep < maxOutputLines && size+len(lines[keep]) <= maxOutputBytes {
+		size += len(lines[keep])
+		keep++
+	}
+	switch {
+	case keep == len(lines):
+		return text
+	case keep == 0: // the first line alone is too long: keep its start
+		cut := maxOutputBytes
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		return fmt.Sprintf("%s\n[Output truncated: showing the first %d of %d bytes.]", text[:cut], cut, len(text))
+	}
+	return fmt.Sprintf("%s[Output truncated: showing the first %d of %d lines.]", strings.Join(lines[:keep], ""), keep, len(lines))
+}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/mcp"
 	"github.com/arc53/DocsGPT-cli/internal/ui"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 )
@@ -27,10 +28,12 @@ type Session struct {
 	AutoApprove bool          // run every call unasked: --auto-approve, "Always approve", /approve
 	Timeout     time.Duration // per command or read
 	UI          UI            // stderr when nil
+	MCP         *mcp.Manager  // the MCP servers' tools, if any
 
 	allowWrites bool
 	allowReads  bool
 	allowed     map[string]bool // keys of always-allowed commands
+	allowedMCP  map[string]bool // always-allowed MCP servers, and tools as server/tool
 }
 
 func (s *Session) ui() UI {
@@ -46,6 +49,13 @@ func (s *Session) Handle(ctx context.Context, cancel context.CancelFunc, tc docs
 	text := func(s string) docsgpt.ToolResult { return docsgpt.ToolResult{Content: s} }
 	if ctx.Err() != nil {
 		return text("The user interrupted the run before this tool call ran.")
+	}
+	t := s.MCP.Lookup(tc.Function.Name)
+	if t == nil {
+		t = s.MCP.Lookup(NormalizeName(tc.Function.Name))
+	}
+	if t != nil {
+		return s.callMCP(ctx, cancel, t, tc.Function.Arguments)
 	}
 	var args callArgs
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
@@ -126,11 +136,11 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 		if s.AutoApprove || dirReason == "" && s.allowed[alwaysKey(command)] {
 			break
 		}
-		var always *ui.Item
+		var always []ui.Item
 		if key := display.Safe(alwaysKey(command)); key != "" && dirReason == "" {
-			always = &ui.Item{Label: "Always allow " + key, Description: "run " + key + " commands without asking this session"}
+			always = append(always, allowItem("Always allow "+key, "run "+key+" commands without asking this session"))
 		}
-		choice, refusal := s.ask(cancel, "run once", always, true)
+		choice, refusal := s.ask(cancel, "run once", true, always...)
 		if refusal != "" {
 			return refusal
 		}
@@ -219,8 +229,8 @@ func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path 
 	}
 	s.ui().Open(title, note)
 	if reason != "" {
-		choice, refusal := s.ask(cancel, "read this file once",
-			&ui.Item{Label: "Always allow reads", Description: "read any file without asking this session"}, false)
+		choice, refusal := s.ask(cancel, "read this file once", false,
+			allowItem("Always allow reads", "read any file without asking this session"))
 		if refusal != "" {
 			return text(refusal)
 		}
@@ -508,11 +518,11 @@ func (s *Session) approveWrite(cancel context.CancelFunc, once, reason string) (
 	if s.AutoApprove || s.allowWrites && reason == "" {
 		return ""
 	}
-	var always *ui.Item
+	var always []ui.Item
 	if reason == "" {
-		always = &ui.Item{Label: "Always allow writes", Description: "write and edit files in the working directory without asking this session"}
+		always = append(always, allowItem("Always allow writes", "write and edit files in the working directory without asking this session"))
 	}
-	choice, refusal := s.ask(cancel, once, always, false)
+	choice, refusal := s.ask(cancel, once, false, always...)
 	if refusal != "" {
 		return refusal
 	}
@@ -522,18 +532,20 @@ func (s *Session) approveWrite(cancel context.CancelFunc, once, reason string) (
 	return ""
 }
 
+// allowItem is the narrower "Always allow" choice: "always", key l.
+func allowItem(label, desc string) ui.Item {
+	return ui.Item{Label: label, Value: "always", Keys: []string{"l"}, Description: desc}
+}
+
 // ask shows the approval choices under the tool's title: Approve (once
-// describes it), the narrower "Always allow" when there is one, Always
-// approve, Deny and, with edit, Edit. It returns "approve", "always" or
-// "edit", or the result for the model when the call must not run: denied,
-// or cancelled (which also cancels the run). Always approve turns on
-// AutoApprove and returns "approve".
-func (s *Session) ask(cancel context.CancelFunc, once string, always *ui.Item, edit bool) (choice, refusal string) {
+// describes it), the narrower "Always allow" ones there are, Always
+// approve, Deny and, with edit, Edit. It returns "approve", the value of an
+// "Always allow" or "edit", or the result for the model when the call must
+// not run: denied, or cancelled (which also cancels the run). Always
+// approve turns on AutoApprove and returns "approve".
+func (s *Session) ask(cancel context.CancelFunc, once string, edit bool, always ...ui.Item) (choice, refusal string) {
 	items := []ui.Item{{Label: "Approve", Value: "approve", Keys: []string{"a", "y"}, Description: once}}
-	if always != nil {
-		always.Value, always.Keys = "always", []string{"l"}
-		items = append(items, *always)
-	}
+	items = append(items, always...)
 	items = append(items,
 		ui.Item{Label: "Always approve", Value: "all", Keys: []string{"p"}, Description: "run every tool call without asking this session"},
 		ui.Item{Label: "Deny", Value: "deny", Keys: []string{"d", "n"}, Description: "don't run it, tell the model you declined"})

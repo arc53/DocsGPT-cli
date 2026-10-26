@@ -23,6 +23,9 @@ type UI interface {
 // stderrUI draws the blocks on stderr and asks inline there.
 type stderrUI struct{ view *display.TailView }
 
+// StderrUI is the UI a Session has by default.
+func StderrUI() UI { return &stderrUI{} }
+
 func (*stderrUI) Open(title, note string) { display.ToolTitle(title, note) }
 func (*stderrUI) Lines(lines []string)    { display.ToolLines(lines) }
 

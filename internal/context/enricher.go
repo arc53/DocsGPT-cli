@@ -16,13 +16,21 @@ import (
 const (
 	maxEntries      = 50        // directory entries listed
 	maxInstructions = 12 * 1024 // bytes of AGENTS.md / CLAUDE.md, all files together
+	maxServerNotes  = 2 * 1024  // bytes of an MCP server's instructions
 )
+
+// MCPServer is an MCP server whose tools the agent has.
+type MCPServer struct {
+	Name         string
+	Tools        []string // their names on the server
+	Instructions string   // what the server says about itself
+}
 
 // Build returns the context block for the working directory, or "" when
 // the settings send nothing and tools are off. With tools, it also says
-// which system and shell the commands run on and how to use the tools
-// (toolGuide).
-func Build(s config.Settings, tools bool) string {
+// which system and shell the commands run on, which MCP servers' tools
+// the agent has, and how to use the tools (toolGuide).
+func Build(s config.Settings, tools bool, servers ...MCPServer) string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = ""
@@ -56,6 +64,7 @@ func Build(s config.Settings, tools bool) string {
 		return ""
 	}
 	if tools {
+		writeServers(&b, servers)
 		b.WriteString(toolGuide)
 	}
 	return "<context>\nThe user is asking from a terminal (docsgpt-cli). Their environment:\n" + b.String() + "</context>"
@@ -78,6 +87,28 @@ You can work on the user's machine with run_command, read_file, edit_file and wr
 - When you are done, say briefly what you changed, naming the files.
 </coding_guide>
 `
+
+// writeServers lists the MCP servers and their tools, which the model has
+// as mcp__<server>__<tool>, with what the servers say about themselves.
+func writeServers(b *strings.Builder, servers []MCPServer) {
+	if len(servers) == 0 {
+		return
+	}
+	b.WriteString("MCP servers, whose tools you have as mcp__<server>__<tool> (instructions may name a tool without the prefix):\n")
+	for _, srv := range servers {
+		fmt.Fprintf(b, "- %s: %s\n", srv.Name, strings.Join(srv.Tools, ", "))
+	}
+	for _, srv := range servers {
+		text := strings.TrimSpace(srv.Instructions)
+		if text == "" {
+			continue
+		}
+		if len(text) > maxServerNotes {
+			text = strings.ToValidUTF8(text[:maxServerNotes], "") + "\n[… truncated]"
+		}
+		fmt.Fprintf(b, "<server_instructions server=%q>\n%s\n</server_instructions>\n", srv.Name, text)
+	}
+}
 
 // system names the operating system and architecture.
 func system() string {
