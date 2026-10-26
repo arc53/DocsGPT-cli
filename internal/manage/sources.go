@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -139,6 +140,9 @@ func (c *Client) SyncSource(ctx context.Context, sourceID string, paths []string
 func (c *Client) postFiles(ctx context.Context, path string, fields [][2]string, paths []string, idempotencyKey string) ([]byte, error) {
 	for _, p := range paths {
 		st, err := os.Stat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("upload: %s: no such file", p)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("upload: %w", err)
 		}

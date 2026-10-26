@@ -13,6 +13,7 @@ import (
 	"image/gif"
 	"image/png"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -115,6 +116,8 @@ func Open(path string) (File, error) {
 	f := File{Path: abs, Name: filepath.Base(abs)}
 	fi, err := os.Stat(abs)
 	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return f, fmt.Errorf("%s: no such file", f.Name)
 	case err != nil:
 		return f, fmt.Errorf("%s: %w", f.Name, unwrapPath(err))
 	case fi.IsDir():

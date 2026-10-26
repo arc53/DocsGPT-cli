@@ -1,8 +1,10 @@
 package manage
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -88,6 +90,9 @@ func LoadDocuments(args []string, stdin io.Reader) ([]Document, error) {
 		}
 
 		st, err := os.Stat(arg)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%s: no such file", arg)
+		}
 		if err != nil {
 			return nil, err
 		}
