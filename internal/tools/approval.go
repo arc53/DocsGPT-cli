@@ -33,6 +33,9 @@ type Session struct {
 	// Processes runs the background processes and monitors; nil offers
 	// none (run_in_background is then ignored).
 	Processes *Processes
+	// Project is the project root the "Always" choices are kept for (see
+	// Approvals); "" keeps them for the session only.
+	Project string
 
 	allowWrites bool
 	allowReads  bool
@@ -209,7 +212,7 @@ func (s *Session) approveCommand(cancel context.CancelFunc, command, note, dirRe
 		}
 		var always []ui.Item
 		if key := display.Safe(alwaysKey(command)); key != "" && dirReason == "" {
-			always = append(always, allowItem("Always allow "+key, "run "+key+" commands without asking this session"))
+			always = append(always, allowItem("Always allow "+key, "run "+key+" commands without asking "+s.scopeText()))
 		}
 		choice, refusal := s.ask(cancel, "run once", true, always...)
 		if refusal != "" {
@@ -229,7 +232,9 @@ func (s *Session) approveCommand(cancel context.CancelFunc, command, note, dirRe
 			if s.allowed == nil {
 				s.allowed = map[string]bool{}
 			}
-			s.allowed[alwaysKey(command)] = true
+			key := alwaysKey(command)
+			s.allowed[key] = true
+			s.keep(func(a *Approvals) { a.Commands = append(a.Commands, key) })
 		}
 		return command, edited, ""
 	}
@@ -271,11 +276,13 @@ func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path 
 	s.ui().Open(title, note)
 	if reason != "" {
 		choice, refusal := s.ask(cancel, "read this file once", false,
-			allowItem("Always allow reads", "read any file without asking this session"))
+			allowItem("Always allow reads", "read any file without asking "+s.scopeText()))
 		if refusal != "" {
 			return text(refusal)
 		}
-		s.allowReads = choice == "always"
+		if s.allowReads = choice == "always"; s.allowReads {
+			s.keep(func(a *Approvals) { a.Reads = true })
+		}
 	}
 
 	readCtx := ctx
@@ -561,7 +568,7 @@ func (s *Session) approveWrite(cancel context.CancelFunc, once, reason string) (
 	}
 	var always []ui.Item
 	if reason == "" {
-		always = append(always, allowItem("Always allow writes", "write and edit files in the working directory without asking this session"))
+		always = append(always, allowItem("Always allow writes", "write and edit files in the working directory without asking "+s.scopeText()))
 	}
 	choice, refusal := s.ask(cancel, once, false, always...)
 	if refusal != "" {
@@ -569,8 +576,17 @@ func (s *Session) approveWrite(cancel context.CancelFunc, once, reason string) (
 	}
 	if choice == "always" {
 		s.allowWrites = true
+		s.keep(func(a *Approvals) { a.Writes = true })
 	}
 	return ""
+}
+
+// scopeText is how long an "Always" choice holds, for its description.
+func (s *Session) scopeText() string {
+	if s.Project != "" {
+		return "in this project"
+	}
+	return "this session"
 }
 
 // allowItem is the narrower "Always allow" choice: "always", key l.
@@ -588,7 +604,7 @@ func (s *Session) ask(cancel context.CancelFunc, once string, edit bool, always 
 	items := []ui.Item{{Label: "Approve", Value: "approve", Keys: []string{"a", "y"}, Description: once}}
 	items = append(items, always...)
 	items = append(items,
-		ui.Item{Label: "Always approve", Value: "all", Keys: []string{"p"}, Description: "run every tool call without asking this session"},
+		ui.Item{Label: "Always approve", Value: "all", Keys: []string{"p"}, Description: "run every tool call without asking " + s.scopeText()},
 		ui.Item{Label: "Deny", Value: "deny", Keys: []string{"d", "n"}, Description: "don't run it, tell the model you declined"})
 	if edit {
 		items = append(items, ui.Item{Label: "Edit", Value: "edit", Keys: []string{"e"}, Description: "change the command, then decide again"})
@@ -607,6 +623,7 @@ func (s *Session) ask(cancel context.CancelFunc, once string, edit bool, always 
 		return "", "The user denied this tool call."
 	case choice == "all":
 		s.AutoApprove = true
+		s.keep(func(a *Approvals) { a.ApproveAll = true })
 		return "approve", ""
 	}
 	return choice, ""

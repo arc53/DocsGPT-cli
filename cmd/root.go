@@ -375,12 +375,12 @@ func init() {
 	for _, c := range []*cobra.Command{loginCmd, logoutCmd, whoamiCmd, agentsCmd, sourcesCmd} {
 		c.GroupID = "account"
 	}
-	for _, c := range []*cobra.Command{mcpCmd, benchCmd, configCmd, updateCmd} {
+	for _, c := range []*cobra.Command{mcpCmd, permissionsCmd, benchCmd, configCmd, updateCmd} {
 		c.GroupID = "tools"
 	}
 	hostCmd.GroupID = "host"
 	rootCmd.AddCommand(askCmd, chatCmd, loginCmd, logoutCmd, whoamiCmd, keysCmd, agentsCmd, sourcesCmd,
-		promptsCmd, toolsCmd, mcpCmd, benchCmd, configCmd, updateCmd, installCmd, hostCmd)
+		promptsCmd, toolsCmd, mcpCmd, permissionsCmd, benchCmd, configCmd, updateCmd, installCmd, hostCmd)
 }
 
 // usageTemplate is cobra's, minus the help command, the "Additional

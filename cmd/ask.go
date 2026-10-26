@@ -166,6 +166,17 @@ func runAsk(args []string, out *askResult) error {
 	// Tool calls need a person on stdin to approve them.
 	offerTools := !globalNoTools && (globalAutoApprove || stdinIsTerminal())
 	toolSession := &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second}
+	if offerTools {
+		cwd, _ := os.Getwd()
+		toolSession.Project = tools.ProjectRoot(cwd)
+		all, err := toolSession.LoadApprovals()
+		switch {
+		case err != nil:
+			fmt.Fprintln(os.Stderr, display.Warn("! ")+display.Muted("Kept approvals not read: "+err.Error()))
+		case all && !globalAutoApprove && out == nil:
+			fmt.Fprintln(os.Stderr, display.Warn("! ")+display.Muted("Tool calls run without asking in this project (docsgpt-cli permissions reset to ask again)."))
+		}
+	}
 
 	ctx, stop := signalContext()
 	defer stop()

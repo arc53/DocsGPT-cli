@@ -126,7 +126,8 @@ func init() {
 		{name: "copy", desc: "Copy the last answer, or one of its code blocks", run: (*chatSession).copyAnswer},
 		{name: "export", args: "[file]", desc: "Save the conversation as markdown", run: (*chatSession).export},
 		{name: "think", desc: "Show or hide the model's reasoning", run: (*chatSession).toggleThinking},
-		{name: "approve", desc: "Run tool calls without asking, or ask again", run: (*chatSession).toggleApprove},
+		{name: "approve", desc: "Run tool calls without asking in this project, or ask again", run: (*chatSession).toggleApprove},
+		{name: "permissions", desc: "Show what runs without asking in this project; ask again", run: (*chatSession).permissions},
 		{name: "mcp", desc: "Show the MCP servers and their tools", run: (*chatSession).mcpStatus},
 		{name: "ps", desc: "Show the background processes, their output, or stop one", run: (*chatSession).processList},
 		{name: "key", desc: "Switch to another agent API key", run: (*chatSession).switchKey},
@@ -184,6 +185,8 @@ func runChat(first string) error {
 	s.procs = tools.NewProcesses(s.scr.Wake)
 	if s.toolDefs != nil {
 		s.tools.Processes = s.procs
+		cwd, _ := os.Getwd()
+		s.tools.Project = tools.ProjectRoot(cwd)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -259,6 +262,7 @@ func (s *chatSession) loop(first string) {
 		s.top()
 	}
 	s.whatsNew()
+	s.loadApprovals()
 	s.startMCP()
 	s.footer()
 	if first = strings.TrimSpace(first); first != "" {
@@ -845,11 +849,25 @@ func (s *chatSession) toggleThinking(string) {
 	s.note("Reasoning will be " + state + ".")
 }
 
+// loadApprovals takes the project's kept approvals, and says when every
+// tool call runs without asking.
+func (s *chatSession) loadApprovals() {
+	all, err := s.tools.LoadApprovals()
+	switch {
+	case err != nil:
+		s.fail("Kept approvals not read: " + err.Error())
+	case all && !globalAutoApprove:
+		s.scr.Add(display.Text(display.Warn("! ") + display.Dim("Tool calls run without asking in this project (Always approve was chosen here); /approve to ask again.")))
+	}
+}
+
 func (s *chatSession) toggleApprove(string) {
-	s.tools.AutoApprove = !s.tools.AutoApprove
-	msg := "Tool calls now need approval."
+	if err := s.tools.SetApproveAll(!s.tools.AutoApprove); err != nil {
+		s.fail("Not kept for the project: " + err.Error())
+	}
+	msg := "Tool calls now need approval, in later chats here too."
 	if s.tools.AutoApprove {
-		msg = "Tool calls run without asking."
+		msg = "Tool calls run without asking in this project, in later chats too (/approve to ask again)."
 	}
 	s.note(msg)
 }
