@@ -39,8 +39,8 @@ run once
 | Choice | Key | Effect |
 |---|---|---|
 | Approve | `a`, `y` | Run it once |
-| Always allow | `l` | Run it, and similar calls for the rest of the session, without asking |
-| Always approve | `p` | Run it, and every later tool call of the session, without asking |
+| Always allow | `l` | Run it, and similar calls in this project from now on, without asking |
+| Always approve | `p` | Run it, and every later tool call in this project, without asking |
 | Deny | `d`, `n` | Don't run it; the model is told you declined |
 | Edit | `e` | Change the command, then decide again (the model is told what ran) |
 
@@ -62,7 +62,10 @@ a file in the working directory (`git` is never `.\git.exe`).
 
 ## Always allow
 
-"Always allow" lasts until the chat (or the one-shot run) ends.
+"Always allow" is kept for the project: the git root of the working directory
+(else the directory itself). Later chats and one-shot questions there run the
+same calls without asking; other projects still ask. See [Kept for the
+project](#kept-for-the-project).
 
 - **Reads:** covers every later read.
 - **Writes:** covers later writes and edits of files in the working
@@ -101,15 +104,31 @@ same key and passes the same checks. These always ask, and are never offered
 **Known gap:** the key is the subcommand, not what its options do. Allowing
 `git branch` also allows `git branch -D main`, and allowing `git stash` allows
 `git stash drop`. Allow a subcommand only when you are fine with all of its
-forms for the rest of the session.
+forms in the project.
 
 ## Always approve
 
 "Always approve" runs every later call without asking: commands of any kind,
-writes and reads, until the chat (or the one-shot run) ends. It is
-`--auto-approve` switched on mid-session. In a chat the footer then shows
-`auto-approve`, and `/approve` switches it off (or on). Earlier "Always allow"
-choices still hold after it is switched off. Each call still shows its block.
+writes and reads, in this project, also in later chats there. A chat that
+opens in such a project says so (`! Tool calls run without asking in this
+project`), and the footer shows `auto-approve`; `/approve` switches it off (or
+on), for later chats too. `--auto-approve` does the same for one run and keeps
+nothing. Earlier "Always allow" choices still hold after it is switched off.
+Each call still shows its block.
+
+## Kept for the project
+
+"Always allow" (commands, writes, reads, MCP tools and servers) and "Always
+approve" are kept in `~/.docsgpt/permissions.json` (readable only by you),
+under the project's root directory, never in the project itself: nothing a
+repository holds, cloned or not, can approve a call. A command key is checked
+again on every command, as in the session.
+
+| Where | What |
+|---|---|
+| `/permissions` (chat) | Shows what runs without asking in the project; pick one, or all, to be asked about again |
+| `docsgpt-cli permissions list [--all]` | The same for this project (every project with `--all`) |
+| `docsgpt-cli permissions reset [--all]` | Ask again about everything in this project (or every project) |
 
 ## Reads
 
@@ -227,8 +246,8 @@ of what you approve.
 - `--auto-approve`, "Always approve" and `/approve` remove the safeguard. Use
   them only where a wrong command cannot hurt: a container, a VM, a throwaway
   checkout.
-- "Always allow" is narrow on purpose; it is still trust in the model for the
-  rest of the session.
+- "Always allow" is narrow on purpose; it is still trust in the model, kept for
+  the project until you remove it (`/permissions`).
 - Chats are saved in `~/.docsgpt/sessions/`, with tool arguments and output.
   Review a session before you share an `/export` of it.
 - Use version control or backups before letting the agent write files.

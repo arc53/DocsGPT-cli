@@ -106,9 +106,9 @@ queries: ["eloquent scopes"]
 | Choice | Key | Effect |
 |---|---|---|
 | Approve | `a`, `y` | Call it once |
-| Always allow *tool* | `l` | Call this tool without asking for the rest of the session |
-| Always allow *server* | `s` | Call any tool of this server without asking for the rest of the session |
-| Always approve | `p` | Run every later tool call of the session without asking |
+| Always allow *tool* | `l` | Call this tool without asking in this project from now on |
+| Always allow *server* | `s` | Call any tool of this server without asking in this project from now on |
+| Always approve | `p` | Run every later tool call in this project without asking |
 | Deny | `d`, `n` | Don't call it; the model is told you declined |
 
 `--auto-approve`, "Always approve" and `/approve` cover MCP tools too. The
