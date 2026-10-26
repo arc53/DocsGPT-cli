@@ -11,7 +11,8 @@ tools:
 | `write_file` | Writes a whole file, creating missing directories | Always, with a short diff first |
 
 Paths may start with `~` (your home directory). [MCP servers](mcp.md) add
-their own tools, approved the same way.
+their own tools, approved the same way. Commands can also run in the
+[background](#background-processes-and-monitors).
 
 Each call shows as a block: the command or path, the output's last lines while
 it runs, with `running · 12s` under them once it has taken a second, then
@@ -145,6 +146,56 @@ its byte order mark, its `\r\n` line breaks (the new text gets them too) and
 its permissions. You approve the change as a diff, and if the file changes
 while the prompt waits, nothing is written and the model is told to read it
 again. Files over 10 MB and binary files are refused.
+
+## Background processes and monitors
+
+A dev server, a watcher or a long build can keep running while the agent works
+on, or after its answer:
+
+| Tool | What it does | Asks you |
+|---|---|---|
+| `run_command` with `run_in_background` | Starts the command and returns at once with an id (`p1`); no time limit unless the model gives one | Like any command |
+| `local_monitor` | Starts a command whose every output line is an event for the agent (`tail -f dev.log \| grep --line-buffered ERROR`); stops after 5 minutes, or the time the model gives (at most 30) | Like any command |
+| `local_output` | Shows a process's status and last lines (100 by default), or lists them all | Never |
+| `local_stop` | Stops a process with everything it started | Never |
+
+The agent is told when a process exits (with its last 20 lines) and of each
+line a monitor prints, as a `<local_process_event>`:
+
+- while it works, with the result of its next tool call;
+- in a chat with nothing running, in a turn of its own: the event shows as a
+  `◆` block, and the agent answers it. After 20 such turns in a row without a
+  message from you, events wait for your next message.
+
+A monitor's lines within 200 ms make one event, at most 50 lines (the rest are
+counted); after 10 quick events it gets one every 2 seconds, and one that
+prints over 300 lines in 30 seconds is stopped, the agent told why.
+
+These run on your machine, in this chat. They are not the DocsGPT server's
+background jobs or monitors (`check_job`, `monitor_create`), and their
+descriptions say so. Each runs in a process group of its own, and every one
+still running is stopped when the chat ends (`Stopped 2 background
+processes.`). In a one-shot question they are stopped when the answer ends,
+and the agent hears of them only with its tool results.
+
+In the chat:
+
+- the footer counts what runs (`2 processes`);
+- `/ps` lists them: pick one to show its last output lines or stop it (the
+  agent is told with your next message);
+- **Ctrl+B** while the agent's command runs moves it to the background: the
+  agent is told at once and the command goes on as a background process.
+
+Output goes to `~/.docsgpt/logs/processes/<chat>/p1.log` (readable only by
+you), kept 3 days.
+
+`run_command` refuses, without asking you, what would leave a process behind
+out of reach: a trailing `&` (`a & b & wait` is fine), `nohup`, `setsid`,
+`disown`, and on Windows `start` and `Start-Process`; and a bare `sleep` over
+10 seconds (`timeout /t`, `Start-Sleep` on Windows) at the start of a command,
+which would only block. The agent is told to use `run_in_background` (a loop
+that ends when something is ready, `until curl -sf localhost:3000; do sleep 1;
+done`) or `local_monitor` instead.
 
 ## Turning tools off or on
 

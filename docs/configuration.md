@@ -9,7 +9,7 @@ Everything lives in `~/.docsgpt/`:
 | `sessions/` | Saved chats, per directory |
 | `mcp.json` | Your [MCP servers](mcp.md) |
 | `mcp-approvals.json` | Your answers about projects' MCP servers |
-| `logs/` | What MCP servers write to stderr, one file each |
+| `logs/` | What MCP servers write to stderr, one file each; `processes/`: the output of background processes, kept 3 days |
 | `bench/` | Bench run history |
 | `host.yml`, `host.key`, `host.log` | [Host mode](host.md) pairing and log |
 

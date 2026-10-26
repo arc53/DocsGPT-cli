@@ -52,7 +52,8 @@ cmd/
   retry.go           → retrying(): a per-run client copy whose retry waits count down on a status ("Retrying (1/3) in 4s… (502 Bad Gateway)"); the retry setting
   completion.go      → cobra's completion command (under Tools) + config-only completions: key names, settings and their values; completing() keeps __complete off the update gate
   whatsnew.go        → chat: the release notes once after an update (first 10 lines, whats_new setting), /changelog
-  chat.go            → Interactive chat (hidden alias; optional first message): drives the full-screen ui.Screen from a goroutine (loop over Screen.Next), the slash command table, !cmd, sessions (-c/-r//resume), screenTools (tools.UI in the transcript and panel), transcript printed on exit
+  chat.go            → Interactive chat (hidden alias; optional first message): drives the full-screen ui.Screen from a goroutine (loop over Screen.Next: a message, or a wake-up for background events), the slash command table, !cmd, sessions (-c/-r//resume), screenTools (tools.UI in the transcript and panel, Ctrl+B), transcript printed on exit
+  chat_ps.go         → /ps: the background processes, their output, Stop
   config.go          → config get / set / show / path + the settings menu; one `settings` table drives all of them
   install.go         → Hidden `install` (run by the install scripts), wiring over internal/install
   update.go          → Self-update to latest GitHub release (--check, --yes/-y: needed off a terminal, else ui.Confirm; --rollback, hidden --worker)
@@ -275,7 +276,10 @@ internal/
     executor.go      → runCommand (caller's ctx + timeout; own session without a
                        controlling terminal, whole group killed; Windows: hidden console,
                        taskkill /T by its System32 path, NoDefaultCurrentDirectoryInExePath=1 so cmd.exe
-                       never runs a program from the working directory), regularFile + readFile (regular files only, chunked,
+                       never runs a program from the working directory) = runForeground without a move
+                       channel (Ctrl+B: errMoved, the command handed back running); startShell → shellRun
+                       (its own context, done, cancel kills the group), switchWriter (output re-pointed
+                       to a log, handOver), regularFile + readFile (regular files only, chunked,
                        ctx-aware line ranges), writeFile (creates parents)
     ui.go            → UI: Open/Lines/Output/Close a block, Choose, Edit; stderrUI (the
                        default, ask): display's stderr blocks + inline prompts
@@ -287,6 +291,21 @@ internal/
     mcp.go           → callMCP: an MCP tool call (title `server · tool (MCP[, read-only])`, args a
                        line each; Always allow the tool (l) or the server (s), allowedMCP; 5 min;
                        IsError → ✗ and "[The tool reported an error.]"); Handle looks MCP names up first
+    process.go       → Processes: a chat's (or ask's) background processes p1, p2…: Start
+                       (run_in_background, optional timeout), Monitor (stdout lines → events, stderr to
+                       the log only; 200ms batches ≤50 lines/3KB, burst 10 then 1/2s, >300 lines in 30s
+                       stops it "flooded", expiry 5m default / 30m max), Adopt (Ctrl+B: a foreground
+                       shellRun, its output handed over to the log), Stop (model: quiet; user: an event
+                       without a wake), Close (stops all, events off), Drain/Unread/Format
+                       (`<local_process_event>`, with what still runs), Output/List/Running/Info. ≤20
+                       running; logs ~/.docsgpt/logs/processes/<start>-<pid>/pN.log (0600, O_APPEND,
+                       dirs over 3 days pruned). Wake (nil in ask) fires 200ms after an event
+    background.go    → Session side: guard (refuse detaches / longSleep before asking), startBackground,
+                       startMonitor, processOutput (local_output), stopProcess (local_stop), moved
+                       (Ctrl+B through the UI's optional backgrounder interface)
+    guard.go         → detaches (lone &, nohup, setsid, disown; Windows start, Start-Process; `& wait` ok)
+                       and longSleep (a leading sleep/timeout/Start-Sleep over 10s) over `segments`, a
+                       quote-aware split into simple commands
   update/
     update.go        → GitHub latest-release lookup, semver comparison, mode constants
     apply.go         → Asset download, sha256 verify, binary swap + backup, Rollback, host CheckAndApply
@@ -464,7 +483,8 @@ or with TERM=dumb it refuses.
   blocks), /export [file] (markdown, default `docsgpt-<date>.md`; `~/` expanded; an
   existing file only after a confirmation, default No), /think, /approve (toggles
   the tools Session's AutoApprove; "Always allow" choices are kept), /mcp (the MCP
-  servers: describeServers), /key (switch
+  servers: describeServers), /ps (background processes: output or stop,
+  cmd/chat_ps.go), /key (switch
   or add a key → new conversation), /settings (the config menu in the panel; the
   mouse setting applies at once), /changelog (latest release notes), /help, /quit (/exit). An unknown `/word` is an
   error; `/path/like …` is a message. `!cmd` runs through `tools.RunShell` (no
@@ -578,6 +598,8 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set a
 3. On approve: executes locally (command output in a live 5-line tail, then `✓ exit 0 · 1.2s` / `✗ …`), sends result back as `role: "tool"` message
 4. Model continues with tool results — loop repeats until `finish_reason: "stop"`
 
+Background processes (docs/tools.md#background-processes-and-monitors): `ToolDefinitions(timeout, bg)` adds `run_in_background` to run_command and `local_monitor` / `local_output` / `local_stop` (ChatBackground / AnswerBackground say how long they live; NoBackground none). Their descriptions, the results and the context's tools guide say they run on this computer in this CLI session, not on the server: the cloud has model-visible `check_job` (`job_id`), `monitor_create/list/cancel`, `schedule_task` (`task_id`) and `background`/`watch` params on its remote run_command, so local names avoid those words. Events reach the model as user-role text (a system message would be a prompt override on /v1): appended to the next tool result (chat and ask, `Drain` in OnToolResult), or in the chat, when idle, as a turn of its own (`Screen.Wake` → `Next` returns `Message{Wake: true}` after queued user messages → `chatSession.wake` → `exchange` with no text: `display.Event` blocks, session entry `event: true`, shown as events on resume, skipped by /edit and /retry); at most 20 such turns in a row (`maxAutoTurns`), then events wait for the user's next message (which carries them). A failed turn `Unread`s its events. Ctrl+B (`Screen.Backgroundable`, status-row hint) while run_command runs: `runForeground` returns errMoved and the Processes adopt it. The chat stops all on exit (`Stopped N background processes.`), ask when the answer ends. run_command refuses (no prompt) commands that would detach and a leading sleep over 10s, pointing at run_in_background / local_monitor.
+
 MCP (docs/mcp.md): unless `--no-tools`, chat (`startMCP` after the header; a project's servers not decided yet are asked about in the panel) and ask (when tools are offered; asked on a TTY, else skipped with a stderr note) start the servers; the chat's first message waits for them (`mcpReady`: Esc skips the wait; failures shown once), ask waits before asking; their definitions follow the built-in ones and the context block lists them. Calls go through `Session.Handle` → `callMCP`, approved like commands. Closed on exit (ask: defer; chat: after Run)
 5. Security stance (like pi): approval is the only gate, there is no command blocklist. `read_file` asks only for files outside the working directory (symlinks resolved), when the working directory is the home directory or above it (compared as files, so case-insensitive spellings count), or for secret-looking names on the way (`.env*`, `.envrc`, `.netrc`, `*.pem`, `*.key`, `id_*`, `.ssh`, `.aws`, `.docsgpt`, `*_history`, … `secretNames`); devices, FIFOs and directories are refused. "Always allow" lasts for the session: writes and edits inside the cwd (not secret-looking, not in `.git`; others always ask), all reads, or later commands with the same key run in the cwd (a `working_directory` outside it or secret-looking always asks) — the program plus its subcommand word (`git status`, `npm test`), the program alone for plain read-only programs (`ls`, `cat`, `rg`) or option-only calls — and each later command is re-checked. Never offered for shell syntax beyond quotes, `VAR=value` prefixes, programs given as a path, code runners (shells, wrappers, interpreters, `find`, `make`, `tar`, editors, `cmd`/`powershell`/`start`), risky options (`-c`, `-C`, `-e`, `-o`, `-x`, `--exec*`, `--upload-pack`, `--git-dir`, …), risky subcommands (`git config`, `npm exec`, `docker run`), a path argument leaving the cwd (absolute, `~`, `..`), or options before the subcommand other than known value-less ones (`git --no-pager`); the doc comment of `alwaysKey` is the source of truth. Known gap (documented in docs/tools.md): a subcommand key covers its destructive forms (`git branch` → `git branch -D`). Commands run without the terminal, so password prompts fail at once. `--auto-approve` (or "Always approve", or `/approve` in chat) skips every prompt but still prints each title and status. Host mode (no person at the device) keeps its own denylist in `internal/host/invocation.go`
 
@@ -604,7 +626,7 @@ Single file: `~/.docsgpt/config.json`
 
 `token` is optional (written by `login`, removed by `logout`, omitted when empty); the file is always written as a 0600 temp file and renamed into place (atomic, never readable by others, tightens an older permissive file). Environment overrides: `DOCSGPT_API_KEY`, `DOCSGPT_TOKEN`, `DOCSGPT_URL`. `config get|set <key>` use the setting names `url` (= `base_url`), `default_key` and the `settings` fields; `config show` redacts keys (`config.RedactKey`, first/last 4) and the token.
 
-Settings missing from the file keep their defaults (`Load` decodes over `DefaultConfig`); `send_last_commands` defaults to false for new configs only, since saved configs always carry it. Also under `~/.docsgpt`: `history` (chat prompts), `sessions/` (saved chats), `mcp.json` (the user's MCP servers), `mcp-approvals.json` and `logs/` (MCP servers' stderr).
+Settings missing from the file keep their defaults (`Load` decodes over `DefaultConfig`); `send_last_commands` defaults to false for new configs only, since saved configs always carry it. Also under `~/.docsgpt`: `history` (chat prompts), `sessions/` (saved chats), `mcp.json` (the user's MCP servers), `mcp-approvals.json` and `logs/` (MCP servers' stderr; `processes/`: background processes' output, 3 days).
 
 Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on first run.
 
