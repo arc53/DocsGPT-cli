@@ -271,6 +271,9 @@ func (ps *Processes) line(p *process, line string) {
 		p.window = p.window[1:]
 	}
 	if len(p.window) > floodLines {
+		if p.how == "" {
+			p.how = "flooded" // now: the command may be ending by itself
+		}
 		go ps.end(p, "flooded")
 		return
 	}
