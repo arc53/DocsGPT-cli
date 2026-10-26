@@ -741,7 +741,7 @@ func (s *chatSession) mcpStatus(string) {
 		return
 	}
 	text, _ := describeServers(s.mcpAll, s.mcp.Status())
-	s.scr.Add(display.Text(strings.TrimRight(text, "\n")))
+	s.scr.Add(display.Wrapped(text))
 }
 
 func (s *chatSession) newConversation(string) {
