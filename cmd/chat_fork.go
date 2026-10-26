@@ -18,18 +18,21 @@ import (
 // again.
 func (s *chatSession) editEarlier(string) {
 	turns := s.sess.Turns()
-	if len(turns) == 0 {
-		s.note("No message of yours to edit yet.")
-		return
-	}
 	items := make([]ui.Item, 0, len(turns))
 	for i := len(turns) - 1; i >= 0; i-- {
+		if turns[i].Event {
+			continue // the chat sent it, not the user
+		}
 		first, rest, _ := strings.Cut(strings.TrimSpace(turns[i].Question), "\n")
 		desc := fmt.Sprintf("message %d", i+1)
 		if rest != "" {
 			desc += " · " + lineCount(turns[i].Question)
 		}
 		items = append(items, ui.Item{Label: display.Safe(first), Value: strconv.Itoa(i), Description: desc})
+	}
+	if len(items) == 0 {
+		s.note("No message of yours to edit yet.")
+		return
 	}
 	v, err := s.scr.Select(ui.Select{Title: "Edit a message (the chat goes back to before it)", Items: items, Filter: len(items) > 1})
 	if err != nil {
@@ -48,11 +51,14 @@ func (s *chatSession) retry(string) {
 		return
 	}
 	turns := s.sess.Turns()
-	if len(turns) == 0 {
+	i := len(turns) - 1
+	for i >= 0 && turns[i].Event {
+		i-- // the user's last message, not the chat's
+	}
+	if i < 0 {
 		s.fail("No message to send again yet.")
 		return
 	}
-	i := len(turns) - 1
 	q := turns[i].Question
 	s.fork(i, fmt.Sprintf("── message %d again ──", i+1))
 	s.send(q, q, attached(turns[i].Files)...)
@@ -108,7 +114,11 @@ func (s *chatSession) adopt(sess *session.Session) []session.Turn {
 // showTurns adds the exchanges to the transcript.
 func (s *chatSession) showTurns(turns []session.Turn) {
 	for _, t := range turns {
-		s.scr.Add(display.User(attach.Show(t.Question, t.Files)))
+		if t.Event {
+			s.scr.Add(display.Event(eventShown(t.Question)))
+		} else {
+			s.scr.Add(display.User(attach.Show(t.Question, t.Files)))
+		}
 		s.scr.Add(display.Markdown(t.Answer))
 		s.scr.Add(display.Sources(t.Sources))
 	}
@@ -172,4 +182,25 @@ func (s *chatSession) deleteSession(sess *session.Session) {
 		return
 	}
 	s.scr.Add(display.Done("Deleted “" + display.Safe(sess.Title()) + "”"))
+}
+
+// eventShown is an events message the chat sent, as the transcript shows
+// it: the events, without the tags and notes around them.
+func eventShown(content string) string {
+	if strings.HasPrefix(content, "<context>") {
+		if i := strings.Index(content, "</context>"); i >= 0 {
+			content = content[i+len("</context>"):]
+		}
+	}
+	var keep []string
+	for _, l := range strings.Split(content, "\n") {
+		switch {
+		case strings.HasPrefix(l, "<local_process_event>"), strings.HasPrefix(l, "</local_process_event>"),
+			strings.HasPrefix(l, "From docsgpt-cli on the user's computer"), strings.HasPrefix(l, "Still running: "),
+			strings.HasPrefix(l, "No background process runs now."):
+		default:
+			keep = append(keep, l)
+		}
+	}
+	return strings.TrimSpace(strings.Join(keep, "\n"))
 }

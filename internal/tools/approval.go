@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/display"
@@ -29,6 +30,9 @@ type Session struct {
 	Timeout     time.Duration // per command or read
 	UI          UI            // stderr when nil
 	MCP         *mcp.Manager  // the MCP servers' tools, if any
+	// Processes runs the background processes and monitors; nil offers
+	// none (run_in_background is then ignored).
+	Processes *Processes
 
 	allowWrites bool
 	allowReads  bool
@@ -61,13 +65,27 @@ func (s *Session) Handle(ctx context.Context, cancel context.CancelFunc, tc docs
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
 		return text("Error: invalid arguments: " + err.Error())
 	}
+	dir := args.WorkingDirectory
+	if strings.TrimSpace(dir) != "" {
+		dir = expandPath(dir)
+	}
 	switch name := NormalizeName(tc.Function.Name); name {
 	case "run_command":
-		dir := args.WorkingDirectory
-		if strings.TrimSpace(dir) != "" {
-			dir = expandPath(dir)
+		if args.RunInBackground && s.Processes != nil {
+			return text(s.startBackground(cancel, args.Command, dir, time.Duration(args.Timeout)*time.Second))
 		}
 		return text(s.runCommand(ctx, cancel, args.Command, dir, time.Duration(args.Timeout)*time.Second))
+	case "local_monitor", "local_output", "local_stop":
+		if s.Processes == nil {
+			return text("Error: unknown tool " + name)
+		}
+		switch name {
+		case "local_monitor":
+			return text(s.startMonitor(cancel, args.Command, args.Description, dir, time.Duration(args.Timeout)*time.Second))
+		case "local_output":
+			return text(s.processOutput(args.ID, int(args.TailLines)))
+		}
+		return text(s.stopProcess(args.ID))
 	case "read_file":
 		if strings.TrimSpace(args.Path) == "" {
 			return text(s.fail("read", "no path given", "Error: path is required."))
@@ -107,6 +125,9 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 	if strings.TrimSpace(command) == "" {
 		return s.fail("$", "empty command", "Error: the command is empty.")
 	}
+	if refusal := s.guard(command, false); refusal != "" {
+		return refusal
+	}
 	limit := s.Timeout
 	if timeout > 0 {
 		limit = min(timeout, max(s.Timeout, maxTimeout*time.Second))
@@ -126,46 +147,24 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 	if dirReason != "" {
 		notes = append(notes, "("+dirReason+")")
 	}
-	note := strings.Join(notes, " · ")
-	edited, titled := false, false
-	for {
-		if !titled {
-			s.ui().Open("$ "+command, note)
-			titled = true
-		}
-		if s.AutoApprove || dirReason == "" && s.allowed[alwaysKey(command)] {
-			break
-		}
-		var always []ui.Item
-		if key := display.Safe(alwaysKey(command)); key != "" && dirReason == "" {
-			always = append(always, allowItem("Always allow "+key, "run "+key+" commands without asking this session"))
-		}
-		choice, refusal := s.ask(cancel, "run once", true, always...)
-		if refusal != "" {
-			return refusal
-		}
-		if choice == "edit" {
-			// The one-line field shows the command as the title does; what
-			// the user submits is what runs, with ␊ read back as a newline.
-			shown := display.Safe(command)
-			v, err := s.ui().Edit("Edit command", shown)
-			if v = strings.TrimSpace(v); err == nil && v != "" && v != shown {
-				command, edited, titled = strings.ReplaceAll(v, "␊", "\n"), true, false
-			}
-			continue // ask again, about the edited command
-		}
-		if choice == "always" {
-			if s.allowed == nil {
-				s.allowed = map[string]bool{}
-			}
-			s.allowed[alwaysKey(command)] = true
-		}
-		break
+	command, edited, refusal := s.approveCommand(cancel, command, strings.Join(notes, " · "), dirReason)
+	if refusal != "" {
+		return refusal
 	}
 
+	// In a chat, Ctrl+B moves the command to the background.
+	var move chan struct{}
+	if b, ok := s.ui().(backgrounder); ok && s.Processes != nil && s.Processes.Wake != nil {
+		move = make(chan struct{})
+		var once sync.Once
+		defer b.Backgroundable(func() { once.Do(func() { close(move) }) })()
+	}
 	var out tailBuffer
 	start := time.Now()
-	err := runCommand(ctx, command, dir, limit, io.MultiWriter(&out, s.ui().Output()))
+	r, err := runForeground(ctx, command, dir, limit, io.MultiWriter(&out, s.ui().Output()), move)
+	if errors.Is(err, errMoved) {
+		return s.moved(r, command, start, &out, edited)
+	}
 	took := display.Duration(time.Since(start))
 
 	result := out.String()
@@ -192,6 +191,48 @@ func (s *Session) runCommand(ctx context.Context, cancel context.CancelFunc, com
 	}
 	s.ui().Close(false, err.Error())
 	return result + "\n[The command failed: " + err.Error() + "]"
+}
+
+// approveCommand shows command (titled "$ command", with note) and asks
+// about it, unless AutoApprove or an "Always allow" covers it; dirReason
+// is why its working directory needs asking (no "Always allow" then).
+// The user may edit it: the command to run comes back, edited says so.
+func (s *Session) approveCommand(cancel context.CancelFunc, command, note, dirReason string) (_ string, edited bool, refusal string) {
+	titled := false
+	for {
+		if !titled {
+			s.ui().Open("$ "+command, note)
+			titled = true
+		}
+		if s.AutoApprove || dirReason == "" && s.allowed[alwaysKey(command)] {
+			return command, edited, ""
+		}
+		var always []ui.Item
+		if key := display.Safe(alwaysKey(command)); key != "" && dirReason == "" {
+			always = append(always, allowItem("Always allow "+key, "run "+key+" commands without asking this session"))
+		}
+		choice, refusal := s.ask(cancel, "run once", true, always...)
+		if refusal != "" {
+			return "", false, refusal
+		}
+		if choice == "edit" {
+			// The one-line field shows the command as the title does; what
+			// the user submits is what runs, with ␊ read back as a newline.
+			shown := display.Safe(command)
+			v, err := s.ui().Edit("Edit command", shown)
+			if v = strings.TrimSpace(v); err == nil && v != "" && v != shown {
+				command, edited, titled = strings.ReplaceAll(v, "␊", "\n"), true, false
+			}
+			continue // ask again, about the edited command
+		}
+		if choice == "always" {
+			if s.allowed == nil {
+				s.allowed = map[string]bool{}
+			}
+			s.allowed[alwaysKey(command)] = true
+		}
+		return command, edited, ""
+	}
 }
 
 func (s *Session) readFile(ctx context.Context, cancel context.CancelFunc, path string, offset, limit int) docsgpt.ToolResult {

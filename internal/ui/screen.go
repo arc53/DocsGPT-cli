@@ -266,25 +266,31 @@ func (s *Screen) Kill() {
 	}
 }
 
-// Message is a message the user sent.
+// Message is a message the user sent, or a wake-up (see Wake).
 type Message struct {
 	Text  string        // pastes expanded
 	Shown string        // pastes as markers
 	Files []attach.File // the files attached, in the order of their markers
+	Wake  bool          // not from the user: Wake was called
 }
 
-// Next waits for the next message the user sends. ok is false once the
-// screen is gone. Messages sent while the caller is busy wait in a queue.
+// Next waits for the next message the user sends, or a wake-up once none
+// is queued. ok is false once the screen is gone. Messages sent while the
+// caller is busy wait in a queue.
 func (s *Screen) Next() (msg Message, ok bool) {
 	if s.headless {
 		return Message{}, false
 	}
 	reply := make(chan Message, 1)
 	s.do(func(m *screenModel) tea.Cmd {
-		if len(m.queue) > 0 {
+		switch {
+		case len(m.queue) > 0:
 			reply <- m.queue[0].Message
 			m.queue = m.queue[1:]
-		} else {
+		case m.wake:
+			m.wake = false
+			reply <- Message{Wake: true}
+		default:
 			m.waiter = reply
 		}
 		return nil
@@ -295,6 +301,28 @@ func (s *Screen) Next() (msg Message, ok bool) {
 	case <-s.done:
 		return Message{}, false
 	}
+}
+
+// Wake makes Next return a wake-up Message: at once when it waits and
+// nothing is queued, else after what is. Wake-ups do not pile up; safe to
+// call from any goroutine.
+func (s *Screen) Wake() {
+	s.do(func(m *screenModel) tea.Cmd {
+		if m.waiter != nil {
+			m.waiter <- Message{Wake: true}
+			m.waiter = nil
+		} else {
+			m.wake = true
+		}
+		return nil
+	})
+}
+
+// Backgroundable makes Ctrl+B call move (once) while a command runs, and
+// says so in the status row, until the returned func withdraws it.
+func (s *Screen) Backgroundable(move func()) (withdraw func()) {
+	s.do(func(m *screenModel) tea.Cmd { m.bg = move; return nil })
+	return func() { s.do(func(m *screenModel) tea.Cmd { m.bg = nil; return nil }) }
 }
 
 // Select shows sel in the panel above the editor and returns the chosen
@@ -387,6 +415,8 @@ type screenModel struct {
 	spinning bool
 	cancel   func()
 	waiter   chan Message // the caller of Next, waiting
+	wake     bool         // Wake was called while no one waited
+	bg       func()       // Ctrl+B moves the running command to the background
 	queue    []queued     // messages sent while it was busy
 	listed   bool         // the queue is listed above the editor, as last drawn
 
@@ -582,6 +612,12 @@ func (m *screenModel) key(k tea.KeyMsg) tea.Cmd {
 	}
 	if s == "alt+up" && len(m.queue) > 0 {
 		m.requeue() // to edit, the answer going on
+		return nil
+	}
+	if s == "ctrl+b" && m.bg != nil {
+		move := m.bg
+		m.bg = nil
+		move()
 		return nil
 	}
 	m.typed = time.Now()
@@ -1004,6 +1040,9 @@ func (m *screenModel) statusLine(width int) string {
 		s := fg(Colors.Accent).Render(spinnerFrames[m.spin%len(spinnerFrames)]) + " " + fg(Colors.Muted).Render(m.label)
 		if m.cancel != nil {
 			s += dim.Render(" · esc to stop")
+		}
+		if m.bg != nil {
+			s += dim.Render(" · ctrl+b to background")
 		}
 		left = append(left, s)
 	}

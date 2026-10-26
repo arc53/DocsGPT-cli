@@ -173,7 +173,14 @@ func runAsk(args []string, out *askResult) error {
 	defer cancel()
 	var toolDefs []docsgpt.Tool
 	if offerTools {
-		toolDefs = tools.ToolDefinitions(globalTimeout)
+		toolDefs = tools.ToolDefinitions(globalTimeout, tools.AnswerBackground)
+		// Background processes last as long as the answer.
+		toolSession.Processes = tools.NewProcesses(nil)
+		defer func() {
+			if n := toolSession.Processes.Close(); n > 0 && out == nil {
+				fmt.Fprintln(os.Stderr, display.Muted(fmt.Sprintf("Stopped %d background %s.", n, plural(n, "process", "processes"))))
+			}
+		}()
 		_, start, notes := mcpServers(tools.StderrUI(), stdinIsTerminal())
 		if len(start) > 0 {
 			toolSession.MCP = mcp.Start(start, Version)
@@ -223,10 +230,25 @@ func runAsk(args []string, out *askResult) error {
 		}
 	}
 
+	// withEvents adds what background processes did to a tool's result.
+	withEvents := func(result docsgpt.ToolResult) docsgpt.ToolResult {
+		events := toolSession.Processes.Drain()
+		if len(events) == 0 {
+			return result
+		}
+		if renderer != nil {
+			for _, e := range events {
+				first, _, _ := strings.Cut(e.Text, "\n")
+				fmt.Fprintln(os.Stderr, display.Muted("◆ "+display.Safe(first)))
+			}
+		}
+		result.Content += "\n\n" + toolSession.Processes.Format(events)
+		return result
+	}
 	onToolResult := func(tc docsgpt.ToolCall) docsgpt.ToolResult {
 		texts = append(texts, "")
 		if renderer == nil {
-			result := toolSession.Handle(ctx, cancel, tc)
+			result := withEvents(toolSession.Handle(ctx, cancel, tc))
 			out.ToolCalls = append(out.ToolCalls, askToolCall{
 				Name:      tools.NormalizeName(tc.Function.Name),
 				Arguments: jsonArguments(tc.Function.Arguments),
@@ -238,7 +260,7 @@ func runAsk(args []string, out *askResult) error {
 		renderer.Flush()
 		defer renderer.Wait()
 		ui.DiscardInput() // typed ahead, it would answer the approval
-		return toolSession.Handle(ctx, cancel, tc)
+		return withEvents(toolSession.Handle(ctx, cancel, tc))
 	}
 
 	if renderer != nil {

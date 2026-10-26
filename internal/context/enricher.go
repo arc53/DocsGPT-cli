@@ -79,6 +79,7 @@ You can work on the user's machine with run_command, read_file, edit_file and wr
 - Change a file with edit_file: old_text copied exactly from the file as you read it, small but unique; several changes to one file in one call. Use write_file only for new files or complete rewrites.
 - read_file also shows you images (screenshots, diagrams).
 - Commands have no terminal: anything that waits for input fails, so use non-interactive flags. Give long installs, builds and test runs a timeout.
+- For a dev server, a watcher or a long build, run_command with run_in_background returns at once with an id (p1); local_monitor tells you of each line a command prints. They run on this computer in this docsgpt-cli session, not on the DocsGPT server: check_job, monitor_create and schedule_task don't know them. A <local_process_event> tells you when one exits or prints: don't sleep or poll for it.
 </tools_guide>
 <coding_guide>
 - Follow the project's instructions above and the style of the code around your change; keep changes to what was asked, without unrelated refactors or new dependencies.

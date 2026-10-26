@@ -86,6 +86,14 @@ type chatSession struct {
 	mcpAll     []mcp.Server
 	mcpChecked bool
 
+	// procs runs the background processes and monitors (tools.Processes
+	// too). Their events start a turn of their own when the chat is idle:
+	// autoTurns counts those since the user last sent something, held is
+	// set once the cap was reached and said.
+	procs     *tools.Processes
+	autoTurns int
+	held      bool
+
 	// tab and tabColor are the status the tab shows (see tabStatus), kept
 	// to show it again when the setting changes.
 	tab, tabColor string
@@ -120,6 +128,7 @@ func init() {
 		{name: "think", desc: "Show or hide the model's reasoning", run: (*chatSession).toggleThinking},
 		{name: "approve", desc: "Run tool calls without asking, or ask again", run: (*chatSession).toggleApprove},
 		{name: "mcp", desc: "Show the MCP servers and their tools", run: (*chatSession).mcpStatus},
+		{name: "ps", desc: "Show the background processes, their output, or stop one", run: (*chatSession).processList},
 		{name: "key", desc: "Switch to another agent API key", run: (*chatSession).switchKey},
 		{name: "settings", desc: "Change settings", run: (*chatSession).settings},
 		{name: "changelog", desc: "Show what's new in the latest release", run: (*chatSession).changelog},
@@ -159,7 +168,7 @@ func runChat(first string) error {
 	}
 	s.reset()
 	if !globalNoTools {
-		s.toolDefs = tools.ToolDefinitions(globalTimeout)
+		s.toolDefs = tools.ToolDefinitions(globalTimeout, tools.ChatBackground)
 	}
 	var commands []ui.Command
 	for _, c := range chatCommands {
@@ -172,6 +181,10 @@ func runChat(first string) error {
 		EscEsc:   "/edit",
 	})
 	s.tools.UI = &screenTools{scr: s.scr, notify: s.notify, waiting: s.waiting}
+	s.procs = tools.NewProcesses(s.scr.Wake)
+	if s.toolDefs != nil {
+		s.tools.Processes = s.procs
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.ctx = ctx
@@ -198,6 +211,7 @@ func runChat(first string) error {
 	case <-time.After(3 * time.Second):
 	}
 	s.mcp.Close()
+	stopped := s.procs.Close()
 
 	var sig ui.Signal
 	hup := errors.As(err, &sig) && sig.Signal == syscall.SIGHUP // no terminal left
@@ -207,6 +221,9 @@ func runChat(first string) error {
 			width = 80
 		}
 		fmt.Println(s.scr.Transcript(width))
+	}
+	if stopped > 0 && !hup {
+		fmt.Println(display.Dim(fmt.Sprintf("Stopped %d background %s.", stopped, plural(stopped, "process", "processes"))))
 	}
 	if s.sess.Saved() && !hup {
 		fmt.Println(display.Dim("Continue this chat with: docsgpt-cli -c"))
@@ -253,6 +270,11 @@ func (s *chatSession) loop(first string) {
 		if !ok {
 			return
 		}
+		if msg.Wake {
+			s.wake()
+			continue
+		}
+		s.autoTurns, s.held = 0, false
 		s.handle(msg)
 	}
 }
@@ -264,6 +286,9 @@ func (s *chatSession) footer() {
 	status := []string{s.keyName, hostOf(s.baseURL)}
 	if n := len(s.shellOutput); n > 0 {
 		status = append(status, fmt.Sprintf("+%d command %s", n, plural(n, "output", "outputs")))
+	}
+	if n := s.procs.Running(); n > 0 {
+		status = append(status, fmt.Sprintf("%d %s", n, plural(n, "process", "processes")))
 	}
 	if s.showReasoning {
 		status = append(status, "think on")
@@ -423,6 +448,8 @@ func (t *screenTools) decided(choice string, err error) (string, error) {
 	return choice, err
 }
 
+func (t *screenTools) Backgroundable(move func()) func() { return t.scr.Backgroundable(move) }
+
 func (t *screenTools) Edit(title, value string) (string, error) {
 	t.ask(true)
 	return t.scr.Input(ui.Input{Title: title, Value: value})
@@ -488,8 +515,42 @@ func (s *chatSession) shell(line string) {
 }
 
 // send asks the agent, showing the message, the answer and its sources.
-// The files attached, and the ones its @paths name, go with it.
+// The files attached, and the ones its @paths name, go with it, and so do
+// the background processes' events waiting.
 func (s *chatSession) send(text, shown string, files ...attach.File) {
+	s.exchange(text, shown, files, s.procs.Drain())
+}
+
+// maxAutoTurns caps the turns background events start in a row, without
+// the user sending anything: a monitor and a model that keep answering
+// each other would go on spending.
+const maxAutoTurns = 20
+
+// wake sends the background processes' events waiting, in a turn of their
+// own, unless maxAutoTurns were sent since the user last wrote: then they
+// wait for the next message.
+func (s *chatSession) wake() {
+	events := s.procs.Drain()
+	s.footer()
+	if len(events) == 0 {
+		return
+	}
+	if s.autoTurns >= maxAutoTurns {
+		s.procs.Unread(events)
+		if !s.held {
+			s.held = true
+			s.note(fmt.Sprintf("Background events wait after %d automatic turns in a row; they go with your next message.", maxAutoTurns))
+		}
+		return
+	}
+	s.autoTurns++
+	s.exchange("", "", nil, events)
+}
+
+// exchange is one turn: the user's message (text, shown as shown, with
+// files) and the events of background processes before it; no text sends
+// the events alone.
+func (s *chatSession) exchange(text, shown string, files []attach.File, events []tools.Event) {
 	s.said = true
 	att, err := attachFiles(shown, files)
 	if err != nil {
@@ -497,16 +558,24 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 		// is away, and it waits in the input for them.
 		s.fail("Not sent: " + err.Error())
 		s.scr.PutBack(ui.Message{Text: text, Shown: text, Files: files})
+		s.procs.Unread(events)
 		s.tabStatus("failed", tabFailed)
 		s.notify("A message was not sent")
 		return
 	}
 	s.mcpReady()
-	s.scr.Add(display.User(attach.Show(shown, att.files)))
-
+	for _, e := range events {
+		s.scr.Add(display.Event(e.Text))
+	}
 	content := text
-	if len(s.shellOutput) > 0 {
-		content = strings.Join(s.shellOutput, "\n\n") + "\n\n" + content
+	if text != "" {
+		s.scr.Add(display.User(attach.Show(shown, att.files)))
+		if len(s.shellOutput) > 0 {
+			content = strings.Join(s.shellOutput, "\n\n") + "\n\n" + content
+		}
+	}
+	if len(events) > 0 {
+		content = strings.TrimSpace(s.procs.Format(events) + "\n\n" + content)
 	}
 	toolDefs := s.toolDefs
 	if toolDefs != nil {
@@ -548,7 +617,14 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 			ans.Finish()
 			texts = append(texts, ans.Content())
 			out := s.tools.Handle(ctx, cancel, tc)
-			s.footer() // "Always approve" turns auto-approve on
+			// What background processes did since goes with the result.
+			if events := s.procs.Drain(); len(events) > 0 {
+				for _, e := range events {
+					s.scr.Add(display.Event(e.Text))
+				}
+				out.Content += "\n\n" + s.procs.Format(events)
+			}
+			s.footer() // "Always approve" turns auto-approve on, a process starts
 			label = "Thinking…"
 			s.scr.Status(label)
 			ans = answer()
@@ -559,7 +635,10 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 	s.scr.Changed()
 	texts = append(texts, ans.Content())
 	if err != nil {
-		s.unanswered = ui.Message{Text: text, Shown: shown, Files: files}
+		s.procs.Unread(events) // they go with the next turn
+		if text != "" {
+			s.unanswered = ui.Message{Text: text, Shown: shown, Files: files}
+		}
 		// The server may have refused the conversation (deleted, say), or
 		// kept a stopped exchange the history here leaves out: the next
 		// turn starts a new one from the messages.
@@ -577,7 +656,9 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 		s.notify("The answer failed")
 		return
 	}
-	s.unanswered = ui.Message{}
+	if text != "" {
+		s.unanswered = ui.Message{}
+	}
 	s.scr.Add(display.Sources(res.Sources))
 
 	// The server keeps the files with the conversation: the history and
@@ -592,7 +673,7 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 	for i := range res.Messages[len(messages)-1:] {
 		added = append(added, session.Entry{Message: &res.Messages[len(messages)-1+i]})
 	}
-	added[0].Text, added[0].Attachments = text, att.files
+	added[0].Text, added[0].Attachments, added[0].Event = text, att.files, text == ""
 	added[len(added)-1].Sources = res.Sources
 	if u := res.Usage; u != nil {
 		added[len(added)-1].Usage = u
@@ -605,7 +686,10 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 		s.fail("Could not save the chat: " + err.Error())
 	}
 	s.history, s.conversationID = res.Messages, res.ConversationID
-	s.sentContext, s.shellOutput = block, nil
+	s.sentContext = block
+	if text != "" {
+		s.shellOutput = nil // an event's turn left them for the user's next message
+	}
 	s.lastAnswer = strings.Join(slices.DeleteFunc(texts, func(t string) bool { return strings.TrimSpace(t) == "" }), "\n\n")
 	s.tabStatus("done", tabDone)
 	s.notify("The answer is ready")
@@ -960,6 +1044,7 @@ func (s *chatSession) help(string) {
 		{"ctrl+c", "stop the answer, clear the input; twice to quit"},
 		{"ctrl+d", "quit"},
 		{"ctrl+o", "expand or collapse tool output"},
+		{"ctrl+b", "move the agent's running command to the background"},
 		{"ctrl+z", "suspend (fg to come back)"},
 	} {
 		fmt.Fprintf(&b, "  %-20s %s\n", k[0], display.Muted(k[1]))
