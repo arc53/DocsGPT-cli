@@ -474,6 +474,18 @@ func (m *screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash = ""
 		}
 	case tea.KeyMsg:
+		// Letters that arrive together (fast typing, a slow link, tmux)
+		// come as one message, whose name may be a key's: "end", "home",
+		// "up". Each goes on its own, as typed one by one.
+		if msg.Type == tea.KeyRunes && !msg.Paste && len(msg.Runes) > 1 {
+			var cmds []tea.Cmd
+			for _, r := range msg.Runes {
+				one := msg
+				one.Runes = []rune{r}
+				cmds = append(cmds, m.key(one))
+			}
+			return m, tea.Batch(cmds...)
+		}
 		return m, m.key(msg)
 	case spinMsg:
 		if m.label == "" {

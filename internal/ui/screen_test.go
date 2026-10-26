@@ -315,3 +315,19 @@ func TestScreenPanel(t *testing.T) {
 		t.Fatalf("a menu the user opened: %v", r)
 	}
 }
+
+// TestScreenRunsOfLetters: letters that come in one message are text, even
+// when they spell a key's name.
+func TestScreenRunsOfLetters(t *testing.T) {
+	m := testScreen(60, 12)
+	for _, w := range []string{"then", " ", "end", " ", "home", " ", "pgup", " ", "up"} {
+		if w == " " {
+			m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+			continue
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(w)})
+	}
+	if got := m.ed.text(); got != "then end home pgup up" {
+		t.Fatalf("editor = %q", got)
+	}
+}
