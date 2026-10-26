@@ -16,7 +16,9 @@ import (
 )
 
 func setupTestHome(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 }
 
 // serveRelease builds a valid release archive for the current platform and

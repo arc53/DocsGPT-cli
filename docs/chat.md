@@ -175,6 +175,7 @@ Type `/` to see them, filtered as you type. Tab completes, Enter runs.
 | `/export [file]` | Save the conversation as markdown (default `docsgpt-<date>.md`; `~/` is your home directory; asks before overwriting a file, No by default) |
 | `/think` | Show or hide the model's reasoning |
 | `/approve` | Run tool calls without asking (the footer then shows `auto-approve`), or ask again; see [Tools](tools.md#always-approve) |
+| `/mcp` | Show the [MCP servers](mcp.md) and their tools |
 | `/key` | Switch to another stored key, or add one |
 | `/settings` | Open the settings menu |
 | `/changelog` | Show what's new in the latest release (fetched when the last update check is over a day old) |
@@ -308,7 +309,8 @@ how to work with the tools (explore first, `read_file` before `cat`, change
 files with `edit_file`, non-interactive commands, timeouts for long runs) and
 how to code in a project (follow its instructions and style, keep changes to
 the request, check instead of guessing, run the build or tests, don't commit or
-delete unless asked, name the files changed).
+delete unless asked, name the files changed). With [MCP servers](mcp.md), it
+lists them with their tools and what each says about itself.
 
 The block is sent again only when it changes. `--no-context` sends none of it
 (the tools stay available). Change the settings with `/settings`,

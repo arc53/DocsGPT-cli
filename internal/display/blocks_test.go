@@ -132,6 +132,14 @@ func TestFit(t *testing.T) {
 	}
 }
 
+func TestWrapped(t *testing.T) {
+	got := Wrapped("✓ fs · 3 tools\n    read_file, write_file, list_directory").Lines(24)
+	want := []string{"✓ fs · 3 tools", "    read_file,", "    write_file,", "    list_directory"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("Wrapped: %q", got)
+	}
+}
+
 // TestToolBlockRunning: a started command shows its running time from its
 // first second, in whole seconds, until it closes.
 func TestToolBlockRunning(t *testing.T) {

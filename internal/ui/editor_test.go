@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -198,7 +199,7 @@ func TestEditorHistory(t *testing.T) {
 	if want := []string{"first", "multi\nline", "last"}; strings.Join(h.entries, "|") != strings.Join(want, "|") {
 		t.Fatalf("entries = %q", h.entries)
 	}
-	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(path); err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("history file mode: %v %v", fi.Mode(), err)
 	}
 
@@ -237,7 +238,7 @@ func TestHistoryRewrite(t *testing.T) {
 	if got := LoadHistory(path).entries; len(got) != historyMax || got[len(got)-1] != fmt.Sprintf("entry %d", historyMax+historyMax/2) {
 		t.Fatalf("%d entries, last %q", len(got), got[len(got)-1])
 	}
-	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(path); err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("history file mode: %v %v", fi, err)
 	}
 	if files, _ := os.ReadDir(dir); len(files) != 1 {

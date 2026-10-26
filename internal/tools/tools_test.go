@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -453,10 +454,12 @@ func TestSessionFileCalls(t *testing.T) {
 	if got := call("read_file", `{"path":"notes.txt"}`); got != "hello\n" {
 		t.Errorf("read in the working directory: %q", got)
 	}
-	if got := call("read_file", `{"path":"`+outside+`"}`); strings.Contains(got, "the secret") || !strings.Contains(got, "could not be approved") {
+	// json.Marshal: Windows paths have backslashes.
+	q := func(p string) string { b, _ := json.Marshal(p); return string(b) }
+	if got := call("read_file", `{"path":`+q(outside)+`}`); strings.Contains(got, "the secret") || !strings.Contains(got, "could not be approved") {
 		t.Errorf("read outside the working directory without approval: %q", got)
 	}
-	if got := call("write_file", `{"path":"`+proj+`","content":"x"}`); !strings.Contains(got, "not a regular file") {
+	if got := call("write_file", `{"path":`+q(proj)+`,"content":"x"}`); !strings.Contains(got, "not a regular file") {
 		t.Errorf("write to a directory: %q", got)
 	}
 	if runtime.GOOS != "windows" {

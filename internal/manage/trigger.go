@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"time"
 
@@ -35,6 +36,9 @@ func ReadPayload(file string, stdin io.Reader) ([]byte, error) {
 		data, err = io.ReadAll(stdin)
 	} else {
 		data, err = os.ReadFile(file)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("read payload: %s: no such file", file)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read payload: %w", err)

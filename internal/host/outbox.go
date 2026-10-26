@@ -162,6 +162,8 @@ func loadOutbox(path string, send sendFunc, p deliveryPolicy, logf func(string))
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
+	// Closed before rewrite replaces it: Windows cannot rename over an open file.
+	f.Close()
 	if o.meta.InvocationID == "" {
 		return nil, errors.New("journal has no invocation id")
 	}

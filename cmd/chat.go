@@ -18,6 +18,7 @@ import (
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	ctxenrich "github.com/arc53/DocsGPT-cli/internal/context"
 	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/mcp"
 	"github.com/arc53/DocsGPT-cli/internal/session"
 	"github.com/arc53/DocsGPT-cli/internal/tools"
 	"github.com/arc53/DocsGPT-cli/internal/ui"
@@ -79,6 +80,12 @@ type chatSession struct {
 	tools         *tools.Session
 	quit          bool
 
+	// mcp runs the MCP servers started (tools.MCP too), of mcpAll, the
+	// servers configured; mcpChecked is set once failures to start were told.
+	mcp        *mcp.Manager
+	mcpAll     []mcp.Server
+	mcpChecked bool
+
 	// tab and tabColor are the status the tab shows (see tabStatus), kept
 	// to show it again when the setting changes.
 	tab, tabColor string
@@ -112,6 +119,7 @@ func init() {
 		{name: "export", args: "[file]", desc: "Save the conversation as markdown", run: (*chatSession).export},
 		{name: "think", desc: "Show or hide the model's reasoning", run: (*chatSession).toggleThinking},
 		{name: "approve", desc: "Run tool calls without asking, or ask again", run: (*chatSession).toggleApprove},
+		{name: "mcp", desc: "Show the MCP servers and their tools", run: (*chatSession).mcpStatus},
 		{name: "key", desc: "Switch to another agent API key", run: (*chatSession).switchKey},
 		{name: "settings", desc: "Change settings", run: (*chatSession).settings},
 		{name: "changelog", desc: "Show what's new in the latest release", run: (*chatSession).changelog},
@@ -189,6 +197,7 @@ func runChat(first string) error {
 		}
 	case <-time.After(3 * time.Second):
 	}
+	s.mcp.Close()
 
 	var sig ui.Signal
 	hup := errors.As(err, &sig) && sig.Signal == syscall.SIGHUP // no terminal left
@@ -233,6 +242,7 @@ func (s *chatSession) loop(first string) {
 		s.top()
 	}
 	s.whatsNew()
+	s.startMCP()
 	s.footer()
 	if first = strings.TrimSpace(first); first != "" {
 		s.send(first, first)
@@ -491,15 +501,20 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 		s.notify("A message was not sent")
 		return
 	}
+	s.mcpReady()
 	s.scr.Add(display.User(attach.Show(shown, att.files)))
 
 	content := text
 	if len(s.shellOutput) > 0 {
 		content = strings.Join(s.shellOutput, "\n\n") + "\n\n" + content
 	}
+	toolDefs := s.toolDefs
+	if toolDefs != nil {
+		toolDefs = append(slices.Clip(toolDefs), s.mcp.Definitions()...)
+	}
 	block := ""
 	if !globalNoContext {
-		if block = ctxenrich.Build(s.cfg.Settings, s.toolDefs != nil); block != s.sentContext {
+		if block = ctxenrich.Build(s.cfg.Settings, s.toolDefs != nil, mcpContext(s.mcp)...); block != s.sentContext {
 			content = ctxenrich.Prepend(block, content)
 		}
 	}
@@ -519,7 +534,7 @@ func (s *chatSession) send(text, shown string, files ...attach.File) {
 	var texts []string
 	label := "Thinking…"
 	res, err := retrying(ctx, s.client, s.cfg.Settings, s.scr.Status, "").Run(ctx, messages, docsgpt.RunOptions{
-		Tools: s.toolDefs, Stream: !globalNoStream, ConversationID: s.conversationID,
+		Tools: toolDefs, Stream: !globalNoStream, ConversationID: s.conversationID,
 		OnDelta: func(delta docsgpt.Delta, _ string) {
 			if ans.Delta(delta) {
 				if delta.Content != "" && label != "Answering…" {
@@ -673,6 +688,60 @@ func (s *chatSession) resume(sess *session.Session) {
 	if note != "" {
 		s.scr.Add(display.Text(display.Warn("! ") + display.Dim(note)))
 	}
+}
+
+// startMCP starts the MCP servers, asking about the project's new ones
+// first, unless tools are off.
+func (s *chatSession) startMCP() {
+	if s.toolDefs == nil {
+		return
+	}
+	all, start, notes := mcpServers(s.tools.UI, true)
+	s.tabStatus("", "") // the approvals leave "working"
+	for _, n := range notes {
+		s.fail(n)
+	}
+	s.mcpAll = all
+	if len(start) > 0 {
+		s.mcp = mcp.Start(start, Version)
+		s.tools.MCP = s.mcp
+	}
+}
+
+// mcpReady waits for the MCP servers still starting, before the first
+// message (Esc stops waiting: the message goes without them), and tells
+// which failed.
+func (s *chatSession) mcpReady() {
+	if s.mcp == nil || s.mcpChecked {
+		return
+	}
+	if s.mcp.Starting() {
+		ctx, cancel := context.WithCancel(s.ctx)
+		s.scr.Busy("Starting MCP servers…", cancel)
+		err := s.mcp.Wait(ctx)
+		s.scr.Busy("", nil)
+		cancel()
+		if err != nil {
+			return
+		}
+	}
+	s.mcpChecked = true
+	for _, f := range mcpFailures(s.mcp) {
+		s.fail(f)
+	}
+}
+
+func (s *chatSession) mcpStatus(string) {
+	if s.toolDefs == nil {
+		s.note("Tools are off (--no-tools): no MCP server was started.")
+		return
+	}
+	if len(s.mcpAll) == 0 {
+		s.note("No MCP servers: add them to " + display.ShortPath(mcp.UserFile()) + " or the project's .mcp.json (docsgpt-cli mcp --help).")
+		return
+	}
+	text, _ := describeServers(s.mcpAll, s.mcp.Status())
+	s.scr.Add(display.Wrapped(text))
 }
 
 func (s *chatSession) newConversation(string) {

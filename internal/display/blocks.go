@@ -76,6 +76,21 @@ func Text(s string) ui.Block {
 	return newCached(func(int) []string { return strings.Split(strings.TrimRight(s, "\n"), "\n") })
 }
 
+// Wrapped is a block of styled lines wrapped at spaces, each under its
+// indent.
+func Wrapped(s string) ui.Block {
+	return newCached(func(width int) []string {
+		var out []string
+		for _, l := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+			indent := len(l) - len(strings.TrimLeft(l, " "))
+			for _, row := range wrap(l[indent:], width-indent) {
+				out = append(out, l[:indent]+row)
+			}
+		}
+		return out
+	})
+}
+
 // Note is a dim notice, wrapped to the width.
 func Note(s string) ui.Block { return styled(T.Dim, "", s) }
 

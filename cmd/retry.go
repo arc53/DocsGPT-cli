@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"syscall"
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
@@ -65,9 +64,9 @@ func failureReason(err error) string {
 	switch {
 	case errors.As(err, &apiErr):
 		return fmt.Sprintf("%d %s", apiErr.StatusCode, http.StatusText(apiErr.StatusCode))
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case errors.Is(err, errRefused):
 		return "connection refused"
-	case errors.Is(err, syscall.ECONNRESET):
+	case errors.Is(err, errReset):
 		return "connection reset"
 	case errors.As(err, &netErr) && netErr.Timeout():
 		return "timed out"

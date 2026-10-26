@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -90,7 +89,7 @@ func (p RetryPolicy) delay(attempt int, err error) (time.Duration, bool) {
 		return 0, false
 	}
 	// Nothing listening is more often a wrong URL than a restart: one try.
-	if attempt > 0 && errors.Is(err, syscall.ECONNREFUSED) {
+	if attempt > 0 && errors.Is(err, errRefused) {
 		return 0, false
 	}
 	d := p.BaseDelay << attempt
@@ -141,6 +140,6 @@ func Retryable(err error) bool {
 	if opErr := (*net.OpError)(nil); errors.As(err, &opErr) {
 		return !strings.HasSuffix(opErr.Op, " error")
 	}
-	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+	return errors.Is(err, errRefused) || errors.Is(err, errReset) ||
 		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }

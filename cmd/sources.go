@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"text/tabwriter"
 	"time"
@@ -279,6 +281,9 @@ func runSourcesUpload(ctx context.Context, c *manage.Client, opts uploadOptions,
 	}
 	for _, f := range opts.Files {
 		st, err := os.Stat(f)
+		if errors.Is(err, fs.ErrNotExist) {
+			return usageErrf("%s: no such file", f)
+		}
 		if err != nil {
 			return usageErr(err)
 		}

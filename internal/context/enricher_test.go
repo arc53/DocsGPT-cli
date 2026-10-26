@@ -31,7 +31,7 @@ func TestBuild(t *testing.T) {
 	got := Build(s, false)
 	for _, want := range []string{
 		"<context>\n", "Working directory: " + sub, "Files in it: CLAUDE.md, dir/, f00", "(+5 more)",
-		"from ../AGENTS.md:\n<instructions>\nroot rules\n</instructions>\nProject instructions from CLAUDE.md:\n<instructions>\nsub rules",
+		"from " + filepath.FromSlash("../AGENTS.md") + ":\n<instructions>\nroot rules\n</instructions>\nProject instructions from CLAUDE.md:\n<instructions>\nsub rules",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Build() lacks %q:\n%s", want, got)
@@ -59,5 +59,29 @@ func TestBuild(t *testing.T) {
 	}
 	if got := Prepend("", "q"); got != "q" {
 		t.Errorf("Prepend without context = %q", got)
+	}
+}
+
+func TestBuildMCPServers(t *testing.T) {
+	t.Chdir(t.TempDir())
+	servers := []MCPServer{
+		{Name: "laravel-boost", Tools: []string{"search-docs", "database-query"}, Instructions: "Use search-docs first."},
+		{Name: "quiet", Tools: []string{"x"}},
+	}
+	got := Build(config.Settings{}, true, servers...)
+	for _, want := range []string{
+		"MCP servers, whose tools you have as mcp__<server>__<tool>",
+		"- laravel-boost: search-docs, database-query\n- quiet: x\n",
+		"<server_instructions server=\"laravel-boost\">\nUse search-docs first.\n</server_instructions>\n<tools_guide>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Build() lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `server="quiet"`) {
+		t.Errorf("instructions of a server that has none:\n%s", got)
+	}
+	if got := Build(config.Settings{SendCurrentDirectory: true}, false, servers...); strings.Contains(got, "mcp__") {
+		t.Errorf("servers listed without tools:\n%s", got)
 	}
 }

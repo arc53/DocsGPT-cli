@@ -314,6 +314,7 @@ func TestAnswerTarget(t *testing.T) {
 			t.Errorf("path %q", r.URL.Path)
 		}
 		gotBody, _ = io.ReadAll(r.Body)
+		time.Sleep(20 * time.Millisecond) // a tick of the Windows clock, so the latency is not 0
 		io.WriteString(w, `{"conversation_id":"c1","answer":"ANSWER-OK","sources":[{"title":"A"}],"tool_calls":[{"tool_name":"t","arguments":"a"}],"thought":"th"}`)
 	}))
 	defer srv.Close()

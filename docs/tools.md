@@ -10,7 +10,8 @@ tools:
 | `edit_file` | Replaces exact pieces of text in a file | Always, with the diff first |
 | `write_file` | Writes a whole file, creating missing directories | Always, with a short diff first |
 
-Paths may start with `~` (your home directory).
+Paths may start with `~` (your home directory). [MCP servers](mcp.md) add
+their own tools, approved the same way.
 
 Each call shows as a block: the command or path, the output's last lines while
 it runs, with `running · 12s` under them once it has taken a second, then
