@@ -618,11 +618,12 @@ func (s *chatSession) exchange(text, shown string, files []attach.File, events [
 			texts = append(texts, ans.Content())
 			out := s.tools.Handle(ctx, cancel, tc)
 			// What background processes did since goes with the result.
-			if events := s.procs.Drain(); len(events) > 0 {
-				for _, e := range events {
+			if more := s.procs.Drain(); len(more) > 0 {
+				for _, e := range more {
 					s.scr.Add(display.Event(e.Text))
 				}
-				out.Content += "\n\n" + s.procs.Format(events)
+				out.Content += "\n\n" + s.procs.Format(more)
+				events = append(events, more...)
 			}
 			s.footer() // "Always approve" turns auto-approve on, a process starts
 			label = "Thinking…"
@@ -635,7 +636,9 @@ func (s *chatSession) exchange(text, shown string, files []attach.File, events [
 	s.scr.Changed()
 	texts = append(texts, ans.Content())
 	if err != nil {
-		s.procs.Unread(events) // they go with the next turn
+		// The turn is dropped from the history: its events, those that came
+		// with its tool results too, go with the next one.
+		s.procs.Unread(events)
 		if text != "" {
 			s.unanswered = ui.Message{Text: text, Shown: shown, Files: files}
 		}
