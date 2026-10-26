@@ -15,6 +15,7 @@ import (
 	"github.com/arc53/DocsGPT-cli/internal/config"
 	ctxenrich "github.com/arc53/DocsGPT-cli/internal/context"
 	"github.com/arc53/DocsGPT-cli/internal/display"
+	"github.com/arc53/DocsGPT-cli/internal/mcp"
 	"github.com/arc53/DocsGPT-cli/internal/tools"
 	"github.com/arc53/DocsGPT-cli/internal/ui"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
@@ -164,9 +165,32 @@ func runAsk(args []string, out *askResult) error {
 
 	// Tool calls need a person on stdin to approve them.
 	offerTools := !globalNoTools && (globalAutoApprove || stdinIsTerminal())
+	toolSession := &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second}
+
+	ctx, stop := signalContext()
+	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var toolDefs []docsgpt.Tool
+	if offerTools {
+		toolDefs = tools.ToolDefinitions(globalTimeout)
+		_, start, notes := mcpServers(tools.StderrUI(), stdinIsTerminal())
+		if len(start) > 0 {
+			toolSession.MCP = mcp.Start(start, Version)
+			defer toolSession.MCP.Close()
+			if err := waitServers(ctx, toolSession.MCP); err != nil {
+				return err
+			}
+			notes = append(notes, mcpFailures(toolSession.MCP)...)
+			toolDefs = append(toolDefs, toolSession.MCP.Definitions()...)
+		}
+		for _, n := range notes {
+			fmt.Fprintln(os.Stderr, display.Warn("! ")+display.Muted(n))
+		}
+	}
 	fullQuestion := question
 	if !globalNoContext {
-		fullQuestion = ctxenrich.Prepend(ctxenrich.Build(cfg.Settings, offerTools), question)
+		fullQuestion = ctxenrich.Prepend(ctxenrich.Build(cfg.Settings, offerTools, mcpContext(toolSession.MCP)...), question)
 	}
 
 	messages := []docsgpt.Message{
@@ -181,16 +205,6 @@ func runAsk(args []string, out *askResult) error {
 			fmt.Println(display.Dim(display.Safe(markers(att.files))) + "\n")
 		}
 	}
-
-	ctx, stop := signalContext()
-	defer stop()
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var toolDefs []docsgpt.Tool
-	if offerTools {
-		toolDefs = tools.ToolDefinitions(globalTimeout)
-	}
-	toolSession := &tools.Session{AutoApprove: globalAutoApprove, Timeout: time.Duration(globalTimeout) * time.Second}
 
 	var renderer *display.StreamRenderer
 	show := func(string) {}
