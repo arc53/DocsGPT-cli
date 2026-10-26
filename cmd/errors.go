@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/config"
@@ -95,7 +94,7 @@ func explain(err error, baseURL, keyName string) string {
 	switch {
 	case errors.As(err, &dnsErr) && dnsErr.IsNotFound:
 		return fmt.Sprintf("Can't reach %s: no such host. Is the server URL right? Change it with: docsgpt-cli config set url <url>", host)
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case errors.Is(err, errRefused):
 		return fmt.Sprintf("Can't reach %s: connection refused. Is the server running at %s?", host, baseURL)
 	case errors.As(err, &recordErr), strings.Contains(err.Error(), "server gave HTTP response to HTTPS client"):
 		return fmt.Sprintf("Can't reach %s: it does not speak TLS. Is the URL meant to be http://?", host)
@@ -103,12 +102,13 @@ func explain(err error, baseURL, keyName string) string {
 		why = "its TLS certificate is not trusted (" + strings.TrimPrefix(certErr.Err.Error(), "x509: ") + ")"
 	case errors.As(err, &netErr) && netErr.Timeout():
 		why = "it did not answer in time"
-	case errors.Is(err, syscall.ECONNRESET):
+	case errors.Is(err, errReset):
 		why = "the connection was reset"
 	case errors.As(err, &opErr):
 		why = opErr.Err.Error()
 	default:
 		why = urlErr.Err.Error()
 	}
-	return fmt.Sprintf("Can't reach %s: %s.", host, why)
+	// Winsock messages end with a period of their own.
+	return fmt.Sprintf("Can't reach %s: %s.", host, strings.TrimSuffix(why, "."))
 }
