@@ -7,6 +7,9 @@ Everything lives in `~/.docsgpt/`:
 | `config.json` | Server, keys, token, settings |
 | `history` | Your chat prompts, for ↑ |
 | `sessions/` | Saved chats, per directory |
+| `mcp.json` | Your [MCP servers](mcp.md) |
+| `mcp-approvals.json` | Your answers about projects' MCP servers |
+| `logs/` | What MCP servers write to stderr, one file each |
 | `bench/` | Bench run history |
 | `host.yml`, `host.key`, `host.log` | [Host mode](host.md) pairing and log |
 

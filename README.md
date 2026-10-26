@@ -55,6 +55,9 @@ More in the [quickstart](docs/quickstart.md).
   `-r` picks one. [Sessions](docs/chat.md#sessions)
 - **Local tools.** The agent can run commands and read and write files, after
   you approve each one. [Tools and approval](docs/tools.md)
+- **MCP servers.** Give the agent the tools of MCP servers such as Laravel
+  Boost, from `~/.docsgpt/mcp.json` or the project's `.mcp.json`.
+  [MCP servers](docs/mcp.md)
 - **Sources shown.** Answers end with the documents they drew on.
 - **Agents as code.** Export agents as YAML, review a plan, apply it from CI.
   [Agents as code](docs/agents-as-code.md)

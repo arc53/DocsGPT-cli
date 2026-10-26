@@ -38,7 +38,7 @@ sdk/                 → SEPARATE Go module github.com/arc53/DocsGPT-cli/sdk, pa
                        path element); go.work points local builds at ./sdk, and
                        release builds set GOWORK=off to use the pinned version.
                        sdk/README.md is the module's user doc
-docs/                → user docs: install (+ updating), quickstart, chat, tools,
+docs/                → user docs: install (+ updating), quickstart, chat, tools, mcp,
                        configuration, agents-as-code, sources, bench, host, ci;
                        docs/README.md is the index
 examples/            → agents/ (sample definition), bench/ (suite, one case per
@@ -62,6 +62,10 @@ cmd/
   login.go           → login / logout / whoami / hidden keys: agent API keys + the PAT, the key picker, first-run key prompt (chatKey)
   agents.go          → agents list / export / plan / apply / delete (agents as code), agents trigger (incoming webhook); flags + output only, the flows live in internal/manage
   sources.go         → sources list / upload / delete, agents prompts / agents tools (old `prompts list` / `tools list` hidden)
+  mcp.go             → mcp list (starts the servers, lists tools, exit 1 on a failure) / mcp reset (forget the project's
+                       approvals); mcpServers: load + asking about a project's undecided servers (approveServer,
+                       through a tools.UI: the command as the title, env/cwd as written; Start / Not now / Never),
+                       describeServers (mcp list and /mcp)
   utils.go           → printError, codeBlocks/extractCommand, copyToClipboard, signalContext (INT/TERM/HUP cancel with a ui.Signal cause) + terminated
 internal/
   earlytheme/        → pins lipgloss's background before bubbletea's init (see cmd/docsgpt-cli)
@@ -96,7 +100,27 @@ internal/
   context/
     enricher.go      → the <context> block: cwd, capped listing, AGENTS.md/CLAUDE.md (git root → cwd, 12KB), shell history (opt-in);
                        with tools: `System:` (OS/arch, sh -c or cmd.exe /C, no terminal),
+                       the MCP servers with their tools and instructions (2KB each),
                        <tools_guide> and <coding_guide> (toolGuide), last in the block
+  mcp/               → MCP client, stdio only (modelcontextprotocol/go-sdk):
+    config.go        → Server; Load: ~/.docsgpt/mcp.json + the project's .mcp.json (cwd up to the git root;
+                       its entries win by name), `mcpServers` {command, args, env, cwd, disabled}; ${VAR}
+                       and ${VAR:-default} (unset = Server.Err); type/url = Err (remote not supported);
+                       a project's servers run in the file's dir, the user's in cwd; CommandLine/Settings
+                       show the entry as written (no expanded secrets)
+    approvals.go     → ~/.docsgpt/mcp-approvals.json (0600): file#name → sha256 of the compacted raw entry
+                       + allow; Decided (user servers always Approved) / Remember / Forget
+    client.go        → Manager: Start (each server in the background, 30s), Wait, Definitions (names
+                       mcp__<server>__<tool> cleaned to [A-Za-z0-9_-], >58 chars or taken → cut + 6 hex of
+                       sha1, so the server's `_ct<N>` still fits in 64; schemas: object, properties, no
+                       $schema), Lookup, Call (restarts a server whose session ended: EOF / connection
+                       closed; never repeats a call), Status, Close
+    process.go       → the server's process (own session/hidden console, proc_*.go; stop: stdin closed →
+                       1s → TERM group → 1s → KILL, then the group's orphans); stdout keeps only JSON lines
+                       (others go to the log); stderrLog: ~/.docsgpt/logs/mcp-<name>.log (0600, restarts
+                       past 1MB) + the last 20 lines for errors and /mcp
+    result.go        → Result: text parts, images (≤20MB) as image parts, structured content when alone
+    mcptest/         → test server (the test binary re-run): Main for TestMain, Server
   attach/
     attach.go        → File (id, path, name, image, size, sha256, ref, clipboard; Marker
                        `[image #1 · 240 KB]` / `[file #2 · spec.pdf · 1.2 MB]`), Open
@@ -258,7 +282,11 @@ internal/
     shell.go         → RunShell: the chat's `!cmd` (no approval, no time limit)
     procgroup_*.go   → own process group / session, whole-tree kill (Unix), taskkill (Windows)
     truncate.go      → model-bound output: last 2000 lines / 50KB, line/rune safe, with
-                       a note about the dropped head; tailBuffer bounds the capture
+                       a note about the dropped head; tailBuffer bounds the capture;
+                       truncateHead (MCP results: the first 2000 lines / 50KB)
+    mcp.go           → callMCP: an MCP tool call (title `server · tool (MCP[, read-only])`, args a
+                       line each; Always allow the tool (l) or the server (s), allowedMCP; 5 min;
+                       IsError → ✗ and "[The tool reported an error.]"); Handle looks MCP names up first
   update/
     update.go        → GitHub latest-release lookup, semver comparison, mode constants
     apply.go         → Asset download, sha256 verify, binary swap + backup, Rollback, host CheckAndApply
@@ -435,7 +463,8 @@ or with TERM=dumb it refuses.
   feedback below), /copy (whole answer, or a pick of its code
   blocks), /export [file] (markdown, default `docsgpt-<date>.md`; `~/` expanded; an
   existing file only after a confirmation, default No), /think, /approve (toggles
-  the tools Session's AutoApprove; "Always allow" choices are kept), /key (switch
+  the tools Session's AutoApprove; "Always allow" choices are kept), /mcp (the MCP
+  servers: describeServers), /key (switch
   or add a key → new conversation), /settings (the config menu in the panel; the
   mouse setting applies at once), /changelog (latest release notes), /help, /quit (/exit). An unknown `/word` is an
   error; `/path/like …` is a message. `!cmd` runs through `tools.RunShell` (no
@@ -548,6 +577,8 @@ Modes via `settings.auto_update` ("on" default / "notify" / "off", `config set a
 2. If model returns `finish_reason: "tool_calls"`, CLI shows the call's title (`$ cmd` with `· timeout 10m` when the model set one, `read path`, `edit path (+N −M)` / `write path (+N −M)` with a short diff) and asks: Approve (a), Always allow (l, only when there is a narrow key), Always approve (p: every later call of the session unasked, i.e. AutoApprove), Deny (d), Edit (e, commands only: prefilled input, then asked again); the muted line under the row describes the highlighted choice. Ctrl+C/Esc at the prompt cancels the whole run
 3. On approve: executes locally (command output in a live 5-line tail, then `✓ exit 0 · 1.2s` / `✗ …`), sends result back as `role: "tool"` message
 4. Model continues with tool results — loop repeats until `finish_reason: "stop"`
+
+MCP (docs/mcp.md): unless `--no-tools`, chat (`startMCP` after the header; a project's servers not decided yet are asked about in the panel) and ask (when tools are offered; asked on a TTY, else skipped with a stderr note) start the servers; the chat's first message waits for them (`mcpReady`: Esc skips the wait; failures shown once), ask waits before asking; their definitions follow the built-in ones and the context block lists them. Calls go through `Session.Handle` → `callMCP`, approved like commands. Closed on exit (ask: defer; chat: after Run)
 5. Security stance (like pi): approval is the only gate, there is no command blocklist. `read_file` asks only for files outside the working directory (symlinks resolved), when the working directory is the home directory or above it (compared as files, so case-insensitive spellings count), or for secret-looking names on the way (`.env*`, `.envrc`, `.netrc`, `*.pem`, `*.key`, `id_*`, `.ssh`, `.aws`, `.docsgpt`, `*_history`, … `secretNames`); devices, FIFOs and directories are refused. "Always allow" lasts for the session: writes and edits inside the cwd (not secret-looking, not in `.git`; others always ask), all reads, or later commands with the same key run in the cwd (a `working_directory` outside it or secret-looking always asks) — the program plus its subcommand word (`git status`, `npm test`), the program alone for plain read-only programs (`ls`, `cat`, `rg`) or option-only calls — and each later command is re-checked. Never offered for shell syntax beyond quotes, `VAR=value` prefixes, programs given as a path, code runners (shells, wrappers, interpreters, `find`, `make`, `tar`, editors, `cmd`/`powershell`/`start`), risky options (`-c`, `-C`, `-e`, `-o`, `-x`, `--exec*`, `--upload-pack`, `--git-dir`, …), risky subcommands (`git config`, `npm exec`, `docker run`), a path argument leaving the cwd (absolute, `~`, `..`), or options before the subcommand other than known value-less ones (`git --no-pager`); the doc comment of `alwaysKey` is the source of truth. Known gap (documented in docs/tools.md): a subcommand key covers its destructive forms (`git branch` → `git branch -D`). Commands run without the terminal, so password prompts fail at once. `--auto-approve` (or "Always approve", or `/approve` in chat) skips every prompt but still prints each title and status. Host mode (no person at the device) keeps its own denylist in `internal/host/invocation.go`
 
 ## Config
@@ -573,7 +604,7 @@ Single file: `~/.docsgpt/config.json`
 
 `token` is optional (written by `login`, removed by `logout`, omitted when empty); the file is always written as a 0600 temp file and renamed into place (atomic, never readable by others, tightens an older permissive file). Environment overrides: `DOCSGPT_API_KEY`, `DOCSGPT_TOKEN`, `DOCSGPT_URL`. `config get|set <key>` use the setting names `url` (= `base_url`), `default_key` and the `settings` fields; `config show` redacts keys (`config.RedactKey`, first/last 4) and the token.
 
-Settings missing from the file keep their defaults (`Load` decodes over `DefaultConfig`); `send_last_commands` defaults to false for new configs only, since saved configs always carry it. Also under `~/.docsgpt`: `history` (chat prompts) and `sessions/` (saved chats).
+Settings missing from the file keep their defaults (`Load` decodes over `DefaultConfig`); `send_last_commands` defaults to false for new configs only, since saved configs always carry it. Also under `~/.docsgpt`: `history` (chat prompts), `sessions/` (saved chats), `mcp.json` (the user's MCP servers), `mcp-approvals.json` and `logs/` (MCP servers' stderr).
 
 Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on first run.
 
@@ -583,6 +614,7 @@ Auto-migrates from old `~/.docsgpt-keys.json` + `~/.docsgpt-settings.json` on fi
 - `charmbracelet/glamour` + `lipgloss` — markdown rendering and styling (our own style, no auto-style query)
 - `alecthomas/chroma` — code block highlighting, colored from the palette
 - `charmbracelet/bubbletea` (v1) — every interactive prompt, and the full-screen chat
+- `modelcontextprotocol/go-sdk` — MCP client (IOTransport over the CLI's own process pipes)
 - `charmbracelet/x/ansi`, `muesli/termenv`, `mattn/go-isatty`, `x/term`, `x/sys` — widths and wrapping, color profile, TTY checks, raw mode / echo off
 - `atotto/clipboard` — clipboard access
 - `rivo/uniseg` — grapheme widths for the chat's mouse selection

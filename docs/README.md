@@ -13,6 +13,7 @@ New here? Start with the [Quickstart](quickstart.md).
 - [Chat](chat.md): editor keys, attachments, slash commands, `!cmd`, sessions, context
 - [Tools and approval](tools.md): what the agent can do on your machine, and
   what you are asked
+- [MCP servers](mcp.md): more tools for the agent, such as Laravel Boost
 - [Configuration](configuration.md): config file, credentials, environment
   variables, settings
 
