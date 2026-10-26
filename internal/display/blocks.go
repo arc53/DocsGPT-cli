@@ -91,6 +91,37 @@ func Wrapped(s string) ui.Block {
 	})
 }
 
+// Event is something a background process did, as the model is told of
+// it: a "◆" and its first line, then the last 6 lines of the rest, dim.
+func Event(text string) ui.Block {
+	text = StripControls(strings.TrimRight(text, "\n"))
+	c := newCached(func(width int) []string {
+		all := strings.Split(text, "\n")
+		const more = 6
+		rest := all[1:]
+		cut := 0
+		if len(rest) > more {
+			rest, cut = rest[len(rest)-more:], len(rest)-more
+		}
+		var out []string
+		for i, l := range wrap(all[0], width-2) {
+			if i == 0 {
+				out = append(out, T.Accent.Render("◆")+" "+T.Muted.Render(l))
+			} else {
+				out = append(out, "  "+T.Muted.Render(l))
+			}
+		}
+		if cut > 0 {
+			out = append(out, "  "+T.Dim.Render(fmt.Sprintf("… %d earlier %s", cut, map[bool]string{true: "line", false: "lines"}[cut == 1])))
+		}
+		for _, l := range rest {
+			out = append(out, "  "+T.Dim.Render(ansi.Truncate(l, max(width-2, 10), "…")))
+		}
+		return out
+	})
+	return c
+}
+
 // Note is a dim notice, wrapped to the width.
 func Note(s string) ui.Block { return styled(T.Dim, "", s) }
 

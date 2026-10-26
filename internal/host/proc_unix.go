@@ -8,6 +8,11 @@ import (
 	"syscall"
 )
 
+// shellCommand runs command with sh -c.
+func shellCommand(command string) *exec.Cmd {
+	return exec.Command("sh", "-c", command)
+}
+
 // newGroup starts cmd in a session of its own: a process group the daemon
 // can signal as a whole, so the children of `sh -c` stop with it, and no
 // controlling terminal, so a prompt (sudo, ssh) fails at once instead of

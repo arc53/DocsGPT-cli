@@ -103,6 +103,7 @@ wheel then does whatever the terminal does on a full-screen program: many send
 | Ctrl+D | Quit |
 | Ctrl+Z | Suspend (`fg` to come back) |
 | Ctrl+O | Expand or collapse the output of tool calls ([Tools](tools.md)); a click on one toggles it alone |
+| Ctrl+B | While the agent's command runs: move it to the [background](tools.md#background-processes-and-monitors) |
 | Ctrl+L | Redraw the window |
 
 Shift+Enter needs a terminal that can tell it from Enter: one with the kitty
@@ -174,8 +175,10 @@ Type `/` to see them, filtered as you type. Tab completes, Enter runs.
 | `/copy` | Copy the last answer, or one of its code blocks |
 | `/export [file]` | Save the conversation as markdown (default `docsgpt-<date>.md`; `~/` is your home directory; asks before overwriting a file, No by default) |
 | `/think` | Show or hide the model's reasoning |
-| `/approve` | Run tool calls without asking (the footer then shows `auto-approve`), or ask again; see [Tools](tools.md#always-approve) |
+| `/approve` | Run tool calls without asking in this project, in later chats too (the footer then shows `auto-approve`), or ask again; see [Tools](tools.md#always-approve) |
+| `/permissions` | Show what runs without asking in this project, and ask about one or all again; see [Tools](tools.md#kept-for-the-project) |
 | `/mcp` | Show the [MCP servers](mcp.md) and their tools |
+| `/ps` | Show the [background processes](tools.md#background-processes-and-monitors): their output, or stop one |
 | `/key` | Switch to another stored key, or add one |
 | `/settings` | Open the settings menu |
 | `/changelog` | Show what's new in the latest release (fetched when the last update check is over a day old) |
@@ -283,7 +286,8 @@ the status shown at once. `docsgpt-cli config set tab_status off` (or
 ## Stopping
 
 Esc or Ctrl+C stops the answer, or the command the agent (or `!cmd`) is
-running, and leaves you in the chat; messages you queued meanwhile go back into
+running, and leaves you in the chat (Ctrl+B instead moves the agent's command
+to the [background](tools.md#background-processes-and-monitors)); messages you queued meanwhile go back into
 the input. Esc or Ctrl+C at an approval stops the whole answer. A `TERM` or
 `HUP` signal (`kill`, `timeout`, a closed terminal) ends the chat, also while
 you type or pick from a menu (nothing half-typed is sent). Either way the

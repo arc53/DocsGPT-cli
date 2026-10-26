@@ -41,6 +41,9 @@ type Entry struct {
 
 	Message *docsgpt.Message `json:"message,omitempty"`
 	Text    string           `json:"text,omitempty"` // what the user typed; Message adds the context
+	// Event marks a user message the chat sent by itself: what background
+	// processes did, which nobody typed.
+	Event bool `json:"event,omitempty"`
 	// Attachments are the files a user message carried: their paths and
 	// hashes, not their bytes, which the server keeps.
 	Attachments []attach.File    `json:"attachments,omitempty"`
@@ -257,6 +260,7 @@ func List(cwd string) ([]*Session, error) {
 // Turn is one exchange: what the user typed and the answer.
 type Turn struct {
 	Question string
+	Event    bool          // the chat sent it: background processes' events
 	Files    []attach.File // attached to the question
 	Answer   string        // the assistant's texts of the exchange, joined
 	Sources  []docsgpt.Source
@@ -281,7 +285,7 @@ func (s *Session) Turns() []Turn {
 			if index++; len(turns) == 0 || e.conv != conv {
 				conv, index = e.conv, 0
 			}
-			turns = append(turns, Turn{Question: e.Text, Files: e.Attachments, Server: e.server, Key: e.key, ConversationID: e.conv, Index: index})
+			turns = append(turns, Turn{Question: e.Text, Event: e.Event, Files: e.Attachments, Server: e.server, Key: e.key, ConversationID: e.conv, Index: index})
 			if e.Text == "" {
 				turns[len(turns)-1].Question = m.Content
 			}

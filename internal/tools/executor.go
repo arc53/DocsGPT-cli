@@ -11,8 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -25,40 +25,123 @@ func NormalizeName(name string) string {
 	return toolSuffixRe.ReplaceAllString(name, "")
 }
 
-var errTimeout = errors.New("timed out")
+var (
+	errTimeout = errors.New("timed out")
+	errMoved   = errors.New("moved to the background")
+)
 
 // runCommand runs command through the shell, copying its combined output
 // to out. It gets at most timeout (errTimeout) and is killed when ctx is
 // cancelled (context.Canceled). A non-zero exit is an *exec.ExitError.
 func runCommand(ctx context.Context, command, dir string, timeout time.Duration, out io.Writer) error {
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	_, err := runForeground(ctx, command, dir, timeout, out, nil)
+	return err
+}
 
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(runCtx, "cmd", "/C", command)
-		// cmd.exe looks for a program in the working directory before PATH,
-		// so an approved "git status" could run a repository's git.bat.
-		cmd.Env = append(os.Environ(), "NoDefaultCurrentDirectoryInExePath=1")
-	} else {
-		cmd = exec.CommandContext(runCtx, "sh", "-c", command)
+// runForeground is runCommand, but a signal on move hands the command over
+// still running: it returns it with errMoved, its output still going to
+// out, which the caller then points elsewhere.
+func runForeground(ctx context.Context, command, dir string, timeout time.Duration, out io.Writer, move <-chan struct{}) (*shellRun, error) {
+	r, err := startShell(command, dir, &switchWriter{w: out}, nil)
+	if err != nil {
+		return nil, err
 	}
+	var expired <-chan time.Time
+	if timeout > 0 {
+		t := time.NewTimer(timeout)
+		defer t.Stop()
+		expired = t.C
+	}
+	stop := func(why error) (*shellRun, error) {
+		r.cancel()
+		<-r.done
+		if r.err == nil {
+			return nil, nil
+		}
+		return nil, why
+	}
+	select {
+	case <-r.done:
+		switch {
+		case r.err == nil:
+			return nil, nil
+		case ctx.Err() != nil:
+			return nil, context.Canceled
+		}
+		return nil, r.err
+	case <-ctx.Done():
+		return stop(context.Canceled)
+	case <-expired:
+		return stop(errTimeout)
+	case <-move:
+		return r, errMoved
+	}
+}
+
+// shellRun is a command started through the shell: done closes once it
+// ended (err then set), cancel kills it with everything it started.
+type shellRun struct {
+	cmd    *exec.Cmd
+	out    *switchWriter // stdout and stderr, when it was given one
+	cancel context.CancelFunc
+	done   chan struct{}
+	err    error
+}
+
+// startShell starts command through the shell, in a process group of its
+// own (killProcessGroup), with its output on out and its stderr on errOut
+// (out when nil). An *os.File gets the output directly; another writer
+// through a pipe the command's children may hold open, which Wait gives up
+// on a second after the command ends.
+func startShell(command, dir string, out, errOut io.Writer) (*shellRun, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := shellCommand(ctx, command)
 	killProcessGroup(cmd)
 	// Don't wait forever for output from a process that escaped the kill.
 	cmd.WaitDelay = time.Second
 	cmd.Dir = dir
-	cmd.Stdout, cmd.Stderr = out, out
-
-	err := cmd.Run()
-	switch {
-	case err == nil:
-		return nil
-	case ctx.Err() != nil:
-		return context.Canceled
-	case runCtx.Err() == context.DeadlineExceeded:
-		return errTimeout
+	if errOut == nil {
+		errOut = out
 	}
-	return err
+	cmd.Stdout, cmd.Stderr = out, errOut
+	r := &shellRun{cmd: cmd, cancel: cancel, done: make(chan struct{})}
+	r.out, _ = out.(*switchWriter)
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, err
+	}
+	go func() {
+		r.err = cmd.Wait()
+		cancel()
+		close(r.done)
+	}()
+	return r, nil
+}
+
+// switchWriter passes writes on to a writer that can be swapped while a
+// command writes to it: a command moved to the background goes on into
+// its log.
+type switchWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *switchWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.w.Write(p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// handOver writes what before returns to w, then makes w the writer, with
+// no write of the command's in between.
+func (s *switchWriter) handOver(w io.Writer, before func() string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	io.WriteString(w, before())
+	s.w = w
 }
 
 // regularFile resolves path (relative to the working directory, symlinks

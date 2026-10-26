@@ -26,6 +26,26 @@ type callArgs struct {
 	// One edit given beside path instead of in edits.
 	OldText string `json:"old_text"`
 	NewText string `json:"new_text"`
+
+	RunInBackground flag   `json:"run_in_background"`
+	Description     string `json:"description"`
+	ID              string `json:"id"`
+	TailLines       number `json:"tail_lines"`
+}
+
+// flag is a boolean argument given as true/false or as a string of either.
+type flag bool
+
+func (f *flag) UnmarshalJSON(b []byte) error {
+	switch strings.ToLower(strings.Trim(strings.TrimSpace(string(b)), `"`)) {
+	case "true", "1", "yes":
+		*f = true
+	case "false", "0", "no", "", "null":
+		*f = false
+	default:
+		return fmt.Errorf("%s is not true or false", b)
+	}
+	return nil
 }
 
 // number is an integer argument given as a number or a numeric string.

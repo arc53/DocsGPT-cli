@@ -36,20 +36,25 @@ func (s *Session) callMCP(ctx context.Context, cancel context.CancelFunc, t *mcp
 	s.ui().Lines(argLines(args))
 	if !s.AutoApprove && !s.allowedMCP[t.Server] && !s.allowedMCP[t.Server+"/"+t.Tool.Name] {
 		choice, refusal := s.ask(cancel, "call it once", false,
-			allowItem("Always allow "+tool, "call "+tool+" without asking this session"),
+			allowItem("Always allow "+tool, "call "+tool+" without asking "+s.scopeText()),
 			ui.Item{Label: "Always allow " + server, Value: "server", Keys: []string{"s"},
-				Description: "call any tool of " + server + " without asking this session"})
+				Description: "call any tool of " + server + " without asking " + s.scopeText()})
 		if refusal != "" {
 			return text(refusal)
 		}
 		if s.allowedMCP == nil {
 			s.allowedMCP = map[string]bool{}
 		}
+		key := ""
 		switch choice {
 		case "always":
-			s.allowedMCP[t.Server+"/"+t.Tool.Name] = true
+			key = t.Server + "/" + t.Tool.Name
 		case "server":
-			s.allowedMCP[t.Server] = true
+			key = t.Server
+		}
+		if key != "" {
+			s.allowedMCP[key] = true
+			s.keep(func(a *Approvals) { a.MCP = append(a.MCP, key) })
 		}
 	}
 

@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -70,12 +69,7 @@ type commandResult struct {
 // group gets SIGTERM, then SIGKILL after grace (or at once when kill closes).
 func runCommand(command, dir string, timeout, grace time.Duration, stop, kill <-chan struct{},
 	stdout, stderr io.Writer, started func(pid int)) commandResult {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", command)
-	} else {
-		cmd = exec.Command("sh", "-c", command)
-	}
+	cmd := shellCommand(command)
 	cmd.Dir = dir
 	newGroup(cmd)
 

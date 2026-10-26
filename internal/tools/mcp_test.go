@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +12,13 @@ import (
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 )
 
-func TestMain(m *testing.M) { mcptest.Main(m) }
+func TestMain(m *testing.M) {
+	if mode := os.Getenv(helperEnv); mode != "" {
+		helperProcess(mode)
+		return
+	}
+	mcptest.Main(m)
+}
 
 func TestCallMCP(t *testing.T) {
 	home := t.TempDir()

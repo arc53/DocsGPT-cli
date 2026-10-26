@@ -54,7 +54,8 @@ More in the [quickstart](docs/quickstart.md).
 - **Sessions.** Every chat is saved per directory; `-c` continues the latest,
   `-r` picks one. [Sessions](docs/chat.md#sessions)
 - **Local tools.** The agent can run commands and read and write files, after
-  you approve each one. [Tools and approval](docs/tools.md)
+  you approve each one, and keep a dev server or a log monitor running in the
+  background, told when something happens. [Tools and approval](docs/tools.md)
 - **MCP servers.** Give the agent the tools of MCP servers such as Laravel
   Boost, from `~/.docsgpt/mcp.json` or the project's `.mcp.json`.
   [MCP servers](docs/mcp.md)

@@ -315,3 +315,49 @@ func TestScreenPanel(t *testing.T) {
 		t.Fatalf("a menu the user opened: %v", r)
 	}
 }
+
+// TestScreenWakeAndBackground: a wake-up reaches a waiting Next at once, or
+// waits for it; Ctrl+B moves the running command only while one may be.
+func TestScreenWakeAndBackground(t *testing.T) {
+	s := NewScreen(ScreenOptions{Headless: true})
+	waiter := make(chan Message, 1)
+	s.m.waiter = waiter
+	s.Wake()
+	if got := <-waiter; !got.Wake || s.m.waiter != nil {
+		t.Fatalf("wake: %+v", got)
+	}
+	s.Wake()
+	s.Wake()
+	if !s.m.wake {
+		t.Fatal("a wake-up while no one waits is lost")
+	}
+
+	m := testScreen(60, 12)
+	m.label, m.cancel = "Running…", func() {}
+	moved := 0
+	m.bg = func() { moved++ }
+	if r := rows(m); !strings.Contains(strings.Join(r, "\n"), "ctrl+b to background") {
+		t.Fatalf("no hint:\n%s", strings.Join(r, "\n"))
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
+	if moved != 1 || m.bg != nil {
+		t.Fatalf("moved %d times", moved)
+	}
+}
+
+// TestScreenRunsOfLetters: letters that come in one message are text, even
+// when they spell a key's name.
+func TestScreenRunsOfLetters(t *testing.T) {
+	m := testScreen(60, 12)
+	for _, w := range []string{"then", " ", "end", " ", "home", " ", "pgup", " ", "up"} {
+		if w == " " {
+			m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+			continue
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(w)})
+	}
+	if got := m.ed.text(); got != "then end home pgup up" {
+		t.Fatalf("editor = %q", got)
+	}
+}
