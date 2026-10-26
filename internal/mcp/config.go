@@ -4,6 +4,7 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -110,6 +111,8 @@ func read(path string, project bool, cwd string) ([]Server, error) {
 	var file struct {
 		Servers map[string]json.RawMessage `json:"mcpServers"`
 	}
+	// Windows PowerShell 5 and older Notepad write UTF-8 with a BOM.
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	if err := json.Unmarshal(data, &file); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}

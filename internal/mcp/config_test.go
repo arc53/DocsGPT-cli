@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -35,7 +36,8 @@ func write(t *testing.T, path, data string) {
 func TestLoad(t *testing.T) {
 	home, proj := setup(t, "app/sub")
 	t.Setenv("BOOST_TOKEN", "secret")
-	write(t, filepath.Join(home, ".docsgpt", "mcp.json"), `{"mcpServers": {
+	// With a BOM, as Windows PowerShell 5 writes it.
+	write(t, filepath.Join(home, ".docsgpt", "mcp.json"), "\ufeff"+`{"mcpServers": {
 		"mine":  {"command": "my-server", "args": ["--token", "${BOOST_TOKEN}"]},
 		"shared": {"command": "user-version"}
 	}}`)
@@ -139,7 +141,7 @@ func TestApprovals(t *testing.T) {
 	if Decided(load()) != Undecided {
 		t.Error("still decided after Forget")
 	}
-	if fi, err := os.Stat(approvalsFile()); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(approvalsFile()); err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("approvals file: %v %v", fi.Mode(), err)
 	}
 }
