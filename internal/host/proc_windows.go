@@ -5,9 +5,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 )
+
+// shellCommand runs command with cmd.exe, given the command line as it is:
+// Go would quote command as one argument, escaping its quotes as \", which
+// cmd.exe does not read. /S /C "…" makes cmd.exe take off the outer quotes
+// alone; /D skips the AutoRun commands of the registry.
+func shellCommand(command string) *exec.Cmd {
+	cmd := exec.Command("cmd")
+	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: `cmd /D /S /C "` + command + `"`}
+	return cmd
+}
 
 // newGroup is a no-op on Windows: stopGroup ends the whole process tree.
 func newGroup(*exec.Cmd) {}

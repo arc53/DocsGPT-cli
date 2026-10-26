@@ -95,7 +95,7 @@ internal/
     daemon.go        → RunDaemon: spool lock + Recover, poll/SSE loop, idle heartbeat, auto-update + restart only when Jobs.Idle (holds the Baton in StateRestarting so no session opens), SIGINT/SIGTERM → Jobs.Shutdown (a second signal forces) (revoke → ErrRevoked, exit 0); banner.go startup lines, servicemode.go + console_*.go: Windows task logging to host.log
     jobs.go          → Jobs: runs each invocation in the background (outlives its SSE session), Cancel (`event: cancel`), Kick (retry now after a reconnect), Shutdown (stop commands as host_shutdown, flush 5 s), Recover (spooled reports; a command cut off by a crash → `interrupted`)
     outbox.go        → per-invocation outbox: ack, then stdout/stderr/control chunks in seq order, batched, retried 1 s → 60 s with jitter until 2xx; 404/410 or another 4xx (not 401/408/429) drops it; given up 1 h past the command's timeout; 1 MiB of unsent output (oldest dropped, control chunk `truncated`); journal <invocation>.ndjson in the spool, replayed on start, rewritten as it doubles
-    invocation.go    → runCommand: `sh -c` / `cmd /C` in its own session (proc_unix.go Setsid; proc_windows.go taskkill /T /F), timeout or cancel → SIGTERM to the group, SIGKILL after 5 s; the denylist floor
+    invocation.go    → runCommand: `sh -c` / `cmd /D /S /C "…"` (shellCommand: the raw CmdLine, as Go's quoting escapes " as \" which cmd.exe misreads) in its own session (proc_unix.go Setsid; proc_windows.go taskkill /T /F), timeout or cancel → SIGTERM to the group, SIGKILL after 5 s; the denylist floor
     install.go       → InstallService / UninstallService over systemd (service.go), launchd (launchd.go), Task Scheduler (wintask.go)
     transport.go     → Signed polling + SSE session transport (`invocation`, `cancel`, `revoke`, `session_end`; every request sends `X-Device-Capabilities: cancel,outbox`); approval is decided server-side; pairing.go, device.go, revoke.go
   context/
@@ -276,7 +276,8 @@ internal/
     executor.go      → runCommand (caller's ctx + timeout; own session without a
                        controlling terminal, whole group killed; Windows: hidden console,
                        taskkill /T by its System32 path, NoDefaultCurrentDirectoryInExePath=1 so cmd.exe
-                       never runs a program from the working directory) = runForeground without a move
+                       never runs a program from the working directory; shellCommand: `cmd /D /S /C "…"` as a raw
+                       CmdLine, since Go's quoting turns " into \" which cmd.exe misreads) = runForeground without a move
                        channel (Ctrl+B: errMoved, the command handed back running); startShell → shellRun
                        (its own context, done, cancel kills the group), switchWriter (output re-pointed
                        to a log, handOver), regularFile + readFile (regular files only, chunked,

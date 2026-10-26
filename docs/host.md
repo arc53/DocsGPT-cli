@@ -59,7 +59,7 @@ what agents need. See [Tools and approval](tools.md#security).
 
 ## Commands and their results
 
-Each command runs as `sh -c` (`cmd /C` on Windows) in a process group of its
+Each command runs as `sh -c` (`cmd /D /S /C "…"` on Windows) in a process group of its
 own, without a terminal, so a password prompt fails at once instead of
 waiting. It runs until it ends or its timeout passes. The server sets the
 timeout: up to 10 minutes for a command the chat waits on, and up to an hour

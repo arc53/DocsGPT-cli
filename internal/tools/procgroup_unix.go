@@ -3,9 +3,15 @@
 package tools
 
 import (
+	"context"
 	"os/exec"
 	"syscall"
 )
+
+// shellCommand runs command with sh -c.
+func shellCommand(ctx context.Context, command string) *exec.Cmd {
+	return exec.CommandContext(ctx, "sh", "-c", command)
+}
 
 // killProcessGroup starts cmd in a session of its own, without a
 // controlling terminal, and makes cancellation kill its whole process

@@ -5,7 +5,7 @@ tools:
 
 | Tool | What it does | Asks you |
 |---|---|---|
-| `run_command` | Runs a command with `sh -c` (`cmd /C` on Windows) | Always |
+| `run_command` | Runs a command with `sh -c` (`cmd /D /S /C` on Windows) | Always |
 | `read_file` | Reads a text file, in pages of up to 2000 lines or 50 KB, or shows the model an image | Only outside the working directory, or for files that may hold secrets |
 | `edit_file` | Replaces exact pieces of text in a file | Always, with the diff first |
 | `write_file` | Writes a whole file, creating missing directories | Always, with a short diff first |
@@ -55,8 +55,10 @@ of waiting. They get `--tool-timeout` seconds (default 30), or the timeout the
 model asks for (at most an hour, or `--tool-timeout` when that is longer;
 the title then shows it, `· timeout 10m`), and are killed with their child
 processes on timeout or Ctrl+C. On Windows they run through
-`cmd /C` with `NoDefaultCurrentDirectoryInExePath` set, so a program name never
-resolves to a file in the working directory (`git` is never `.\git.exe`).
+`cmd /D /S /C "<command>"`, given the command line as it is (quotes reach
+`cmd.exe` as quotes; `/D` skips the registry's AutoRun commands), with
+`NoDefaultCurrentDirectoryInExePath` set, so a program name never resolves to
+a file in the working directory (`git` is never `.\git.exe`).
 
 ## Always allow
 

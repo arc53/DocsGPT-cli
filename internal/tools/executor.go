@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -96,15 +95,7 @@ type shellRun struct {
 // on a second after the command ends.
 func startShell(command, dir string, out, errOut io.Writer) (*shellRun, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "cmd", "/C", command)
-		// cmd.exe looks for a program in the working directory before PATH,
-		// so an approved "git status" could run a repository's git.bat.
-		cmd.Env = append(os.Environ(), "NoDefaultCurrentDirectoryInExePath=1")
-	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", command)
-	}
+	cmd := shellCommand(ctx, command)
 	killProcessGroup(cmd)
 	// Don't wait forever for output from a process that escaped the kill.
 	cmd.WaitDelay = time.Second
