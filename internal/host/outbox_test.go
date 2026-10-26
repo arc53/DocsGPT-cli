@@ -368,6 +368,7 @@ func TestOutboxResumesFromSpool(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	stop() // the daemon exits
 	waitDelivered(t, done, false)
+	o.finish(false) // and its files close
 
 	files := spoolFiles(t, dir)
 	if len(files) != 1 {
@@ -419,6 +420,7 @@ func TestOutboxCompactionKeepsState(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	stop()
 	waitDelivered(t, done, false)
+	o.finish(false) // the daemon exits, its files close
 
 	info, err := os.Stat(spoolFiles(t, dir)[0])
 	if err != nil {
@@ -432,6 +434,7 @@ func TestOutboxCompactionKeepsState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer again.finish(false)
 	if len(again.pending) != 1 || again.pending[0].Chunk != "after\n" || again.pending[0].Seq != 200 {
 		t.Fatalf("pending after replay = %+v", again.pending)
 	}

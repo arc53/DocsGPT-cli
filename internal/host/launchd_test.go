@@ -3,6 +3,7 @@ package host
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -223,7 +224,7 @@ func TestLaunchdDaemonPlistPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LaunchdPlistPath: %v", err)
 	}
-	want := "/Library/LaunchDaemons/com.arc53.docsgpt-cli-host.plist"
+	want := filepath.FromSlash("/Library/LaunchDaemons/com.arc53.docsgpt-cli-host.plist")
 	if got != want {
 		t.Errorf("daemon plist path = %q, want %q", got, want)
 	}
@@ -234,7 +235,7 @@ func TestLaunchdAgentPlistPathUnderHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LaunchdPlistPath: %v", err)
 	}
-	if !strings.HasSuffix(got, "/Library/LaunchAgents/com.arc53.docsgpt-cli-host.plist") {
+	if !strings.HasSuffix(got, filepath.FromSlash("/Library/LaunchAgents/com.arc53.docsgpt-cli-host.plist")) {
 		t.Errorf("agent plist path = %q, want it to end under ~/Library/LaunchAgents", got)
 	}
 }

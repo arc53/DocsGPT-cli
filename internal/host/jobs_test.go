@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +137,8 @@ func TestSpoolIsLockedToOneDaemon(t *testing.T) {
 	if err := first.openSpool(dir); err != nil {
 		t.Fatal(err)
 	}
+	// Released as the daemon's exit would, so the directory can go (Windows).
+	t.Cleanup(func() { first.lockFile.Close() })
 	second := newTestJobs(t, srv, "")
 	if err := second.openSpool(dir); err == nil {
 		t.Fatal("a second daemon locked the same spool")
@@ -143,7 +146,7 @@ func TestSpoolIsLockedToOneDaemon(t *testing.T) {
 	if second.dir != "" {
 		t.Errorf("second daemon uses the spool %q, want memory only", second.dir)
 	}
-	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0700 {
+	if info, err := os.Stat(dir); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0700 {
 		t.Errorf("spool dir: %v, mode %v", err, info.Mode().Perm())
 	}
 }
