@@ -1,7 +1,6 @@
 # MCP servers
 
-MCP servers (Model Context Protocol) give the agent more tools: Laravel
-Boost's documentation search and database queries, a browser, an issue
+MCP servers (Model Context Protocol) give the agent more tools: documentation search and database queries, a browser, an issue
 tracker. The chat and one-shot questions start the servers you list, offer
 their tools to the agent next to its own [tools](tools.md), and stop them when
 they end. Each tool call is approved like a command.
