@@ -308,3 +308,28 @@ func TestSaveRunUsesInjectedDir(t *testing.T) {
 		t.Errorf("history not written under injected dir: %+v", entries)
 	}
 }
+
+func TestPrettyListsWarningsOnceAndJSONKeepsThem(t *testing.T) {
+	warn := "skipped a workflow_step frame of 5242880 bytes (over the 1048576-byte limit); the bench does not need it"
+	c := passCase("wf", 0)
+	c.Repeat = 2
+	c.Runs = []*runner.RunResult{
+		{Index: 1, Status: runner.StatusPass, WorkflowRunID: "run-1", Warnings: []string{warn}},
+		{Index: 2, Status: runner.StatusPass, WorkflowRunID: "run-2", Warnings: []string{warn}},
+	}
+	sr := &runner.SuiteResult{Suite: "d", Cases: []*runner.CaseResult{c}, Totals: runner.Totals{Pass: 1}}
+
+	var buf bytes.Buffer
+	Pretty(&buf, sr, false)
+	if got := strings.Count(buf.String(), warn); got != 1 {
+		t.Errorf("warning should be listed once under the case, got %d times:\n%s", got, buf.String())
+	}
+
+	buf.Reset()
+	if err := JSON(&buf, sr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"workflow_run_id": "run-1"`) || !strings.Contains(buf.String(), `"warnings"`) {
+		t.Errorf("JSON should carry the run id and warnings:\n%s", buf.String())
+	}
+}

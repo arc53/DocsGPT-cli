@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -305,5 +306,33 @@ func TestRunPollingReportsReconnect(t *testing.T) {
 	_, _ = tr.RunPolling(ctx, time.Now().Add(time.Minute))
 	if n := reconnects.Load(); n != 1 {
 		t.Errorf("OnReconnect called %d times, want 1 (after %d polls)", n, calls.Load())
+	}
+}
+
+// TestRunSSEReadsLargeEventsAndSkipsOversizedOnes: an invocation over the old
+// 1 MiB scanner cap still arrives; a line past the safety limit drops only its
+// own event, not the stream.
+func TestRunSSEReadsLargeEventsAndSkipsOversizedOnes(t *testing.T) {
+	big := strings.Repeat("x", 2<<20)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "event: invocation\nid: 1\ndata: {\"invocation_id\":\"inv_big\",\"action\":\"write_file\",\"params\":{\"content\":%q}}\n\n", big)
+		fmt.Fprintf(w, "event: invocation\nid: 2\ndata: {\"invocation_id\":\"inv_huge\",\"params\":{\"content\":%q}}\n\n", big+big)
+		fmt.Fprint(w, "event: invocation\nid: 3\ndata: {\"invocation_id\":\"inv_after\",\"action\":\"run_command\",\"params\":{}}\n\n")
+	}))
+	defer server.Close()
+
+	old := maxEventLineBytes
+	maxEventLineBytes = 3 << 20
+	defer func() { maxEventLineBytes = old }()
+
+	tr := newTestTransport(server.URL)
+	var got []string
+	tr.OnInvocation = func(inv Invocation) { got = append(got, inv.InvocationID) }
+	if err := tr.RunSSE(context.Background(), "sess_test", ""); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got) != "[inv_big inv_after]" {
+		t.Errorf("invocations = %v", got)
 	}
 }

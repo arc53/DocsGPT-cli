@@ -1,10 +1,10 @@
 package target
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,7 +12,25 @@ import (
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/bench/spec"
+	"github.com/arc53/DocsGPT-cli/internal/sse"
 )
+
+// maxFrameBytes is the largest SSE line read whole; tests lower it.
+var maxFrameBytes = sse.DefaultMaxLine
+
+// neededFrames are the frame types the result and its assertions are built
+// from. One of these too large to read fails the case; any other (a workflow
+// agent's workflow_step, say) is skipped with a warning.
+var neededFrames = map[string]bool{
+	"answer":            true,
+	"structured_answer": true,
+	"thought":           true,
+	"source":            true,
+	"tool_calls":        true,
+	"id":                true,
+	"error":             true,
+	"end":               true,
+}
 
 // streamTarget runs a question against POST {base}/stream, the native DocsGPT
 // SSE endpoint. Auth is the api_key field inside the JSON body, or — when the
@@ -41,6 +59,7 @@ type streamEvent struct {
 	ToolCalls json.RawMessage `json:"tool_calls,omitempty"` // final tool-call list
 	Error     string          `json:"error,omitempty"`
 	ID        string          `json:"id,omitempty"`
+	RunID     string          `json:"workflow_run_id,omitempty"` // workflow_run: the run's id
 }
 
 func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
@@ -103,6 +122,8 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 		firstOutput   time.Duration
 		frames        []string
 		seenFrames    = map[string]bool{}
+		workflowRunID string
+		warnings      []string
 	)
 	noteFrame := func(t string) {
 		if t == "" || seenFrames[t] {
@@ -112,11 +133,39 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 		frames = append(frames, t)
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // 1 MiB for long frames
-
-	for scanner.Scan() {
-		line := scanner.Text()
+	lines := sse.NewLineReader(resp.Body, maxFrameBytes)
+	for {
+		next, err := lines.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			// A read error (including ctx cancellation) is a real failure.
+			return nil, fmt.Errorf("stream target: reading %s: %w", endpoint, err)
+		}
+		if next.Oversized {
+			frameType := sse.FrameType(next.Text)
+			if !bytes.HasPrefix(next.Text, []byte("data:")) {
+				continue // an id: or comment line; nothing is lost
+			}
+			if frameType == "" || neededFrames[frameType] {
+				name := frameType
+				if name == "" {
+					name = "an unidentified"
+				}
+				return nil, fmt.Errorf(
+					"stream target: %s sent %s frame of %d bytes, over the %d-byte limit",
+					endpoint, name, next.Size, maxFrameBytes,
+				)
+			}
+			noteFrame(frameType)
+			warnings = append(warnings, fmt.Sprintf(
+				"skipped a %s frame of %d bytes (over the %d-byte limit); the bench does not need it",
+				frameType, next.Size, maxFrameBytes,
+			))
+			continue
+		}
+		line := string(next.Text)
 		if !strings.HasPrefix(line, "data:") {
 			continue // ignore "id:" frames, comments, blank lines
 		}
@@ -181,18 +230,17 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 			}
 		case "end":
 			gotEnd = true
+		case "workflow_run":
+			if ev.RunID != "" {
+				workflowRunID = ev.RunID
+			}
 		default:
-			// message_id, notice, workflow_run, ... -> ignore
+			// message_id, notice, workflow_step, ... -> ignore
 		}
 
 		if gotEnd {
 			break
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		// A read error (including ctx cancellation) is a real failure.
-		return nil, fmt.Errorf("stream target: reading %s: %w", endpoint, err)
 	}
 
 	finalAnswer := answer.String()
@@ -216,6 +264,8 @@ func (streamTarget) Run(ctx context.Context, req Request) (*Result, error) {
 		FirstOutput:    firstOutput,
 		Frames:         frames,
 		EndFrame:       gotEnd,
+		WorkflowRunID:  workflowRunID,
+		Warnings:       warnings,
 	}, nil
 }
 

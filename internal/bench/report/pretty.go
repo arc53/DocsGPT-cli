@@ -30,6 +30,7 @@ func Pretty(w io.Writer, r *runner.SuiteResult, verbose bool) {
 		case runner.StatusError:
 			printCaseErrors(w, c)
 		}
+		printCaseWarnings(w, c)
 		if verbose {
 			printVerbose(w, c)
 		}
@@ -146,6 +147,21 @@ func printCaseErrors(w io.Writer, c *runner.CaseResult) {
 		}
 		seen[rr.Error] = true
 		fmt.Fprintf(w, "        %s\n", display.Danger(display.Safe(rr.Error)))
+	}
+}
+
+// printCaseWarnings lists what went wrong without failing the case (a frame
+// too large to read that no assertion needed), de-duplicated across runs.
+func printCaseWarnings(w io.Writer, c *runner.CaseResult) {
+	seen := make(map[string]bool)
+	for _, rr := range c.Runs {
+		for _, warning := range rr.Warnings {
+			if seen[warning] {
+				continue
+			}
+			seen[warning] = true
+			fmt.Fprintf(w, "        %s\n", display.Warn("warning: "+display.Safe(warning)))
+		}
 	}
 }
 

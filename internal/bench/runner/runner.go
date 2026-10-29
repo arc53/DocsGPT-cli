@@ -168,10 +168,12 @@ type RunResult struct {
 	CostUSD       *float64        `json:"cost_usd,omitempty"`        // usage × pricing; nil when unknown
 	SourceCount   int             `json:"source_count"`
 	ToolCalls     []string        `json:"tool_calls,omitempty"`
-	Frames        []string        `json:"frames,omitempty"`         // stream target: SSE frame types seen
-	Judge         *JudgeResult    `json:"judge,omitempty"`          // recorded verdict (score + reasoning verbatim)
-	ErrorResponse *ErrorResponse  `json:"error_response,omitempty"` // negative cases: the server error asserted on
-	Turns         []*TurnResult   `json:"turns,omitempty"`          // multi-turn cases: every turn (Answer = last)
+	Frames        []string        `json:"frames,omitempty"`          // stream target: SSE frame types seen
+	WorkflowRunID string          `json:"workflow_run_id,omitempty"` // stream target: the workflow run of the (last) turn
+	Warnings      []string        `json:"warnings,omitempty"`        // problems that did not fail the run (skipped frames, ...)
+	Judge         *JudgeResult    `json:"judge,omitempty"`           // recorded verdict (score + reasoning verbatim)
+	ErrorResponse *ErrorResponse  `json:"error_response,omitempty"`  // negative cases: the server error asserted on
+	Turns         []*TurnResult   `json:"turns,omitempty"`           // multi-turn cases: every turn (Answer = last)
 }
 
 // JudgeResult is the recorded LLM-as-judge verdict for one run.
@@ -194,6 +196,7 @@ type TurnResult struct {
 	Question       string          `json:"question"`
 	Answer         string          `json:"answer,omitempty"`
 	ConversationID string          `json:"conversation_id,omitempty"`
+	WorkflowRunID  string          `json:"workflow_run_id,omitempty"`
 	LatencyMS      int64           `json:"latency_ms"`
 	FirstOutputMS  int64           `json:"first_output_ms,omitempty"`
 	Usage          *target.Usage   `json:"usage,omitempty"`
@@ -639,6 +642,12 @@ func (rc *runContext) runOnce(ctx context.Context, c *spec.Case, tg target.Targe
 		if tres.ConversationID != "" {
 			convID = tres.ConversationID
 		}
+		for _, w := range tres.Warnings {
+			if multi {
+				w = fmt.Sprintf("turn %d: %s", ti+1, w)
+			}
+			rr.Warnings = append(rr.Warnings, w)
+		}
 		history = append(history, target.Exchange{Question: q, Answer: tres.Answer})
 
 		if multi {
@@ -647,6 +656,7 @@ func (rc *runContext) runOnce(ctx context.Context, c *spec.Case, tg target.Targe
 				Question:       q,
 				Answer:         tres.Answer,
 				ConversationID: tres.ConversationID,
+				WorkflowRunID:  tres.WorkflowRunID,
 				LatencyMS:      tres.Latency.Milliseconds(),
 				FirstOutputMS:  tres.FirstOutput.Milliseconds(),
 				Usage:          tres.Usage,
@@ -680,6 +690,7 @@ func (rc *runContext) runOnce(ctx context.Context, c *spec.Case, tg target.Targe
 	rr.SourceCount = len(res.Sources)
 	rr.ToolCalls = toolCallNames(res.ToolCalls)
 	rr.Frames = res.Frames
+	rr.WorkflowRunID = res.WorkflowRunID
 	if usage != nil {
 		model := firstNonEmpty(eff.Model, prices.DefaultModelID())
 		if cost, ok := prices.Cost(model, usage.PromptTokens, usage.CompletionTokens); ok {

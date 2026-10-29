@@ -320,8 +320,7 @@ func TestStreamTargetError(t *testing.T) {
 }
 
 func TestStreamTargetLongFrame(t *testing.T) {
-	// A single frame larger than bufio.Scanner's default 64 KiB token limit;
-	// proves the 1 MiB buffer is in effect.
+	// A single frame larger than bufio's own 64 KiB buffer is read whole.
 	big := strings.Repeat("z", 100_000)
 	body := `data: {"type":"answer","answer":"` + big + `"}` + "\n\n" + `data: {"type":"end"}` + "\n\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -795,5 +794,17 @@ func TestUploadAttachmentsTaskSuccessWithoutIDFallsBack(t *testing.T) {
 	}
 	if !reflect.DeepEqual(ids, []string{"att-only"}) {
 		t.Errorf("ids = %#v, want direct id fallback", ids)
+	}
+}
+
+func TestV1TargetReadsAChunkOverTheOldScannerCap(t *testing.T) {
+	big := strings.Repeat("z", 2<<20)
+	body := `data: {"choices":[{"delta":{"content":"` + big + `"}}]}` + "\n\n" + "data: [DONE]\n\n"
+	res, err := readV1Stream(strings.NewReader(body), "/v1/chat/completions", time.Now())
+	if err != nil {
+		t.Fatalf("readV1Stream: %v", err)
+	}
+	if len(res.Answer) != len(big) {
+		t.Errorf("Answer length = %d, want %d", len(res.Answer), len(big))
 	}
 }

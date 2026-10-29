@@ -47,6 +47,23 @@ Filter with `-k <text>` or `--tags a,b`. Runs are saved under
 Reports include p50/p95 latency and TTFT, tokens, and an estimated cost when
 pricing is known (the server's `/api/models`, or `pricing:` in `bench.yaml`).
 
+### Workflow agents and large frames
+
+A workflow agent's stream also carries a `workflow_run` frame and a
+`workflow_step` frame per step. The `stream` target saves the run's id as
+`workflow_run_id` in each run (and each turn) of the `--json` report, so a CI
+job can read the run's steps, final state and files afterwards with
+`GET /api/workflow_runs/<id>` and a token holding `runs:read`.
+
+SSE lines are read whole up to 64 MiB, so a step frame several MiB long is no
+problem. A frame past that limit is skipped when the bench doesn't need it
+(`workflow_step` and the like): the case goes on, and the run gets a warning,
+shown under the case and listed in `warnings` in the JSON report. A frame the
+result is built from (`answer`, `structured_answer`, `thought`, `source`,
+`tool_calls`, `id`, `error`, `end`) that is too large fails the run instead.
+The `v1` target fails on any chunk past the limit, since every chunk carries
+part of the answer.
+
 ## Agent by id
 
 The `stream` and `answer` targets can run an agent **by id** with your personal
