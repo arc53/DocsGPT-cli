@@ -1,10 +1,10 @@
 package target
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/arc53/DocsGPT-cli/internal/bench/spec"
+	"github.com/arc53/DocsGPT-cli/internal/sse"
 	docsgpt "github.com/arc53/DocsGPT-cli/sdk"
 
 	"github.com/tidwall/gjson"
@@ -220,10 +221,25 @@ func readV1Stream(body io.Reader, endpoint string, start time.Time) (*Result, er
 		gotChunk        bool
 	)
 
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
+	lines := sse.NewLineReader(body, maxFrameBytes)
+	for {
+		next, err := lines.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("v1 target: reading %s: %w", endpoint, err)
+		}
+		if next.Oversized {
+			if !bytes.HasPrefix(next.Text, []byte("data:")) {
+				continue
+			}
+			// Every v1 chunk carries part of the answer: none can be skipped.
+			return nil, fmt.Errorf(
+				"v1 target: %s sent a chunk of %d bytes, over the %d-byte limit", endpoint, next.Size, maxFrameBytes,
+			)
+		}
+		line := string(next.Text)
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
@@ -295,9 +311,6 @@ func readV1Stream(body io.Reader, endpoint string, start time.Time) (*Result, er
 		if r := delta.Get("reasoning_content").String(); r != "" {
 			thought.WriteString(r)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("v1 target: reading %s: %w", endpoint, err)
 	}
 	if !gotDone && !gotChunk {
 		return nil, fmt.Errorf("v1 target: %s stream closed without any chunk", endpoint)

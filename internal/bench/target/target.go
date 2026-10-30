@@ -42,6 +42,13 @@ type Result struct {
 	Frames     []string `json:"frames,omitempty"` // distinct frame types in order of first appearance
 	EndFrame   bool     `json:"end_frame,omitempty"`
 	ErrorFrame bool     `json:"error_frame,omitempty"`
+
+	// WorkflowRunID is the run a workflow agent's stream announced in its
+	// workflow_run frame (stream target only).
+	WorkflowRunID string `json:"workflow_run_id,omitempty"`
+	// Warnings are things that went wrong without failing the run, such as a
+	// frame too large to read that the assertions do not need.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Exchange is one completed user/assistant pair of an earlier turn, replayed

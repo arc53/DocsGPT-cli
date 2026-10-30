@@ -1,7 +1,6 @@
 package host
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/arc53/DocsGPT-cli/internal/sse"
 )
 
 // ErrRevoked is returned by RunPolling / RunSSE when the server has
@@ -302,6 +303,9 @@ func (t *Transport) RunPolling(ctx context.Context, fastUntil time.Time) (*PollR
 	}
 }
 
+// maxEventLineBytes is the longest SSE line read whole; tests lower it.
+var maxEventLineBytes = sse.DefaultMaxLine
+
 // RunSSE opens the SSE stream for `sessionID` and dispatches events to
 // `t.OnInvocation` and `t.OnCancel` until the server closes or `ctx`
 // cancels. Other event names are ignored. Returns
@@ -334,11 +338,17 @@ func (t *Transport) RunSSE(ctx context.Context, sessionID string, lastEventID st
 		return fmt.Errorf("SSE HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	lines := sse.NewLineReader(resp.Body, maxEventLineBytes)
 	var event, data string
 	revoked := false
+	// dropped marks an event with a line past the limit: it is skipped whole,
+	// since half an invocation must not run.
+	dropped := false
 	flush := func() {
+		if dropped {
+			event, data, dropped = "", "", false
+			return
+		}
 		if event == "" && data == "" {
 			return
 		}
@@ -365,8 +375,19 @@ func (t *Transport) RunSSE(ctx context.Context, sessionID string, lastEventID st
 		}
 		event, data = "", ""
 	}
-	for scanner.Scan() {
-		line := scanner.Text()
+	for {
+		next, err := lines.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if next.Oversized {
+			dropped = true
+			continue
+		}
+		line := string(next.Text)
 		if line == "" {
 			flush()
 			if revoked {
@@ -393,7 +414,7 @@ func (t *Transport) RunSSE(ctx context.Context, sessionID string, lastEventID st
 	if revoked {
 		return ErrRevoked
 	}
-	return scanner.Err()
+	return nil
 }
 
 // post sends a signed JSON body to a server path and returns the HTTP

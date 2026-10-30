@@ -77,11 +77,13 @@ internal/
   bench/
     spec/            → Suite/case YAML format (bench.yaml + case.yaml), loading, validation, golden files; model/stream/attachments_mode/turns/expect.error/expect.stream
     assert/          → Assertion engine: answer/json (gjson paths)/sources/tools/limits (incl. TTFT)/stream integrity/error (negative cases)/golden matchers
-    target/          → Four wire protocols: v1 (/v1/chat/completions, JSON or SSE, inline file parts), stream (/stream SSE, TTFT + frames), answer (/api/answer), webhook (+ /api/task_status polling); attachment upload; ServerError for negative cases
+    target/          → Four wire protocols: v1 (/v1/chat/completions, JSON or SSE, inline file parts), stream (/stream SSE, TTFT + frames + workflow_run_id; a frame past the 64 MiB line limit that no result field needs, e.g. workflow_step, is skipped with a Result warning, a needed one fails the run), answer (/api/answer), webhook (+ /api/task_status polling); attachment upload; ServerError for negative cases
     judge/           → LLM-as-judge grading via a second agent (model/temperature passthrough)
     pricing/         → Cost table: /api/models pricing (tolerant field reader) + bench.yaml pricing overrides
     runner/          → Worker pool, repeat/min_pass, fail-fast, golden record, judge wiring, multi-turn loop, model override, cost stamping, RunMatrix (--matrix)
     report/          → Pretty/JSON(schema 2)/JUnit output, A/B compare, --matrix table + JSON, baselines in ~/.docsgpt/bench/<suite>/
+  sse/
+    lines.go         → LineReader: SSE lines of any length (bufio.Reader.ReadSlice, chunks joined) up to a 64 MiB safety limit; a longer line is skipped as Oversized with its first 4 KiB kept, FrameType reads its "type"; used by bench/target (stream, v1) and host/transport
   manage/
     client.go        → PAT HTTP client (Bearer dgpt_pat_…, docsgpt-cli/<ver> User-Agent, context timeouts), typed APIError (message, error code, required_scope)
     agents.go        → /api/user/me, get_agents, export_agent, import_agent/plan + import_agent (Plan, Resolution, ApplyResult), delete_agent
@@ -664,6 +666,6 @@ make build                                                # ./docsgpt-cli (gitig
 - `cmd.Version` is stamped by ldflags for release and `make build`; `resolveVersion` in root.go recovers it from `debug.ReadBuildInfo` for `go install` builds, which carry no ldflags and would otherwise report "dev" and disable their own update checks
 - Releases: `.github/workflows/release.yml` (dispatch, or a hand-pushed `v*` tag) → GoReleaser builds linux/darwin/windows (amd64+arm64) archives + checksums.txt with stable asset names, attaches `deployment/install.sh`/`install.ps1`, and commits a Homebrew **cask** to `arc53/homebrew-DocsGPT-cli` with `HOMEBREW_TAP_TOKEN` (`skip_upload: auto` keeps prereleases out of brew; the job only runs on `arc53/DocsGPT-cli`). Cut from Actions → Release → Run workflow (a `cli`/`sdk` bump input; one run tags the sdk, pushes the `go.mod` pin bump, then tags and releases the CLI in that order) — there is no local release target; see `RELEASING.md`
 - Install script: `docs.ac/install-cli` redirects to `releases/latest/download/install.sh`, so the live installer is whatever the newest release carries — a fix lands only on the next tag. Both installers verify the archive against `checksums.txt`, then hand off to `docsgpt-cli install`, which owns the PATH logic for every platform
-- SSE parsed with stdlib bufio (no external SSE lib), separately in sdk/client.go, bench/target and host/transport
+- SSE parsed with stdlib bufio (no external SSE lib): sdk/client.go on its own, bench/target and host/transport through internal/sse (no fixed line cap)
 - Shell history (opt-in context): zsh, bash, fish
 - Cross-platform: Unix + Windows

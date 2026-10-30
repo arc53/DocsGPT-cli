@@ -443,3 +443,39 @@ func TestJudgeQuestion(t *testing.T) {
 		t.Errorf("transcript = %q", got)
 	}
 }
+
+func TestRunCarriesTheWorkflowRunIDAndWarnings(t *testing.T) {
+	withTarget(t, &scriptTarget{fn: func(call int, req target.Request) (*target.Result, error) {
+		return &target.Result{
+			Answer:        "ok",
+			Latency:       time.Second,
+			WorkflowRunID: fmt.Sprintf("run-%d", call),
+			Warnings:      []string{fmt.Sprintf("skipped a workflow_step frame (turn call %d)", call)},
+		}, nil
+	}})
+	single := containsCase("single", "ok")
+	multi := &spec.Case{Name: "mt", Dir: "mt", Turns: []spec.Turn{{Question: "a"}, {Question: "b"}}}
+	suite := newSuite(spec.SuiteConfig{Agent: "a"}, single, multi)
+	sr, err := Run(context.Background(), Options{Suite: suite, Cases: suite.Cases, ResolveKey: defaultResolver, BaseURL: "http://x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]*CaseResult{}
+	for _, c := range sr.Cases {
+		byName[c.Name] = c
+	}
+
+	one := byName["single"].Runs[0]
+	if one.Status != StatusPass || one.WorkflowRunID == "" || len(one.Warnings) != 1 {
+		t.Errorf("single-turn run: status=%s run=%q warnings=%q", one.Status, one.WorkflowRunID, one.Warnings)
+	}
+
+	mt := byName["mt"].Runs[0]
+	if mt.WorkflowRunID != mt.Turns[1].WorkflowRunID || mt.Turns[0].WorkflowRunID == mt.Turns[1].WorkflowRunID {
+		t.Errorf("each turn keeps its own run; the run result the last: %q / %q / %q",
+			mt.WorkflowRunID, mt.Turns[0].WorkflowRunID, mt.Turns[1].WorkflowRunID)
+	}
+	if len(mt.Warnings) != 2 || !strings.HasPrefix(mt.Warnings[0], "turn 1: ") || !strings.HasPrefix(mt.Warnings[1], "turn 2: ") {
+		t.Errorf("multi-turn warnings should name their turn: %q", mt.Warnings)
+	}
+}
