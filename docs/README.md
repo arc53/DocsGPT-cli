@@ -21,7 +21,7 @@ New here? Start with the [Quickstart](quickstart.md).
 
 - [Agents as code](agents-as-code.md): personal access tokens, export, plan,
   apply, trigger
-- [Sources](sources.md): upload, wait for ingestion, replace old copies
+- [Sources](sources.md): upload files or a folder, wait for ingestion, keep a source in sync on a schedule
 - [Bench](bench.md): test agents' answers, compare agents and models
 - [CI](ci.md): GitHub Actions for all of the above
 - [Go SDK](../sdk/README.md): the chat client the CLI is built on
