@@ -294,7 +294,7 @@ func (s *syncState) unchanged(o IngestOptions) *UploadReport {
 // only queued, or deduplicated, is not recorded, so the next run asks the
 // server.
 func (s *syncState) save(o IngestOptions, report *UploadReport) {
-	if s.path == "" || report.SourceID == "" || report.Deduplicated {
+	if s.path == "" || report.SourceID == "" || report.Deduplicated || report.stale {
 		return
 	}
 	if !report.Unchanged && !(report.Waited && report.Status == "SUCCESS") {

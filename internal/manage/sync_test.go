@@ -380,6 +380,20 @@ func TestSyncFolderRecordIsOnlyKeptForAConfirmedSync(t *testing.T) {
 		t.Errorf("requests = %s, report %+v", fake.log(), report)
 	}
 
+	// A reingest that could not vouch for its index succeeds, but leaves
+	// no record: the next run asks the server, which runs it again.
+	fake.taskResult = `{"status":"completed","index_current":false}`
+	fake.sources["src-1"].current = false
+	report, _, err = syncFolder(t, c, dir, state, nil)
+	if err != nil || report.Status != "SUCCESS" {
+		t.Fatalf("a reingest with a stale index: %+v, %v", report, err)
+	}
+	fake.sources["src-1"].current = false
+	if report, _, _ = syncFolder(t, c, dir, state, nil); report.Local {
+		t.Errorf("a sync whose index is not current must not be recorded: %+v", report)
+	}
+	fake.sources["src-1"].current = false
+
 	// A skipped reingest is a failure, and leaves no record either.
 	fake.taskResult = `{"status":"skipped","reason":"busy"}`
 	_, _, err = syncFolder(t, c, dir, state, nil)

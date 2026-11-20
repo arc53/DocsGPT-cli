@@ -553,6 +553,10 @@ type UploadReport struct {
 	Unchanged bool   `json:"unchanged,omitempty"`
 	Local     bool   `json:"local,omitempty"`
 	Error     string `json:"error,omitempty"`
+
+	// stale: the ingestion succeeded, but the server could not say its
+	// index holds the files as they are now; no local record is kept.
+	stale bool
 }
 
 // One request of a manifest sync, which can take several, carries at most
@@ -660,12 +664,24 @@ func (c *Client) waitIngest(ctx context.Context, opts IngestOptions, report *Upl
 		}
 		return err
 	}
+	report.stale = st.indexStale()
 	if reason, skipped := st.skipped(); skipped {
 		// The task ended without touching the index: the source was busy
 		// with another ingest, or is gone.
 		return fmt.Errorf("the server skipped this ingestion (%s); run the same command again", reason)
 	}
 	return nil
+}
+
+// indexStale reports a finished reingest that says its index may not hold
+// the source's files as they are now: an embedding failed, a file could not
+// be read, or the files changed while it ran. The next sync runs it again.
+func (t *TaskStatus) indexStale() bool {
+	var result struct {
+		IndexCurrent *bool `json:"index_current"`
+	}
+	return len(t.Result) > 0 && json.Unmarshal(t.Result, &result) == nil &&
+		result.IndexCurrent != nil && !*result.IndexCurrent
 }
 
 // skipped reports a finished task whose result says it did not run.
