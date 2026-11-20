@@ -663,12 +663,105 @@ func TestAgentsApplyJSONAndStdin(t *testing.T) {
 	}
 }
 
+func TestSourcesUploadSyncsAFolder(t *testing.T) {
+	dir := t.TempDir()
+	for rel, content := range map[string]string{"a.md": "alpha", "документы/введение.md": "вступление", "skip.bin": "x"} {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(content), 0o644)
+	}
+	var (
+		mu       sync.Mutex
+		requests []string
+		manifest string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/api/sources":
+			jsonReply(w, 200, `[{"id":"src-9","name":"docs"}]`)
+		case "/api/manage_source_files":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Errorf("multipart: %v", err)
+			}
+			if got := r.Header.Get("Idempotency-Key"); got != "" {
+				t.Errorf("a sync sends no derived Idempotency-Key, got %q", got)
+			}
+			files := r.MultipartForm.File["file"]
+			if len(files) == 0 {
+				m, _ := r.MultipartForm.File["manifest"][0].Open()
+				raw, _ := io.ReadAll(m)
+				manifest = string(raw)
+				requests = append(requests, "ask")
+				jsonReply(w, 200, `{"success":true,"status":"needs_files","needed":["документы/введение.md"],"source_id":"src-9"}`)
+				return
+			}
+			requests = append(requests, fmt.Sprintf("send %d", len(files)))
+			jsonReply(w, 200, `{"success":true,"status":"synced","reingest_task_id":"task-7","source_id":"src-9","uploaded":1,"unchanged":1,"removed_files":["old.md"]}`)
+		case "/api/task_status":
+			jsonReply(w, 200, `{"status":"SUCCESS","result":{"status":"completed"}}`)
+		default:
+			t.Errorf("unexpected %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client := manage.New(srv.URL, cmdTestToken, "docsgpt-cli/test")
+	opts := uploadOptions{
+		Files: []string{dir}, Name: "Docs", Sync: true, Wait: true, Timeout: 5 * time.Second, JSON: true,
+		StateDir: t.TempDir(), Poll: manage.WaitOptions{Initial: time.Millisecond, Max: 2 * time.Millisecond},
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := runSourcesUpload(context.Background(), client, opts, &stdout, &stderr); err != nil {
+		t.Fatalf("sync: %v\n%s", err, stderr.String())
+	}
+	if strings.Join(requests, ",") != "ask,send 1" {
+		t.Errorf("requests = %v", requests)
+	}
+	var doc struct {
+		Version int
+		Files   []struct{ Path, SHA256 string }
+	}
+	if err := json.Unmarshal([]byte(manifest), &doc); err != nil || doc.Version != 1 || len(doc.Files) != 2 ||
+		doc.Files[0].Path != "a.md" || doc.Files[1].Path != "документы/введение.md" || len(doc.Files[1].SHA256) != 64 {
+		t.Errorf("manifest = %s (%v)", manifest, err)
+	}
+	var report manage.UploadReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("stdout is not one JSON document: %v\n%s", err, stdout.String())
+	}
+	if report.SourceID != "src-9" || report.Uploaded != 1 || report.Files != 2 || !report.Synced || report.Status != "SUCCESS" {
+		t.Errorf("report = %+v", report)
+	}
+	for _, want := range []string{"skipped 1 file(s), file type not supported", "uploading 1 of 1 changed file(s)", "removed old.md"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr lacks %q:\n%s", want, stderr.String())
+		}
+	}
+
+	// The same files again, quietly: nothing is sent, and nothing is said but the result.
+	stdout.Reset()
+	stderr.Reset()
+	opts.JSON, opts.Quiet = false, true
+	if err := runSourcesUpload(context.Background(), client, opts, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "unchanged, 2 files") {
+		t.Errorf("second run: requests %v, stderr %q, stdout %q", requests, stderr.String(), stdout.String())
+	}
+}
+
 func TestSourcesUploadAndWait(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "guide.md")
 	os.WriteFile(file, []byte("# guide"), 0o644)
-	wantKey, _ := manage.DeriveIdempotencyKey("Guide", []string{file})
+	wantKey, _ := manage.DeriveIdempotencyKey("Guide", []manage.UploadFile{{Path: file}})
 	fast := manage.WaitOptions{Initial: time.Millisecond, Max: 2 * time.Millisecond}
+	emptyDir := t.TempDir()
+	os.WriteFile(filepath.Join(emptyDir, "notes.xyz"), []byte("not parsed"), 0o644)
+	archive := filepath.Join(t.TempDir(), "docs.zip")
+	os.WriteFile(archive, []byte("PK"), 0o644)
 
 	tests := []struct {
 		name      string
@@ -716,7 +809,30 @@ func TestSourcesUploadAndWait(t *testing.T) {
 		},
 		{name: "missing name", opts: uploadOptions{Files: []string{file}}, wantExit: 2, wantErr: "--name is required"},
 		{name: "missing file", opts: uploadOptions{Files: []string{filepath.Join(dir, "nope.md")}, Name: "Guide"}, wantExit: 2, wantErr: "no such file"},
-		{name: "directory", opts: uploadOptions{Files: []string{dir}, Name: "Guide"}, wantExit: 2, wantErr: "is a directory"},
+		{
+			name: "a folder is uploaded with what it holds", opts: uploadOptions{Files: []string{dir}, Name: "Guide"},
+			wantKey: wantKey, wantOut: "src-1",
+		},
+		{
+			name: "an empty folder", opts: uploadOptions{Files: []string{emptyDir}, Name: "Guide"},
+			wantExit: 2, wantErr: "no files to upload",
+		},
+		{
+			name: "filters need a folder", opts: uploadOptions{Files: []string{file}, Name: "Guide", Exclude: []string{"*.png"}},
+			wantExit: 2, wantErr: "pass a folder",
+		},
+		{
+			name: "a bad pattern", opts: uploadOptions{Files: []string{dir}, Name: "Guide", Include: []string{"[x"}},
+			wantExit: 2, wantErr: "bad pattern",
+		},
+		{
+			name: "force without sync", opts: uploadOptions{Files: []string{file}, Name: "Guide", Force: true},
+			wantExit: 2, wantErr: "--force only applies to --sync",
+		},
+		{
+			name: "a folder and an archive", opts: uploadOptions{Files: []string{dir, archive}, Name: "Guide"},
+			wantExit: 2, wantErr: "cannot be uploaded together",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

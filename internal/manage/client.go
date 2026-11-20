@@ -220,6 +220,7 @@ func newAPIError(method, path string, status int, body []byte) *APIError {
 	var env struct {
 		Message       any    `json:"message"`
 		Error         any    `json:"error"`
+		Code          any    `json:"code"`
 		RequiredScope string `json:"required_scope"`
 		Status        any    `json:"status"`
 	}
@@ -230,6 +231,10 @@ func newAPIError(method, path string, status int, body []byte) *APIError {
 		ae.Message = s
 	}
 	if s, ok := env.Error.(string); ok {
+		ae.Code = s
+	}
+	// Routes outside the token layer name their failures in `code`.
+	if s, ok := env.Code.(string); ok && ae.Code == "" {
 		ae.Code = s
 	}
 	ae.RequiredScope = env.RequiredScope

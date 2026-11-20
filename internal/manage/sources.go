@@ -65,23 +65,40 @@ type UploadResult struct {
 // be present but derives the real owner from the token.
 const uploadUserField = "local"
 
+// UploadFile is one file of an upload: where it is on disk and the name it
+// is sent under. A name with folders ("guide/intro.md") keeps that tree in
+// the source, as the folders of a .zip archive do.
+type UploadFile struct {
+	Path   string // on disk
+	Name   string // sent as the part's filename, "/"-separated; "" = the base name of Path
+	Size   int64  // bytes, as CollectFiles saw it
+	SHA256 string // lowercase hex, once HashFiles has run
+}
+
+func (f UploadFile) name() string {
+	if f.Name != "" {
+		return f.Name
+	}
+	return filepath.Base(f.Path)
+}
+
 // UploadSource calls POST /api/upload (scope sources:write) with a multipart
-// body: `user`, `name` and one `file` part per path. idempotencyKey, when
+// body: `user`, `name` and one `file` part per file. idempotencyKey, when
 // non-empty, is sent as the Idempotency-Key header: a repeat within the
 // server's dedup window returns the original task instead of re-ingesting.
 // File contents are streamed, so large files are never buffered in memory.
-func (c *Client) UploadSource(ctx context.Context, name string, paths []string, idempotencyKey string) (*UploadResult, error) {
+func (c *Client) UploadSource(ctx context.Context, name string, files []UploadFile, idempotencyKey string) (*UploadResult, error) {
 	const path = "/api/upload"
 	if strings.TrimSpace(name) == "" {
 		return nil, errors.New("upload: a source name is required")
 	}
-	if len(paths) == 0 {
+	if len(files) == 0 {
 		return nil, errors.New("upload: at least one file is required")
 	}
 	if len(idempotencyKey) > IdempotencyKeyMaxLen {
 		return nil, fmt.Errorf("upload: idempotency key exceeds %d characters", IdempotencyKeyMaxLen)
 	}
-	respBody, err := c.postFiles(ctx, path, [][2]string{{"user", uploadUserField}, {"name", name}}, paths, idempotencyKey)
+	respBody, err := c.postFiles(ctx, path, [][2]string{{"user", uploadUserField}, {"name", name}}, fileParts(files), idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -110,18 +127,18 @@ type SyncResult struct {
 // and the server re-ingests the source, re-embedding only what changed. The
 // source keeps its id. idempotencyKey, when non-empty, is sent as the
 // Idempotency-Key header.
-func (c *Client) SyncSource(ctx context.Context, sourceID string, paths []string, idempotencyKey string) (*SyncResult, error) {
+func (c *Client) SyncSource(ctx context.Context, sourceID string, files []UploadFile, idempotencyKey string) (*SyncResult, error) {
 	const path = "/api/manage_source_files"
 	if strings.TrimSpace(sourceID) == "" {
 		return nil, errors.New("sync: a source id is required")
 	}
-	if len(paths) == 0 {
+	if len(files) == 0 {
 		return nil, errors.New("sync: at least one file is required")
 	}
 	if len(idempotencyKey) > IdempotencyKeyMaxLen {
 		return nil, fmt.Errorf("sync: idempotency key exceeds %d characters", IdempotencyKeyMaxLen)
 	}
-	respBody, err := c.postFiles(ctx, path, [][2]string{{"source_id", sourceID}, {"operation", "sync"}}, paths, idempotencyKey)
+	respBody, err := c.postFiles(ctx, path, [][2]string{{"source_id", sourceID}, {"operation", "sync"}}, fileParts(files), idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -135,26 +152,46 @@ func (c *Client) SyncSource(ctx context.Context, sourceID string, paths []string
 	return &out, nil
 }
 
-// postFiles POSTs a multipart body of fields and one `file` part per path,
-// with the upload timeout. File contents are streamed, never buffered.
-func (c *Client) postFiles(ctx context.Context, path string, fields [][2]string, paths []string, idempotencyKey string) ([]byte, error) {
-	for _, p := range paths {
-		st, err := os.Stat(p)
+// filePart is one file part of a multipart body: a file on disk, or Data.
+type filePart struct {
+	Field    string // form field name
+	Filename string
+	Path     string // file on disk, streamed
+	Data     []byte // in-memory content, when Path is ""
+}
+
+// fileParts are the `file` parts of an upload, each under its file's name.
+func fileParts(files []UploadFile) []filePart {
+	parts := make([]filePart, len(files))
+	for i, f := range files {
+		parts[i] = filePart{Field: "file", Filename: f.name(), Path: f.Path}
+	}
+	return parts
+}
+
+// postFiles POSTs a multipart body of fields and file parts, with the upload
+// timeout. File contents are streamed, never buffered.
+func (c *Client) postFiles(ctx context.Context, path string, fields [][2]string, parts []filePart, idempotencyKey string) ([]byte, error) {
+	for _, part := range parts {
+		if part.Path == "" {
+			continue
+		}
+		st, err := os.Stat(part.Path)
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("upload: %s: no such file", p)
+			return nil, fmt.Errorf("upload: %s: no such file", part.Path)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("upload: %w", err)
 		}
 		if st.IsDir() {
-			return nil, fmt.Errorf("upload: %s is a directory (pass files, or a .zip archive)", p)
+			return nil, fmt.Errorf("upload: %s is a directory", part.Path)
 		}
 	}
 
 	ctx, cancel := withTimeout(ctx, c.UploadTimeout, DefaultUploadTimeout)
 	defer cancel()
 
-	body, contentType, length, err := multipartBody(fields, paths)
+	body, contentType, length, err := multipartBody(fields, parts)
 	if err != nil {
 		return nil, fmt.Errorf("upload: %w", err)
 	}
@@ -177,7 +214,7 @@ func (c *Client) postFiles(ctx context.Context, path string, fields [][2]string,
 // multipartBody assembles the multipart body as a chain of in-memory part
 // headers and lazily opened files, so its exact length is known up front and
 // file contents are streamed rather than buffered.
-func multipartBody(fields [][2]string, paths []string) (body io.ReadCloser, contentType string, length int64, err error) {
+func multipartBody(fields [][2]string, parts []filePart) (body io.ReadCloser, contentType string, length int64, err error) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	for _, field := range fields {
@@ -194,24 +231,46 @@ func multipartBody(fields [][2]string, paths []string) (body io.ReadCloser, cont
 			return io.NopCloser(bytes.NewReader(seg)), nil
 		})
 	}
-	for _, p := range paths {
-		st, statErr := os.Stat(p)
+	for _, part := range parts {
+		w, createErr := mw.CreateFormFile(part.Field, part.Filename)
+		if createErr != nil {
+			return nil, "", 0, createErr
+		}
+		if part.Path == "" {
+			if _, err = w.Write(part.Data); err != nil {
+				return nil, "", 0, err
+			}
+			continue
+		}
+		st, statErr := os.Stat(part.Path)
 		if statErr != nil {
 			return nil, "", 0, statErr
 		}
-		if _, err = mw.CreateFormFile("file", filepath.Base(p)); err != nil {
-			return nil, "", 0, err
-		}
 		flush() // field parts + this file's part header
-		p := p
-		length += st.Size()
-		chain.parts = append(chain.parts, func() (io.ReadCloser, error) { return os.Open(p) })
+		p, size := part.Path, st.Size()
+		length += size
+		// Exactly the size the length was computed from: a file that grew
+		// meanwhile is cut there, and one that shrank ends the body early
+		// (an error), rather than either corrupting the parts after it.
+		chain.parts = append(chain.parts, func() (io.ReadCloser, error) {
+			f, openErr := os.Open(p)
+			if openErr != nil {
+				return nil, openErr
+			}
+			return &limitedFile{Reader: io.LimitReader(f, size), Closer: f}, nil
+		})
 	}
 	if err = mw.Close(); err != nil {
 		return nil, "", 0, err
 	}
 	flush() // closing boundary
 	return chain, mw.FormDataContentType(), length, nil
+}
+
+// limitedFile reads at most a fixed number of bytes of a file.
+type limitedFile struct {
+	io.Reader
+	io.Closer
 }
 
 // readerChain reads a sequence of lazily opened readers back to back.
@@ -257,18 +316,22 @@ func (r *readerChain) Close() error {
 }
 
 // DeriveIdempotencyKey builds a deterministic Idempotency-Key from the source
-// name and the SHA-256 of every file (paired with its base name, order
-// independent). The same name + content always yields the same key, so a CI
-// retry of an upload is deduplicated server-side; any change to the name, a
-// filename or a byte of content yields a new key.
-func DeriveIdempotencyKey(name string, paths []string) (string, error) {
-	entries := make([]string, 0, len(paths))
-	for _, p := range paths {
-		sum, err := hashFile(p)
-		if err != nil {
-			return "", err
+// name and the SHA-256 of every file (paired with the name it is sent under,
+// order independent). The same name + content always yields the same key, so
+// a CI retry of an upload is deduplicated server-side; any change to the
+// name, a file's name or folder, or a byte of content yields a new key. Files
+// already hashed are not read again.
+func DeriveIdempotencyKey(name string, files []UploadFile) (string, error) {
+	entries := make([]string, 0, len(files))
+	for _, f := range files {
+		sum := f.SHA256
+		if sum == "" {
+			var err error
+			if sum, err = hashFile(f.Path); err != nil {
+				return "", err
+			}
 		}
-		entries = append(entries, filepath.Base(p)+"\x00"+sum)
+		entries = append(entries, f.name()+"\x00"+sum)
 	}
 	sort.Strings(entries)
 	h := sha256.New()
@@ -435,8 +498,10 @@ func isStatus(err error, status int) bool {
 
 // IngestOptions are the inputs of Ingest.
 type IngestOptions struct {
-	Name  string
-	Files []string
+	Name string
+	// Files to upload (see CollectFiles). A sync that sends a manifest needs
+	// them hashed (HashFiles).
+	Files []UploadFile
 	Key   string // Idempotency-Key; "" sends none
 	// SyncKey is the Idempotency-Key of a Sync request; "" sends none. It is
 	// never the upload's derived key: the server scopes keys per user, not per
@@ -448,11 +513,21 @@ type IngestOptions struct {
 	// new one is ingested, so agents that reference the source by name pick
 	// up the new content on their next apply. Needs Wait.
 	Replace bool
-	// Sync updates the caller's own source with this name in place (see
-	// SyncSource) instead of uploading a new one; with none, it uploads.
+	// Sync updates the caller's own source with this name in place instead of
+	// uploading a new one; with none, it uploads.
 	Sync bool
-	Poll WaitOptions // zero: WaitTask defaults
-	Log  io.Writer   // progress lines
+	// Whole sends every file even when the server could be told which ones it
+	// already holds: .zip archives, which only the server can unpack, and file
+	// arguments that share a name.
+	Whole bool
+	// StateDir keeps, per server and source name, what the last sync that
+	// left the index current sent; a sync of the same files then stops before
+	// any request. "" keeps nothing.
+	StateDir string
+	// Force contacts the server even when StateDir says nothing changed.
+	Force bool
+	Poll  WaitOptions // zero: WaitTask defaults
+	Log   io.Writer   // progress lines
 }
 
 // UploadReport is the outcome of Ingest (and the `sources upload --json`
@@ -468,14 +543,52 @@ type UploadReport struct {
 	Replaced       []string `json:"replaced,omitempty"`
 	Synced         bool     `json:"synced,omitempty"`
 	RemovedFiles   []string `json:"removed_files,omitempty"`
-	Error          string   `json:"error,omitempty"`
+	// Files is how many files the source holds after a sync; Uploaded how
+	// many of them this run sent.
+	Files    int `json:"files,omitempty"`
+	Uploaded int `json:"uploaded_files,omitempty"`
+	// Unchanged: the source already held these files and its index was
+	// current, so nothing was ingested. Local: that was decided from the last
+	// sync's record on this machine, without asking the server.
+	Unchanged bool   `json:"unchanged,omitempty"`
+	Local     bool   `json:"local,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
-// Ingest uploads the files as a new source and, with Wait, polls the ingest
-// task, then applies Replace. The report is nil when the upload itself
-// failed; otherwise it carries the error too.
+// One request carries at most this many files and bytes. The server reads at
+// most 1000 parts and (by default) 256 MiB per request.
+var (
+	maxRequestFiles       = 500
+	maxRequestBytes int64 = 200 << 20
+)
+
+// firstBatch is the longest prefix of files one request can carry: always at
+// least one file.
+func firstBatch(files []UploadFile) []UploadFile {
+	var size int64
+	for i, f := range files {
+		if i > 0 && (i >= maxRequestFiles || size+f.Size > maxRequestBytes) {
+			return files[:i]
+		}
+		size += f.Size
+	}
+	return files
+}
+
+// Ingest uploads the files as a new source, or with Sync brings the caller's
+// source of that name up to date, and with Wait polls the server's task. The
+// report is nil when the first request failed; otherwise it carries the
+// error too.
 func (c *Client) Ingest(ctx context.Context, opts IngestOptions) (report *UploadReport, err error) {
-	report, err = c.startIngest(ctx, opts)
+	if opts.Log == nil {
+		opts.Log = io.Discard
+	}
+	state := opts.syncState(c.BaseURL)
+	if report := state.unchanged(opts); report != nil {
+		return report, nil
+	}
+
+	report, rest, err := c.startIngest(ctx, opts)
 	if report == nil {
 		return nil, err
 	}
@@ -492,11 +605,41 @@ func (c *Client) Ingest(ctx context.Context, opts IngestOptions) (report *Upload
 		fmt.Fprintln(opts.Log, "the server deduplicated this upload (same Idempotency-Key as an earlier request); nothing new was ingested")
 		return report, c.replaceOlderSources(ctx, opts, report)
 	}
+	if report.Unchanged {
+		state.save(opts, report)
+		return report, nil
+	}
 	if !opts.Wait {
 		fmt.Fprintf(opts.Log, "ingestion queued; poll it with --wait or check the web app (task %s)\n", report.TaskID)
 		return report, nil
 	}
+	if err := c.waitIngest(ctx, opts, report); err != nil {
+		return report, err
+	}
+	if rest {
+		// The source exists now, with the files one request could carry; a
+		// manifest sync brings the others.
+		next, err := c.syncManifest(ctx, report.SourceID, opts)
+		if errors.Is(err, errNoManifestSync) {
+			err = fmt.Errorf("%d files do not fit one upload and this server cannot take them in several; upload a .zip archive, or update the server", len(opts.Files))
+		}
+		if err != nil {
+			return report, err
+		}
+		next.IdempotencyKey = report.IdempotencyKey
+		*report = *next
+		if !report.Unchanged {
+			if err := c.waitIngest(ctx, opts, report); err != nil {
+				return report, err
+			}
+		}
+	}
+	state.save(opts, report)
+	return report, c.replaceOlderSources(ctx, opts, report)
+}
 
+// waitIngest polls the report's task until it ends.
+func (c *Client) waitIngest(ctx context.Context, opts IngestOptions, report *UploadReport) error {
 	waitCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 	poll := opts.Poll
@@ -510,42 +653,122 @@ func (c *Client) Ingest(ctx context.Context, opts IngestOptions) (report *Upload
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			err = fmt.Errorf("timed out after %s waiting for ingestion (task %s is still running server-side; re-run with the same files to resume waiting): %w", opts.Timeout, report.TaskID, err)
 		}
-		return report, err
+		return err
 	}
-	return report, c.replaceOlderSources(ctx, opts, report)
+	if reason, skipped := st.skipped(); skipped {
+		// The task ended without touching the index: the source was busy
+		// with another ingest, or is gone.
+		return fmt.Errorf("the server skipped this ingestion (%s); run the same command again", reason)
+	}
+	return nil
 }
 
-// startIngest uploads the files as a new source, or with Sync updates the
-// caller's own source of that name in place. The report is nil when the
-// request itself failed.
-func (c *Client) startIngest(ctx context.Context, opts IngestOptions) (*UploadReport, error) {
+// skipped reports a finished task whose result says it did not run.
+func (t *TaskStatus) skipped() (reason string, ok bool) {
+	var result struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	if len(t.Result) == 0 || json.Unmarshal(t.Result, &result) != nil || result.Status != "skipped" {
+		return "", false
+	}
+	if result.Reason == "" {
+		result.Reason = "no reason given"
+	}
+	return result.Reason, true
+}
+
+// startIngest makes the run's first change: it uploads the files as a new
+// source, or with Sync updates the caller's own source of that name in
+// place. The report is nil when the request itself failed. rest is true when
+// a new source was created from the first files only and the others are
+// still to be synced into it.
+func (c *Client) startIngest(ctx context.Context, opts IngestOptions) (report *UploadReport, rest bool, err error) {
 	if opts.Sync {
 		target, err := c.syncTarget(ctx, opts.Name)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if target != "" {
-			fmt.Fprintf(opts.Log, "syncing %d file(s) into %q (source %s)...\n", len(opts.Files), opts.Name, target)
-			res, err := c.SyncSource(ctx, target, opts.Files, opts.SyncKey)
-			if err != nil {
-				return nil, err
-			}
-			for _, removed := range res.RemovedFiles {
-				fmt.Fprintf(opts.Log, "removed %s\n", removed)
-			}
-			return &UploadReport{
-				Name: opts.Name, TaskID: res.TaskID, SourceID: target, IdempotencyKey: opts.SyncKey,
-				Synced: true, RemovedFiles: res.RemovedFiles,
-			}, nil
+			report, err := c.syncInto(ctx, target, opts)
+			return report, false, err
 		}
 		fmt.Fprintf(opts.Log, "no source named %q yet; creating it\n", opts.Name)
 	}
-	fmt.Fprintf(opts.Log, "uploading %d file(s) as %q...\n", len(opts.Files), opts.Name)
-	res, err := c.UploadSource(ctx, opts.Name, opts.Files, opts.Key)
+	files := firstBatch(opts.Files)
+	if len(files) < len(opts.Files) {
+		switch {
+		case opts.Whole || !opts.Sync:
+			return nil, false, fmt.Errorf("%d files (%s) do not fit one upload; use --sync --wait on a folder, which sends them in several", len(opts.Files), byteSize(totalSize(opts.Files)))
+		case !opts.Wait:
+			return nil, false, fmt.Errorf("%d files (%s) do not fit one upload; add --wait, so the others can follow once the source exists", len(opts.Files), byteSize(totalSize(opts.Files)))
+		}
+		fmt.Fprintf(opts.Log, "uploading the first %d of %d file(s) as %q...\n", len(files), len(opts.Files), opts.Name)
+	} else {
+		fmt.Fprintf(opts.Log, "uploading %d file(s) as %q...\n", len(files), opts.Name)
+	}
+	key := opts.Key
+	if len(files) < len(opts.Files) && key != "" {
+		// The key names what this request carries, not the whole folder.
+		if key, err = DeriveIdempotencyKey(opts.Name, files); err != nil {
+			return nil, false, err
+		}
+	}
+	res, err := c.UploadSource(ctx, opts.Name, files, key)
+	if err != nil {
+		return nil, false, err
+	}
+	return &UploadReport{
+		Name: opts.Name, TaskID: res.TaskID, SourceID: res.SourceID, IdempotencyKey: key,
+		Files: len(files), Uploaded: len(files),
+	}, len(files) < len(opts.Files), nil
+}
+
+// syncInto updates the source in place: by manifest, so only the files it
+// lacks are sent, or (Whole, or a server without manifests) with every file.
+func (c *Client) syncInto(ctx context.Context, target string, opts IngestOptions) (*UploadReport, error) {
+	if !opts.Whole {
+		report, err := c.syncManifest(ctx, target, opts)
+		if !errors.Is(err, errNoManifestSync) {
+			return report, err
+		}
+		fmt.Fprintln(opts.Log, "this server takes a sync only as a whole; sending every file")
+	}
+	if len(firstBatch(opts.Files)) < len(opts.Files) {
+		return nil, fmt.Errorf("%d files (%s) do not fit one upload; upload a .zip archive, or update the server", len(opts.Files), byteSize(totalSize(opts.Files)))
+	}
+	fmt.Fprintf(opts.Log, "syncing %d file(s) into %q (source %s)...\n", len(opts.Files), opts.Name, target)
+	res, err := c.SyncSource(ctx, target, opts.Files, opts.SyncKey)
 	if err != nil {
 		return nil, err
 	}
-	return &UploadReport{Name: opts.Name, TaskID: res.TaskID, SourceID: res.SourceID, IdempotencyKey: opts.Key}, nil
+	for _, removed := range res.RemovedFiles {
+		fmt.Fprintf(opts.Log, "removed %s\n", removed)
+	}
+	return &UploadReport{
+		Name: opts.Name, TaskID: res.TaskID, SourceID: target, IdempotencyKey: opts.SyncKey,
+		Synced: true, RemovedFiles: res.RemovedFiles, Files: len(opts.Files), Uploaded: len(opts.Files),
+	}, nil
+}
+
+func totalSize(files []UploadFile) (n int64) {
+	for _, f := range files {
+		n += f.Size
+	}
+	return n
+}
+
+// byteSize renders a size for a message: "12 KB", "3.4 MB".
+func byteSize(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%d KB", n>>10)
+	}
+	return fmt.Sprintf("%d B", n)
 }
 
 // syncTarget is the id of the caller's own source named name (compared
