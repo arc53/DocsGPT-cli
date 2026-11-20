@@ -118,6 +118,12 @@ func collectFolder(root string, opts CollectOptions, out *Collected, add func(Up
 	skip := func(p, reason string) {
 		out.Skipped = append(out.Skipped, SkippedFile{Path: p, Reason: reason})
 	}
+	// WalkDir does not enter a root that is a link.
+	if st, err := os.Lstat(root); err == nil && st.Mode()&fs.ModeSymlink != 0 {
+		if root, err = filepath.EvalSymlinks(root); err != nil {
+			return err
+		}
+	}
 	return filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr

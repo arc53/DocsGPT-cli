@@ -26,6 +26,9 @@ type fakeSources struct {
 
 	noManifests bool // an older server: a sync is the whole file set
 	busy        int  // answer this many manifest requests with 409
+	replay      bool // a sync's Idempotency-Key is known: the cached reply, nothing done
+	dedupUpload bool // an upload's key is known and its task record is gone
+	maxFiles    int  // > 0: a request with more file parts is a 413
 	taskResult  string
 
 	sources  map[string]*fakeSource // by id
@@ -78,6 +81,15 @@ func (f *fakeSources) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case "/api/upload":
 		files := f.parts(r, "file")
+		if f.dedupUpload {
+			f.requests = append(f.requests, "upload (deduplicated)")
+			writeJSONResp(w, 200, `{"success":true,"task_id":"deduplicated"}`)
+			return
+		}
+		if f.maxFiles > 0 && len(files) > f.maxFiles {
+			writeJSONResp(w, 413, `{"success":false,"message":"Upload exceeds the request limit"}`)
+			return
+		}
 		f.nextID++
 		id := "src-" + string(rune('0'+f.nextID))
 		src := &fakeSource{name: r.FormValue("name"), files: map[string]string{}}
@@ -119,11 +131,25 @@ func (f *fakeSources) sync(w http.ResponseWriter, r *http.Request) {
 	files := f.parts(r, "file")
 	manifests := f.parts(r, "manifest")
 	src := f.sources[r.FormValue("source_id")]
-	if src == nil || r.FormValue("operation") != "sync" {
+	op := r.FormValue("operation")
+	if op != "sync" && (op != "sync_manifest" || f.noManifests) {
+		writeJSONResp(w, 400, `{"success":false,"message":"operation must be 'add', 'remove', 'remove_directory', or 'sync'"}`)
+		return
+	}
+	if src == nil {
 		writeJSONResp(w, 404, `{"success":false,"message":"Source not found"}`)
 		return
 	}
-	if f.noManifests || len(manifests) == 0 {
+	if f.replay {
+		f.requests = append(f.requests, "replay")
+		writeJSONResp(w, 200, `{"success":true,"reingest_task_id":"task-old","source_id":"`+r.FormValue("source_id")+`"}`)
+		return
+	}
+	if f.maxFiles > 0 && len(files) > f.maxFiles {
+		writeJSONResp(w, 413, `{"success":false,"message":"Upload exceeds the request limit"}`)
+		return
+	}
+	if op == "sync" {
 		if len(files) == 0 {
 			writeJSONResp(w, 400, `{"success":false,"message":"No files provided for sync operation"}`)
 			return
@@ -467,18 +493,108 @@ func TestSyncFolderCreatesALargeFolderInSteps(t *testing.T) {
 		t.Errorf("report = %+v", report)
 	}
 	wantStored(t, fake, "src-1", tree)
+}
 
-	// Without --wait the others could never follow.
-	other := t.TempDir()
-	writeTree(t, other, tree)
-	_, _, err = syncFolder(t, c, other, "", func(o *IngestOptions) { o.Name, o.Wait = "Later", false })
-	if err == nil || !strings.Contains(err.Error(), "add --wait") {
-		t.Errorf("err = %v", err)
+// The batch limits are for requests that can be split. An upload that cannot
+// goes whole, as it always did: the server knows its own limits.
+func TestUploadThatCannotBeSplitGoesInOneRequest(t *testing.T) {
+	fake := newFakeSources(t)
+	c := newTestClient(t, fake.ServeHTTP)
+	dir := t.TempDir()
+	tree := map[string]string{"a.md": "a", "b.md": "b", "c.md": "c"}
+	writeTree(t, dir, tree)
+	defer func(n int) { maxRequestFiles = n }(maxRequestFiles)
+	maxRequestFiles = 2
+
+	plain := func(o *IngestOptions) { o.Sync = false }
+	if _, log, err := syncFolder(t, c, dir, "", plain); err != nil {
+		t.Fatalf("plain upload: %v\n%s", err, log)
 	}
-	// A plain upload is one request, or none.
-	_, _, err = syncFolder(t, c, other, "", func(o *IngestOptions) { o.Name, o.Sync = "Plain", false })
-	if err == nil || !strings.Contains(err.Error(), "do not fit one upload") {
-		t.Errorf("err = %v", err)
+	whole := func(o *IngestOptions) { o.Whole = true }
+	if _, log, err := syncFolder(t, c, dir, "", whole); err != nil {
+		t.Fatalf("whole sync: %v\n%s", err, log)
+	}
+	if fake.log() != "upload a.md,b.md,c.md ; whole a.md,b.md,c.md" {
+		t.Errorf("requests = %s", fake.log())
+	}
+
+	// The server refuses it: the error says how to send it in several.
+	fake.maxFiles = 2
+	_, _, err := syncFolder(t, c, dir, "", func(o *IngestOptions) { o.Name, o.Sync = "Plain", false })
+	if err == nil || !strings.Contains(err.Error(), "--sync --wait") {
+		t.Errorf("plain upload over the server's limit: %v", err)
+	}
+	_, _, err = syncFolder(t, c, dir, "", func(o *IngestOptions) { o.Name, o.Wait = "Later", false })
+	if err == nil || !strings.Contains(err.Error(), "add --wait") {
+		t.Errorf("sync without --wait over the server's limit: %v", err)
+	}
+	wantStored(t, fake, "src-1", tree)
+}
+
+// A sync's record belongs to the account that made it.
+func TestSyncFolderRecordIsPerAccount(t *testing.T) {
+	fake := newFakeSources(t)
+	c := newTestClient(t, fake.ServeHTTP)
+	dir, state := t.TempDir(), t.TempDir()
+	writeTree(t, dir, map[string]string{"a.md": "a"})
+	if _, _, err := syncFolder(t, c, dir, state, nil); err != nil {
+		t.Fatal(err)
+	}
+	other := New(c.BaseURL, "dgpt_pat_another_account", c.UserAgent)
+	report, _, err := syncFolder(t, other, dir, state, nil)
+	if err != nil || report.Local {
+		t.Fatalf("another account must ask the server: %+v, %v", report, err)
+	}
+	if report, _, _ = syncFolder(t, c, dir, state, nil); !report.Local {
+		t.Errorf("the first account keeps its record: %+v", report)
+	}
+}
+
+// An Idempotency-Key the server knows replays the earlier sync's reply: no
+// file is compared or sent, so nothing says the source holds this tree.
+func TestSyncFolderReplayedByIdempotencyKey(t *testing.T) {
+	fake := newFakeSources(t)
+	c := newTestClient(t, fake.ServeHTTP)
+	dir, state := t.TempDir(), t.TempDir()
+	writeTree(t, dir, map[string]string{"a.md": "a"})
+	keyed := func(o *IngestOptions) { o.SyncKey = "nightly" }
+	if _, _, err := syncFolder(t, c, dir, "", keyed); err != nil {
+		t.Fatal(err)
+	}
+	writeTree(t, dir, map[string]string{"a.md": "a2"})
+
+	fake.replay = true
+	before := len(fake.requests)
+	report, log, err := syncFolder(t, c, dir, state, keyed)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, log)
+	}
+	if got := strings.Join(fake.requests[before:], " ; "); got != "replay" {
+		t.Errorf("requests = %s, want one replayed request", got)
+	}
+	if !report.Deduplicated || report.TaskID != "task-old" || report.Uploaded != 0 || !strings.Contains(log, "deduplicated") {
+		t.Errorf("report = %+v\n%s", report, log)
+	}
+	fake.replay = false
+	if report, _, _ = syncFolder(t, c, dir, state, nil); report.Local {
+		t.Errorf("a replayed sync must leave no record: %+v", report)
+	}
+	wantStored(t, fake, "src-1", map[string]string{"a.md": "a2"})
+}
+
+// A deduplicated first batch names no source for the other files.
+func TestSyncFolderDeduplicatedFirstBatchIsNotTheWholeFolder(t *testing.T) {
+	fake := newFakeSources(t)
+	fake.dedupUpload = true
+	c := newTestClient(t, fake.ServeHTTP)
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a.md": "a", "b.md": "b", "c.md": "c"})
+	defer func(n int) { maxRequestFiles = n }(maxRequestFiles)
+	maxRequestFiles = 2
+
+	report, _, err := syncFolder(t, c, dir, "", func(o *IngestOptions) { o.Key = "k" })
+	if err == nil || !strings.Contains(err.Error(), "2 of 3 files") {
+		t.Fatalf("report = %+v, err = %v", report, err)
 	}
 }
 
@@ -507,12 +623,18 @@ func TestSyncFolderFallsBackOnAnOlderServer(t *testing.T) {
 	}
 	wantStored(t, fake, "src-1", tree)
 
-	// Too large for one request, and no way to send it in several.
+	// Past the batch limits it still goes whole: this server has no other way.
 	defer func(n int) { maxRequestFiles = n }(maxRequestFiles)
 	maxRequestFiles = 1
 	tree["b.md"] = "b"
 	writeTree(t, dir, tree)
-	_, _, err = syncFolder(t, c, dir, state, nil)
+	if _, log, err = syncFolder(t, c, dir, state, nil); err != nil {
+		t.Fatalf("%v\n%s", err, log)
+	}
+	wantStored(t, fake, "src-1", tree)
+	// Unless the server refuses it.
+	fake.maxFiles = 2
+	_, _, err = syncFolder(t, c, dir, state, func(o *IngestOptions) { o.Force = true })
 	if err == nil || !strings.Contains(err.Error(), "update the server") {
 		t.Errorf("err = %v", err)
 	}

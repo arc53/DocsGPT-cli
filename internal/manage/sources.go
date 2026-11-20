@@ -555,8 +555,9 @@ type UploadReport struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// One request carries at most this many files and bytes. The server reads at
-// most 1000 parts and (by default) 256 MiB per request.
+// One request of a manifest sync, which can take several, carries at most
+// this many files and bytes. The server reads at most 1000 parts and (by
+// default) 256 MiB per request.
 var (
 	maxRequestFiles       = 500
 	maxRequestBytes int64 = 200 << 20
@@ -583,7 +584,7 @@ func (c *Client) Ingest(ctx context.Context, opts IngestOptions) (report *Upload
 	if opts.Log == nil {
 		opts.Log = io.Discard
 	}
-	state := opts.syncState(c.BaseURL)
+	state := opts.syncState(c.BaseURL, c.Token)
 	if report := state.unchanged(opts); report != nil {
 		return report, nil
 	}
@@ -602,6 +603,9 @@ func (c *Client) Ingest(ctx context.Context, opts IngestOptions) (report *Upload
 		// The key matched an earlier request whose task record is gone: that
 		// ingest already ran, there is nothing to poll.
 		report.Deduplicated = true
+		if rest {
+			return report, fmt.Errorf("the server deduplicated the upload of the first %d of %d files (same Idempotency-Key as an earlier request) and named no source to send the others to", report.Files, len(opts.Files))
+		}
 		fmt.Fprintln(opts.Log, "the server deduplicated this upload (same Idempotency-Key as an earlier request); nothing new was ingested")
 		return report, c.replaceOlderSources(ctx, opts, report)
 	}
@@ -627,6 +631,7 @@ func (c *Client) Ingest(ctx context.Context, opts IngestOptions) (report *Upload
 			return report, err
 		}
 		next.IdempotencyKey = report.IdempotencyKey
+		next.Uploaded += report.Uploaded
 		*report = *next
 		if !report.Unchanged {
 			if err := c.waitIngest(ctx, opts, report); err != nil {
@@ -682,7 +687,8 @@ func (t *TaskStatus) skipped() (reason string, ok bool) {
 // source, or with Sync updates the caller's own source of that name in
 // place. The report is nil when the request itself failed. rest is true when
 // a new source was created from the first files only and the others are
-// still to be synced into it.
+// still to be synced into it: only a manifest sync that waits for the source
+// can do that, any other upload is one request.
 func (c *Client) startIngest(ctx context.Context, opts IngestOptions) (report *UploadReport, rest bool, err error) {
 	if opts.Sync {
 		target, err := c.syncTarget(ctx, opts.Name)
@@ -695,14 +701,15 @@ func (c *Client) startIngest(ctx context.Context, opts IngestOptions) (report *U
 		}
 		fmt.Fprintf(opts.Log, "no source named %q yet; creating it\n", opts.Name)
 	}
-	files := firstBatch(opts.Files)
+	files, hint := opts.Files, "use --sync --wait on a folder, which sends them in several"
+	switch {
+	case !opts.Sync || opts.Whole:
+	case opts.Wait:
+		files = firstBatch(opts.Files)
+	default:
+		hint = "add --wait, so the others can follow once the source exists"
+	}
 	if len(files) < len(opts.Files) {
-		switch {
-		case opts.Whole || !opts.Sync:
-			return nil, false, fmt.Errorf("%d files (%s) do not fit one upload; use --sync --wait on a folder, which sends them in several", len(opts.Files), byteSize(totalSize(opts.Files)))
-		case !opts.Wait:
-			return nil, false, fmt.Errorf("%d files (%s) do not fit one upload; add --wait, so the others can follow once the source exists", len(opts.Files), byteSize(totalSize(opts.Files)))
-		}
 		fmt.Fprintf(opts.Log, "uploading the first %d of %d file(s) as %q...\n", len(files), len(opts.Files), opts.Name)
 	} else {
 		fmt.Fprintf(opts.Log, "uploading %d file(s) as %q...\n", len(files), opts.Name)
@@ -716,7 +723,7 @@ func (c *Client) startIngest(ctx context.Context, opts IngestOptions) (report *U
 	}
 	res, err := c.UploadSource(ctx, opts.Name, files, key)
 	if err != nil {
-		return nil, false, err
+		return nil, false, tooLarge(err, files, hint)
 	}
 	return &UploadReport{
 		Name: opts.Name, TaskID: res.TaskID, SourceID: res.SourceID, IdempotencyKey: key,
@@ -734,12 +741,12 @@ func (c *Client) syncInto(ctx context.Context, target string, opts IngestOptions
 		}
 		fmt.Fprintln(opts.Log, "this server takes a sync only as a whole; sending every file")
 	}
-	if len(firstBatch(opts.Files)) < len(opts.Files) {
-		return nil, fmt.Errorf("%d files (%s) do not fit one upload; upload a .zip archive, or update the server", len(opts.Files), byteSize(totalSize(opts.Files)))
-	}
 	fmt.Fprintf(opts.Log, "syncing %d file(s) into %q (source %s)...\n", len(opts.Files), opts.Name, target)
 	res, err := c.SyncSource(ctx, target, opts.Files, opts.SyncKey)
 	if err != nil {
+		if !opts.Whole {
+			err = tooLarge(err, opts.Files, "upload a .zip archive, or update the server")
+		}
 		return nil, err
 	}
 	for _, removed := range res.RemovedFiles {
@@ -749,6 +756,15 @@ func (c *Client) syncInto(ctx context.Context, target string, opts IngestOptions
 		Name: opts.Name, TaskID: res.TaskID, SourceID: target, IdempotencyKey: opts.SyncKey,
 		Synced: true, RemovedFiles: res.RemovedFiles, Files: len(opts.Files), Uploaded: len(opts.Files),
 	}, nil
+}
+
+// tooLarge adds, to the server's refusal (413) of one request with more
+// files than a batch holds, how they can be sent.
+func tooLarge(err error, files []UploadFile, hint string) error {
+	if !isStatus(err, http.StatusRequestEntityTooLarge) || len(firstBatch(files)) == len(files) {
+		return err
+	}
+	return fmt.Errorf("%d files (%s) do not fit one upload; %s: %w", len(files), byteSize(totalSize(files)), hint, err)
 }
 
 func totalSize(files []UploadFile) (n int64) {

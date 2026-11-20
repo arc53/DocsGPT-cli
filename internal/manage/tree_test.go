@@ -204,6 +204,26 @@ func TestCollectFilesLinks(t *testing.T) {
 	}
 }
 
+// A folder argument that is itself a link is that folder.
+func TestCollectFilesLinkedFolderArgument(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	real, links := t.TempDir(), t.TempDir()
+	writeTree(t, real, map[string]string{"a.md": "a", "guide/b.md": "b"})
+	link := filepath.Join(links, "docs")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	got, err := CollectFiles([]string{link}, CollectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names(got.Files) != "a.md|guide/b.md" {
+		t.Errorf("files = %q", names(got.Files))
+	}
+}
+
 func TestMatchesAny(t *testing.T) {
 	tests := []struct {
 		pattern, name string

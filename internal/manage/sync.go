@@ -17,8 +17,8 @@ import (
 // A manifest sync tells the server which files a source should hold (name
 // and SHA-256 of each) and uploads only the ones it answers it lacks:
 //
-//	POST /api/manage_source_files  operation=sync, manifest      → needs_files [names]
-//	POST /api/manage_source_files  operation=sync, manifest, files → needs_files | synced | unchanged
+//	POST /api/manage_source_files  operation=sync_manifest, manifest        → needs_files [names]
+//	POST /api/manage_source_files  operation=sync_manifest, manifest, files → needs_files | synced | unchanged
 //
 // Each uploaded file is named after its hash rather than its path, so a
 // path in any script reaches the server intact (in the manifest's JSON) and
@@ -26,11 +26,19 @@ import (
 // several requests: the server stores what each one brings, and removes the
 // files the manifest dropped and re-ingests only once it holds them all.
 
+// syncManifestOp is its own operation, not a field of `sync`: a server
+// without it refuses every request of one, where a `sync` it half understood
+// would take a batch of changed files for the whole set and remove the rest.
+const syncManifestOp = "sync_manifest"
+
 // Manifest sync statuses.
 const (
 	syncNeedsFiles = "needs_files"
 	syncSynced     = "synced"
 	syncUnchanged  = "unchanged"
+	// syncReplayed is ours, for the cached reply to an Idempotency-Key the
+	// server has seen: an earlier sync's task, and nothing done now.
+	syncReplayed = "replayed"
 )
 
 // CodeSourceFilesBusy is the 409 of a source whose files another request is
@@ -81,11 +89,13 @@ func (c *Client) postManifest(ctx context.Context, sourceID string, tree, send [
 	for _, f := range send {
 		parts = append(parts, filePart{Field: "file", Filename: f.SHA256, Path: f.Path})
 	}
-	respBody, err := c.postFiles(ctx, path, [][2]string{{"source_id", sourceID}, {"operation", "sync"}}, parts, key)
+	respBody, err := c.postFiles(ctx, path, [][2]string{{"source_id", sourceID}, {"operation", syncManifestOp}}, parts, key)
 	if err != nil {
+		// An older server refuses the operation by name, before it looks at
+		// the source or the files: it can never take a batch for a whole set.
 		var ae *APIError
-		if len(send) == 0 && errors.As(err, &ae) && ae.Status == http.StatusBadRequest && ae.Code == "" &&
-			strings.Contains(ae.Message, "No files provided") {
+		if errors.As(err, &ae) && ae.Status == http.StatusBadRequest && ae.Code == "" &&
+			strings.Contains(ae.Message, "operation must be") {
 			return nil, errNoManifestSync
 		}
 		return nil, err
@@ -101,9 +111,11 @@ func (c *Client) postManifest(ctx context.Context, sourceID string, tree, send [
 			return nil, fmt.Errorf("POST %s: response has no reingest_task_id: %s", path, truncate(respBody, 300))
 		}
 	default:
-		if len(send) == 0 {
-			// A server that read the manifest part as nothing it knows.
-			return nil, errNoManifestSync
+		// A cached reply is the earlier task alone; an older server that took
+		// the files as the whole set lists them.
+		if out.Status == "" && out.TaskID != "" && out.Files == nil {
+			out.Status = syncReplayed
+			break
 		}
 		return nil, fmt.Errorf("POST %s: unexpected sync status %q: %s", path, out.Status, truncate(respBody, 300))
 	}
@@ -186,9 +198,13 @@ func (c *Client) syncManifest(ctx context.Context, target string, opts IngestOpt
 		Name: opts.Name, TaskID: res.TaskID, SourceID: target, IdempotencyKey: opts.SyncKey,
 		Synced: true, RemovedFiles: removed, Files: len(opts.Files), Uploaded: uploaded,
 	}
-	if res.Status == syncUnchanged {
+	switch res.Status {
+	case syncUnchanged:
 		report.Unchanged, report.Status = true, "UNCHANGED"
 		fmt.Fprintln(opts.Log, "the source already holds these files; nothing to ingest")
+	case syncReplayed:
+		report.Deduplicated = true
+		fmt.Fprintln(opts.Log, "the server deduplicated this sync (same Idempotency-Key as an earlier request); no file was compared or sent")
 	}
 	return report, nil
 }
@@ -225,7 +241,7 @@ func needBatch(byName map[string]UploadFile, needed []string) ([]UploadFile, err
 const syncStateMaxAge = 24 * time.Hour
 
 // syncState is the record of the last sync of one source name on one server
-// that left the server's index current: which files it sent. While the files
+// with one token that left the server's index current: which files it sent. While the files
 // stay the same, the next sync has nothing to do and stops before any request.
 type syncState struct {
 	path string // "" = no record kept
@@ -237,14 +253,15 @@ type syncState struct {
 	At       time.Time `json:"at"`
 }
 
-// syncState loads the record for this server and source name. A missing or
-// unreadable record is an empty one.
-func (o IngestOptions) syncState(server string) *syncState {
+// syncState loads the record for this server, token and source name: another
+// account's source of that name is another source. A missing or unreadable
+// record is an empty one.
+func (o IngestOptions) syncState(server, token string) *syncState {
 	st := &syncState{}
 	if o.StateDir == "" || !o.Sync || o.Whole {
 		return st
 	}
-	sum := sha256.Sum256([]byte(server + "\x00" + strings.ToLower(o.Name)))
+	sum := sha256.Sum256([]byte(server + "\x00" + token + "\x00" + strings.ToLower(o.Name)))
 	path := filepath.Join(o.StateDir, hex.EncodeToString(sum[:16])+".json")
 	if raw, err := os.ReadFile(path); err == nil {
 		if json.Unmarshal(raw, st) != nil || st.Server != server || !strings.EqualFold(st.Name, o.Name) {
@@ -274,9 +291,10 @@ func (s *syncState) unchanged(o IngestOptions) *UploadReport {
 
 // save records a sync the server confirmed: it reported the source
 // unchanged, or its ingestion was waited for and succeeded. A sync that was
-// only queued is not recorded, so the next run asks the server.
+// only queued, or deduplicated, is not recorded, so the next run asks the
+// server.
 func (s *syncState) save(o IngestOptions, report *UploadReport) {
-	if s.path == "" || report.SourceID == "" {
+	if s.path == "" || report.SourceID == "" || report.Deduplicated {
 		return
 	}
 	if !report.Unchanged && !(report.Waited && report.Status == "SUCCESS") {

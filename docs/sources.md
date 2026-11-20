@@ -55,7 +55,8 @@ Only files the server can parse are sent: `.md`, `.mdx`, `.rst`, `.txt`,
 
 - hidden files and folders (`.git`, `.env`, …)
 - other file types, and empty files
-- folders reached through a symbolic link (a linked file is followed)
+- folders reached through a symbolic link inside the folder (a linked file is
+  followed, and so is a folder argument that is itself a link)
 - whatever `--exclude` matches, and with `--include` whatever it does not
 
 A pattern is a glob (`*`, `?`, `[a-z]`) tried against the path inside the
@@ -87,14 +88,16 @@ docsgpt-cli sources upload ./docs --name "Product docs" --sync --wait
   below).
 - A large folder goes in several requests (up to 500 files or 200 MB each), so
   its size is not limited by one upload. Creating a source that large needs
-  `--wait`.
+  `--wait`. Any other upload (no `--sync`, `.zip` archives, an older server)
+  is one request, within the server's own limits.
 - With no source of that name yet, `--sync` creates it. With several of your
   sources sharing the name, it exits `1` and lists them: delete all but one
   first.
 - Team-shared sources are never synced. `--sync` and `--replace` cannot be
   combined.
 - A sync sends no derived `Idempotency-Key`: repeating one is harmless. An
-  explicit `--idempotency-key` is still sent.
+  explicit `--idempotency-key` is still sent; a key the server has seen within
+  a day replays that earlier sync, and no file is compared or sent.
 
 `.zip` archives, and file arguments that share a name, are always sent whole:
 only the server can unpack an archive. An older DocsGPT server also takes a
@@ -112,7 +115,8 @@ Set `DOCSGPT_TOKEN` (and `DOCSGPT_URL`) in the job's environment, or run
 
 After a sync the server confirmed (it reported the source unchanged, or
 `--wait` saw the ingestion succeed), the CLI records what it sent in
-`~/.docsgpt/sync/`. While the files stay the same, the next runs stop there:
+`~/.docsgpt/sync/` (per server, token and source name). While the files stay
+the same, the next runs stop there:
 no request, exit `0`, `ok source <id> (unchanged, N files)`. Once a day, and
 with `--force`, the server is asked anyway, so a source changed or deleted
 there is noticed. Without `--wait` nothing is recorded until a later run
