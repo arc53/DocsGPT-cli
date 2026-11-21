@@ -14,6 +14,15 @@ import (
 	"time"
 )
 
+// filesOf turns plain paths into files sent under their base names.
+func filesOf(paths []string) []UploadFile {
+	files := make([]UploadFile, len(paths))
+	for i, p := range paths {
+		files[i] = UploadFile{Path: p}
+	}
+	return files
+}
+
 func writeTemp(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -58,7 +67,7 @@ func TestUploadSourceMultipart(t *testing.T) {
 		}
 		writeJSONResp(w, 200, `{"success":true,"task_id":"task-1","source_id":"src-1"}`)
 	})
-	res, err := c.UploadSource(context.Background(), "Product docs", []string{a, b}, "key-1")
+	res, err := c.UploadSource(context.Background(), "Product docs", filesOf([]string{a, b}), "key-1")
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
@@ -94,7 +103,7 @@ func TestUploadSourceValidationAndErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := c.UploadSource(ctx, tt.src, tt.paths, tt.key)
+			_, err := c.UploadSource(ctx, tt.src, filesOf(tt.paths), tt.key)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v, want %q", err, tt.want)
 			}
@@ -113,7 +122,7 @@ func TestDeriveIdempotencyKey(t *testing.T) {
 
 	key := func(name string, paths ...string) string {
 		t.Helper()
-		k, err := DeriveIdempotencyKey(name, paths)
+		k, err := DeriveIdempotencyKey(name, filesOf(paths))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,7 +152,7 @@ func TestDeriveIdempotencyKey(t *testing.T) {
 			}
 		})
 	}
-	if _, err := DeriveIdempotencyKey("docs", []string{filepath.Join(dir, "missing")}); err == nil {
+	if _, err := DeriveIdempotencyKey("docs", filesOf([]string{filepath.Join(dir, "missing")})); err == nil {
 		t.Error("missing file should fail")
 	}
 }
@@ -287,7 +296,7 @@ func TestSyncSourceMultipart(t *testing.T) {
 		}
 		writeJSONResp(w, 200, `{"success":true,"reingest_task_id":"task-9","source_id":"src-1","files":["a.md"],"removed_files":["old.md"]}`)
 	})
-	res, err := c.SyncSource(context.Background(), "src-1", []string{a, z}, "key-2")
+	res, err := c.SyncSource(context.Background(), "src-1", filesOf([]string{a, z}), "key-2")
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -302,11 +311,11 @@ func TestSyncSourceNeedsATask(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSONResp(w, 200, `{"success":true}`)
 	})
-	if _, err := c.SyncSource(context.Background(), "src-1", []string{a}, ""); err == nil ||
+	if _, err := c.SyncSource(context.Background(), "src-1", filesOf([]string{a}), ""); err == nil ||
 		!strings.Contains(err.Error(), "no reingest_task_id") {
 		t.Errorf("err = %v", err)
 	}
-	if _, err := c.SyncSource(context.Background(), "", []string{a}, ""); err == nil {
+	if _, err := c.SyncSource(context.Background(), "", filesOf([]string{a}), ""); err == nil {
 		t.Error("an empty source id was accepted")
 	}
 }

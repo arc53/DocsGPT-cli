@@ -43,7 +43,7 @@ jobs:
 ```
 
 - `--replace` keeps one copy of the source; `agents apply` re-points agents at
-  it. See [Sources](sources.md#keep-a-source-up-to-date---replace).
+  it. See [Sources](sources.md#replace-a-source---replace).
 - `--junit` gives the CI a test report; see [Bench](bench.md).
 
 A fuller workflow (plan on pull requests, deploy on `main`) is in
